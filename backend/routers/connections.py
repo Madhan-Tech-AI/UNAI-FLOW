@@ -15,17 +15,19 @@ async def get_connections(user: Dict[str, Any] = Depends(verify_jwt)):
 
 @router.post("/{platform}/start")
 async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt)):
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+    
     # In a real app, this returns the OAuth authorization URL
     if platform == "twitter":
         client_id = os.getenv("TWITTER_CLIENT_ID")
-        redirect_uri = "http://localhost:8000/connections/twitter/callback"
+        redirect_uri = f"{backend_url}/connections/twitter/callback"
         # Dummy URL for Phase 4 architecture layout
         url = f"https://twitter.com/i/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=tweet.read%20tweet.write%20users.read&state={user['user_id']}&code_challenge=challenge&code_challenge_method=plain"
         return {"authorization_url": url}
         
     elif platform == "instagram":
         app_id = os.getenv("META_APP_ID")
-        redirect_uri = "http://localhost:8000/connections/instagram/callback"
+        redirect_uri = f"{backend_url}/connections/instagram/callback"
         url = f"https://www.facebook.com/v19.0/dialog/oauth?client_id={app_id}&redirect_uri={redirect_uri}&state={user['user_id']}&scope=instagram_basic,instagram_content_publish"
         return {"authorization_url": url}
         
@@ -51,8 +53,9 @@ async def oauth_callback(platform: str, code: str, state: str):
         "status": "active"
     }, on_conflict="user_id, platform").execute()
     
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
     # Redirect back to frontend
-    return RedirectResponse(url="http://localhost:5173/connections?success=true")
+    return RedirectResponse(url=f"{frontend_url}/connections?success=true")
 
 @router.delete("/{platform}")
 async def disconnect_platform(platform: str, user: Dict[str, Any] = Depends(verify_jwt)):

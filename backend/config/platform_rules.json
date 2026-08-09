@@ -1,0 +1,17 @@
+{
+    "twitter": {
+        "max_length": 280,
+        "max_hashtags": 2,
+        "instructions": "Rewrite the following content as a single tweet under 280 characters. Keep the core message and CTA. Use at most 2 relevant hashtags. Punchy, hook-first. Output only the tweet text."
+    },
+    "instagram": {
+        "max_length": 2200,
+        "max_hashtags": 15,
+        "instructions": "Rewrite the following content as an Instagram caption. Keep it under 2200 characters, front-load the first 125 chars (pre-fold), line-break friendly. 5-15 relevant hashtags block at the end. Emoji-friendly, visual-first tone. Output only the caption text."
+    },
+    "whatsapp": {
+        "max_length": 4096,
+        "max_hashtags": 0,
+        "instructions": "Rewrite the following content for WhatsApp Community. Keep it under 400 characters for readability. Conversational tone, no hashtags, short paragraphs. Emphasize clarity and a direct CTA. Use formatting like *bold* or _italic_. Output only the message text."
+    }
+}

@@ -5,9 +5,9 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 export async function fetchApi(endpoint: string, options: RequestInit = {}) {
   const { data: { session } } = await supabase.auth.getSession();
   
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
+    ...(options.headers as Record<string, string> || {}),
   };
 
   if (session?.access_token) {

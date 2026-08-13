@@ -4,7 +4,7 @@ import google.generativeai as genai
 from lib.supabase_client import supabase
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-genai_model = genai.GenerativeModel('gemini-1.5-flash')
+genai_model = genai.GenerativeModel('gemini-flash-latest')
 
 with open(os.path.join(os.path.dirname(__file__), '../config/platform_rules.json'), 'r') as f:
     RULES = json.load(f)
@@ -62,5 +62,6 @@ async def generate_variants(automation_id: str, user_id: str):
                 
         except Exception as e:
             print(f"Error generating for {platform}: {e}")
+            raise ValueError(f"AI Generation failed for {platform}: {str(e)}")
             
     return generated_variants

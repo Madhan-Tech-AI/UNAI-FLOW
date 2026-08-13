@@ -58,6 +58,9 @@ async def orchestrate_publish(automation_id: str, user_id: str):
         "event": "published",
         "meta": {"platforms": platforms, "orchestrator": "Phase4"}
     }).execute()
+    
+    # Update the automation status to published
+    supabase.table("automations").update({"status": "published"}).eq("id", automation_id).execute()
 
 def _mark_failed(job_id: str, error_msg: str):
     supabase.table("publish_jobs").update({

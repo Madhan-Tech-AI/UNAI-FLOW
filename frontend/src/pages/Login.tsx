@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
+import { Sparkles, Mail, Lock, Loader2, ArrowRight } from 'lucide-react';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -28,15 +29,58 @@ export default function Login() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--bg-secondary)' }}>
-      <div className="card" style={{ width: '100%', maxWidth: '400px' }}>
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold" style={{ color: 'var(--primary)' }}>UNAI Flow</h1>
-          <p className="text-secondary mt-2">Welcome back. Please log in.</p>
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#09101d',
+        backgroundImage: 'radial-gradient(circle at top, rgba(37, 99, 235, 0.25) 0%, transparent 65%)',
+        padding: '1.5rem'
+      }}
+    >
+      <div
+        className="card"
+        style={{
+          width: '100%',
+          maxWidth: '420px',
+          borderRadius: '24px',
+          padding: '2.5rem 2rem',
+          boxShadow: '0 20px 40px rgba(0,0,0,0.3)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          backgroundColor: '#ffffff'
+        }}
+      >
+        <div className="flex-col items-center text-center mb-8">
+          <div
+            className="flex items-center justify-center mb-3"
+            style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: '14px',
+              background: 'linear-gradient(135deg, #2563eb 0%, #8b5cf6 100%)',
+              color: 'white',
+              boxShadow: '0 8px 20px rgba(37, 99, 235, 0.4)'
+            }}
+          >
+            <Sparkles size={26} />
+          </div>
+          <h1 className="text-2xl font-extrabold text-main">Welcome back</h1>
+          <p className="text-secondary text-xs mt-1">Sign in to access your UNAI Flow workspace</p>
         </div>
 
         {error && (
-          <div className="mb-4 text-sm" style={{ padding: '0.75rem', backgroundColor: '#fee2e2', color: '#991b1b', borderRadius: '0.375rem' }}>
+          <div
+            className="mb-4 text-xs font-medium"
+            style={{
+              padding: '0.85rem',
+              backgroundColor: '#fee2e2',
+              color: '#991b1b',
+              borderRadius: '10px',
+              border: '1px solid #fecaca'
+            }}
+          >
             {error}
           </div>
         )}
@@ -44,33 +88,54 @@ export default function Login() {
         <form onSubmit={handleLogin} className="flex-col gap-4">
           <div>
             <label className="label" htmlFor="email">Email address</label>
-            <input
-              id="email"
-              type="email"
-              className="input"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
+            <div style={{ position: 'relative' }}>
+              <Mail size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: '#94a3b8' }} />
+              <input
+                id="email"
+                type="email"
+                className="input"
+                placeholder="name@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                style={{ paddingLeft: '2.4rem' }}
+              />
+            </div>
           </div>
+
           <div>
             <label className="label" htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              className="input"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
+            <div style={{ position: 'relative' }}>
+              <Lock size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: '#94a3b8' }} />
+              <input
+                id="password"
+                type="password"
+                className="input"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                style={{ paddingLeft: '2.4rem' }}
+              />
+            </div>
           </div>
-          <button type="submit" className="btn-primary w-full mt-4" disabled={loading}>
-            {loading ? 'Logging in...' : 'Log In'}
+
+          <button
+            type="submit"
+            className="btn-primary w-full mt-3"
+            style={{ padding: '0.8rem', fontSize: '0.95rem', borderRadius: '12px' }}
+            disabled={loading}
+          >
+            {loading ? <Loader2 size={18} className="animate-spin" /> : <span>Sign In to Dashboard</span>}
+            {!loading && <ArrowRight size={16} />}
           </button>
         </form>
 
-        <div className="mt-6 text-center text-sm text-secondary">
-          Don't have an account? <Link to="/signup" className="font-semibold">Sign up</Link>
+        <div className="mt-8 text-center text-xs text-secondary pt-4" style={{ borderTop: '1px solid var(--border)' }}>
+          Don't have an account yet?{' '}
+          <Link to="/signup" className="font-bold text-primary">
+            Create an account
+          </Link>
         </div>
       </div>
     </div>

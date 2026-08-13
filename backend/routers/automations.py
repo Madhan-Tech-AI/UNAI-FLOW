@@ -22,7 +22,10 @@ async def create_automation(automation: AutomationCreate, user: Dict[str, Any] =
 @router.post("/{automation_id}/generate")
 async def run_generation(automation_id: str, user: Dict[str, Any] = Depends(verify_jwt)):
     # Generate variants via Customization Engine
-    variants = await generate_variants(automation_id, user["user_id"])
+    try:
+        variants = await generate_variants(automation_id, user["user_id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     
     # Log the event
     supabase.table("automation_logs").insert({
@@ -41,7 +44,9 @@ async def publish_automation(automation_id: str, user: Dict[str, Any] = Depends(
         raise HTTPException(status_code=404, detail="Automation not found")
         
     # 2. Trigger Orchestrator
-    # For Phase 4 we run it synchronously. For production scale (v2) this should be a Celery task
-    await orchestrate_publish(automation_id, user["user_id"])
+    try:
+        await orchestrate_publish(automation_id, user["user_id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     
     return {"status": "success"}

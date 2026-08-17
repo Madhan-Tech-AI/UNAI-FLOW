@@ -55,7 +55,7 @@ async def orchestrate_publish(automation_id: str, user_id: str) -> List[Dict[str
             
             results.append({
                 "platform": platform,
-                "status": status,
+                "status": "success" if not is_demo else "demo",
                 "post_id": post_id,
                 "post_url": result.get("post_url"),
                 "demo_mode": is_demo

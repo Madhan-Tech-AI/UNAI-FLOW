@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Camera, AtSign, MessageCircle, Sparkles, Loader2, Link2, UploadCloud, Layers, Zap, Info } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
-import { supabase } from '../lib/supabaseClient';
 
 export default function NewAutomation() {
   const navigate = useNavigate();
@@ -26,26 +25,6 @@ export default function NewAutomation() {
     { id: 'promotional', label: 'Promotional', icon: '🚀', desc: 'High energy, CTA focused' },
     { id: 'storytelling', label: 'Storytelling', icon: '📖', desc: 'Engaging, narrative driven' }
   ];
-
-  const uploadToSupabase = async (file: File): Promise<string> => {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-    const filePath = `uploads/${fileName}`;
-
-    const { error } = await supabase.storage
-      .from('media')
-      .upload(filePath, file);
-
-    if (error) {
-      throw error;
-    }
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('media')
-      .getPublicUrl(filePath);
-
-    return publicUrl;
-  };
 
   const getBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -71,14 +50,11 @@ export default function NewAutomation() {
 
     try {
       let mediaBase64 = null;
-      let mediaUrl = null;
       if (selectedFile) {
         try {
           mediaBase64 = await getBase64(selectedFile);
-          mediaUrl = await uploadToSupabase(selectedFile);
         } catch (err) {
-          console.error("Failed to upload media to Supabase, falling back to local base64", err);
-          mediaUrl = mediaBase64;
+          console.error("Failed to read media file", err);
         }
       }
 
@@ -91,7 +67,7 @@ export default function NewAutomation() {
           cta_link: ctaLink || null,
           target_platforms: targetPlatforms,
           schedule_type: 'now',
-          media_url: mediaUrl
+          media_url: mediaBase64
         })
       });
 
@@ -104,7 +80,7 @@ export default function NewAutomation() {
           state: { 
             automationId: automation.id, 
             variants: response.variants,
-            mediaUrl: mediaBase64 || mediaUrl
+            mediaUrl: mediaBase64
           } 
         });
       } else {

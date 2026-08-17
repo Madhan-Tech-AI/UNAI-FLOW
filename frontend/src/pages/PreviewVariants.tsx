@@ -60,7 +60,7 @@ export default function PreviewVariants() {
         }
         
         if (summary) {
-          alert(summary);
+          console.log("Publish Results Summary:\n", summary);
         }
       }
       

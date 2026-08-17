@@ -101,6 +101,24 @@ async def orchestrate_publish(automation_id: str, user_id: str) -> List[Dict[str
     except Exception as e:
         print(f"Warning: Could not update automation status: {e}")
 
+    # 5. Call the Supabase Edge Function to log/process the results
+    import httpx
+    try:
+        edge_url = f"{supabase.supabase_url}/functions/v1/publish-handler"
+        headers = {
+            "Authorization": f"Bearer {supabase.supabase_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "automation_id": automation_id,
+            "event": event_type,
+            "results": results
+        }
+        async with httpx.AsyncClient() as client:
+            await client.post(edge_url, headers=headers, json=payload)
+    except Exception as edge_err:
+        print(f"Warning: Failed to call Supabase Edge Function: {edge_err}")
+
     return results
 
 def _mark_failed(job_id: str, error_msg: str):

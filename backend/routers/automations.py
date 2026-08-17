@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, Any
+import base64
+import uuid
 from middleware.auth import verify_jwt
 from schemas.automations import AutomationCreate
 from lib.supabase_client import supabase
@@ -8,10 +10,36 @@ from services.orchestrator import orchestrate_publish
 
 router = APIRouter(prefix="/automations", tags=["Automations"])
 
+def upload_base64_to_supabase(base64_str: str) -> str:
+    header, encoded = base64_str.split(",", 1)
+    mime_type = header.split(";")[0].split(":")[1]
+    ext = mime_type.split("/")[1]
+    
+    file_bytes = base64.b64decode(encoded)
+    file_name = f"{uuid.uuid4()}.{ext}"
+    file_path = f"uploads/{file_name}"
+    
+    supabase.storage.from_("media").upload(
+        path=file_path,
+        file=file_bytes,
+        file_options={"content-type": mime_type}
+    )
+    
+    public_url = supabase.storage.from_("media").get_public_url(file_path)
+    return public_url
+
 @router.post("")
 async def create_automation(automation: AutomationCreate, user: Dict[str, Any] = Depends(verify_jwt)):
     data = automation.model_dump()
     data["user_id"] = user["user_id"]
+    
+    media_url = data.get("media_url")
+    if media_url and media_url.startswith("data:"):
+        try:
+            public_url = upload_base64_to_supabase(media_url)
+            data["media_url"] = public_url
+        except Exception as e:
+            print(f"Warning: Failed to upload media base64 to Supabase storage: {e}")
     
     res = supabase.table("automations").insert(data).execute()
     if not res.data:

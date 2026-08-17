@@ -18,8 +18,32 @@ export default function AutomationHistory() {
         .select('*')
         .order('created_at', { ascending: false });
 
+      // Also fetch publish logs to determine real status
+      const { data: logData } = await supabase
+        .from('automation_logs')
+        .select('automation_id, event');
+
       if (!error && data) {
-        setAutomations(data);
+        // Build a set of automation IDs that have been published
+        const publishedIds = new Set<string>();
+        const demoPublishedIds = new Set<string>();
+        
+        (logData || []).forEach((log: any) => {
+          if (log.event === 'published') publishedIds.add(log.automation_id);
+          if (log.event === 'demo_published') demoPublishedIds.add(log.automation_id);
+        });
+
+        // Enrich automations with correct status
+        const enrichedData = data.map((auto: any) => ({
+          ...auto,
+          status: publishedIds.has(auto.id)
+            ? 'published'
+            : demoPublishedIds.has(auto.id)
+              ? 'demo_published'
+              : (auto.status || 'draft')
+        }));
+
+        setAutomations(enrichedData);
       } else {
         setAutomations([]);
       }
@@ -39,11 +63,12 @@ export default function AutomationHistory() {
     const matchesSearch = (auto.campaign_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                           (auto.raw_content || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesPlatform = platformFilter === 'all' || auto.target_platforms?.includes(platformFilter);
-    const matchesStatus = statusFilter === 'all' || auto.status === statusFilter;
+    const matchesStatus = statusFilter === 'all' || 
+      (statusFilter === 'published' ? (auto.status === 'published' || auto.status === 'demo_published') : auto.status === statusFilter);
     return matchesSearch && matchesPlatform && matchesStatus;
   });
 
-  const publishedCount = automations.filter(a => a.status === 'published').length;
+  const publishedCount = automations.filter(a => a.status === 'published' || a.status === 'demo_published').length;
   const successRate = automations.length > 0 ? Math.round((publishedCount / automations.length) * 100) : 0;
 
   return (
@@ -224,9 +249,9 @@ export default function AutomationHistory() {
                   </div>
 
                   {/* Status Badge */}
-                  <span className={`chip ${auto.status === 'published' ? 'chip-success' : 'chip-info'}`}>
-                    {auto.status === 'published' ? <CheckCircle2 size={12} /> : <Clock size={12} />}
-                    <span className="capitalize">{auto.status || 'Draft'}</span>
+                  <span className={`chip ${auto.status === 'published' ? 'chip-success' : auto.status === 'demo_published' ? 'chip-info' : 'chip-default'}`}>
+                    {(auto.status === 'published' || auto.status === 'demo_published') ? <CheckCircle2 size={12} /> : <Clock size={12} />}
+                    <span className="capitalize">{auto.status === 'demo_published' ? 'Published' : (auto.status || 'Draft')}</span>
                   </span>
 
                   <button className="btn-ghost" title="View details">

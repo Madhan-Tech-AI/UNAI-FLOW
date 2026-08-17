@@ -43,10 +43,19 @@ async def publish_automation(automation_id: str, user: Dict[str, Any] = Depends(
     if not res.data:
         raise HTTPException(status_code=404, detail="Automation not found")
         
-    # 2. Trigger Orchestrator
+    # 2. Trigger Orchestrator and get detailed results
     try:
-        await orchestrate_publish(automation_id, user["user_id"])
+        results = await orchestrate_publish(automation_id, user["user_id"])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
-    return {"status": "success"}
+    # 3. Return detailed per-platform results
+    real_successes = [r for r in results if r["status"] == "success"]
+    demo_publishes = [r for r in results if r.get("demo_mode")]
+    failures = [r for r in results if r["status"] == "failed"]
+    
+    return {
+        "status": "success" if real_successes else "demo",
+        "message": f"{len(real_successes)} platform(s) published live, {len(demo_publishes)} in demo mode, {len(failures)} failed.",
+        "results": results
+    }

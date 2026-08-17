@@ -6,7 +6,7 @@ import { fetchApi } from '../lib/apiClient';
 export default function PreviewVariants() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { automationId, variants } = location.state || {};
+  const { automationId, variants, mediaUrl } = location.state || {};
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState('');
 
@@ -34,11 +34,36 @@ export default function PreviewVariants() {
     setPublishing(true);
     setError('');
     try {
+      let response = null;
       if (automationId) {
-        await fetchApi(`/automations/${automationId}/publish`, {
+        response = await fetchApi(`/automations/${automationId}/publish`, {
           method: 'POST'
         });
       }
+      
+      // Show summary of what happened
+      if (response && response.results) {
+        const realPosts = response.results.filter((r: any) => r.status === 'success');
+        const demoPosts = response.results.filter((r: any) => r.demo_mode);
+        const failedPosts = response.results.filter((r: any) => r.status === 'failed');
+        
+        let summary = '';
+        if (realPosts.length > 0) {
+          summary += `✅ Published live: ${realPosts.map((r: any) => r.platform).join(', ')}\n`;
+        }
+        if (demoPosts.length > 0) {
+          summary += `⚠️ Demo mode (not actually posted): ${demoPosts.map((r: any) => r.platform).join(', ')}\n`;
+          summary += `To publish for real, reconnect these platforms in the Connections page with valid API credentials.\n`;
+        }
+        if (failedPosts.length > 0) {
+          summary += `❌ Failed: ${failedPosts.map((r: any) => `${r.platform} (${r.error})`).join(', ')}\n`;
+        }
+        
+        if (summary) {
+          alert(summary);
+        }
+      }
+      
       navigate('/history');
     } catch (err: any) {
       setError(err.message || 'Publishing failed. Please try again.');
@@ -159,24 +184,30 @@ export default function PreviewVariants() {
                 <MoreHorizontal size={16} className="text-secondary" />
               </div>
 
-              {/* Image Frame Placeholder */}
-              <div
-                style={{
-                  height: '180px',
-                  background: 'linear-gradient(135deg, #1d4ed8 0%, #3b82f6 50%, #8b5cf6 100%)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'white',
-                  padding: '1rem',
-                  textAlign: 'center'
-                }}
-              >
-                <Sparkles size={32} />
-                <span className="font-extrabold text-sm mt-2">UNAI Flow Multi-Channel</span>
-                <span className="text-xs opacity-85 mt-0.5">Automated Native Content</span>
-              </div>
+              {/* Image Frame Placeholder or Actual Image */}
+              {mediaUrl ? (
+                <div style={{ height: '180px', width: '100%', overflow: 'hidden' }}>
+                  <img src={mediaUrl} alt="Campaign Media" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+              ) : (
+                <div
+                  style={{
+                    height: '180px',
+                    background: 'linear-gradient(135deg, #1d4ed8 0%, #3b82f6 50%, #8b5cf6 100%)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    padding: '1rem',
+                    textAlign: 'center'
+                  }}
+                >
+                  <Sparkles size={32} />
+                  <span className="font-extrabold text-sm mt-2">UNAI Flow Multi-Channel</span>
+                  <span className="text-xs opacity-85 mt-0.5">Automated Native Content</span>
+                </div>
+              )}
 
               {/* Action Icons Bar */}
               <div className="flex justify-between items-center p-3 text-main">

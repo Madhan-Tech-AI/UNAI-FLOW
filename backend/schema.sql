@@ -43,6 +43,7 @@ create table if not exists automations (
   target_platforms text[] not null,     
   schedule_type text default 'now' check (schedule_type in ('now','scheduled','recurring')),
   scheduled_at timestamptz,
+  status text default 'draft',
   created_at timestamptz default now()
 );
 

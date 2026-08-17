@@ -26,6 +26,34 @@ export default function NewAutomation() {
     { id: 'storytelling', label: 'Storytelling', icon: '📖', desc: 'Engaging, narrative driven' }
   ];
 
+  const uploadToTmpFiles = async (file: File): Promise<string> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const res = await fetch('https://tmpfiles.org/api/v1/upload', {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!res.ok) {
+      throw new Error('Failed to upload media to public server');
+    }
+    
+    const json = await res.json();
+    const url = json.data.url;
+    const directUrl = url.replace('https://tmpfiles.org/', 'https://tmpfiles.org/dl/');
+    return directUrl;
+  };
+
+  const getBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = error => reject(error);
+    });
+  };
+
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -40,6 +68,18 @@ export default function NewAutomation() {
     }
 
     try {
+      let mediaBase64 = null;
+      let mediaUrl = null;
+      if (selectedFile) {
+        try {
+          mediaBase64 = await getBase64(selectedFile);
+          mediaUrl = await uploadToTmpFiles(selectedFile);
+        } catch (err) {
+          console.error("Failed to upload media, falling back to local base64", err);
+          mediaUrl = mediaBase64;
+        }
+      }
+
       const automation = await fetchApi('/automations', {
         method: 'POST',
         body: JSON.stringify({
@@ -48,7 +88,8 @@ export default function NewAutomation() {
           tone,
           cta_link: ctaLink || null,
           target_platforms: targetPlatforms,
-          schedule_type: 'now'
+          schedule_type: 'now',
+          media_url: mediaUrl
         })
       });
 
@@ -60,7 +101,8 @@ export default function NewAutomation() {
         navigate('/automations/preview', { 
           state: { 
             automationId: automation.id, 
-            variants: response.variants 
+            variants: response.variants,
+            mediaUrl: mediaBase64 || mediaUrl
           } 
         });
       } else {

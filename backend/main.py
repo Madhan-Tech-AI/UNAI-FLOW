@@ -21,3 +21,7 @@ app.include_router(connections.router)
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.get("/")
+def root():
+    return {"message": "UNAI Flow API is running. Access /docs for API documentation."}

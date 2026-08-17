@@ -21,7 +21,7 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
     if platform == "twitter":
         client_id = os.getenv("TWITTER_CLIENT_ID")
         redirect_uri = f"{backend_url}/connections/twitter/callback"
-        url = f"https://twitter.com/i/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=tweet.read%20tweet.write%20users.read%20offline.access&state={user['user_id']}&code_challenge=challenge&code_challenge_method=plain"
+        url = f"https://twitter.com/i/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=tweet.read%20tweet.write%20users.read%20offline.access&state={user['user_id']}&code_challenge=unai_flow_code_verifier_challenge_long_enough_43_chars&code_challenge_method=plain"
         return {"authorization_url": url}
         
     elif platform == "instagram":
@@ -38,7 +38,7 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
         return {"authorization_url": redirect_uri}
         
     raise HTTPException(status_code=400, detail="Unsupported platform")
-
+ 
 @router.get("/{platform}/callback")
 async def oauth_callback(platform: str, state: str, code: str = None):
     user_id = state
@@ -57,7 +57,7 @@ async def oauth_callback(platform: str, state: str, code: str = None):
             "grant_type": "authorization_code",
             "client_id": client_id,
             "redirect_uri": f"{backend_url}/connections/twitter/callback",
-            "code_verifier": "challenge"
+            "code_verifier": "unai_flow_code_verifier_challenge_long_enough_43_chars"
         }
         
         async with httpx.AsyncClient() as client:
@@ -67,6 +67,7 @@ async def oauth_callback(platform: str, state: str, code: str = None):
                 raise HTTPException(status_code=400, detail="Failed to get Twitter access token")
             
             access_token = resp.json().get("access_token")
+            refresh_token = resp.json().get("refresh_token")
             
             # Fetch user info
             user_resp = await client.get("https://api.twitter.com/2/users/me", headers={"Authorization": f"Bearer {access_token}"})
@@ -88,6 +89,7 @@ async def oauth_callback(platform: str, state: str, code: str = None):
                 raise HTTPException(status_code=400, detail="Failed to get Instagram access token")
                 
             access_token = resp.json().get("access_token")
+            refresh_token = resp.json().get("refresh_token")
             
             # Fetch Instagram Business Account ID
             ig_resp = await client.get(f"https://graph.facebook.com/v19.0/me/accounts?fields=instagram_business_account,name&access_token={access_token}")
@@ -102,33 +104,34 @@ async def oauth_callback(platform: str, state: str, code: str = None):
     elif platform == "whatsapp":
         # For WhatsApp we rely on the WHATSAPP_ACCESS_TOKEN env variable due to embedded signup complexities
         access_token = os.getenv("WHATSAPP_ACCESS_TOKEN", "mock_wa_token")
+        refresh_token = None
         platform_account_id = os.getenv("WHATSAPP_PHONE_ID", "mock_phone_id")
         platform_account_name = "WhatsApp Business"
         
     if not access_token:
         raise HTTPException(status_code=400, detail="Failed to acquire access token")
-
+ 
     encrypted_token = encrypt_token(access_token)
+    encrypted_refresh = encrypt_token(refresh_token) if refresh_token else None
     
     # Store in Supabase
     existing = supabase.table("platform_connections").select("id").eq("user_id", user_id).eq("platform", platform).execute()
     
+    db_data = {
+        "access_token": encrypted_token,
+        "platform_account_name": platform_account_name,
+        "platform_account_id": platform_account_id,
+        "status": "active"
+    }
+    if encrypted_refresh:
+        db_data["refresh_token"] = encrypted_refresh
+ 
     if existing.data:
-        supabase.table("platform_connections").update({
-            "access_token": encrypted_token,
-            "platform_account_name": platform_account_name,
-            "platform_account_id": platform_account_id,
-            "status": "active"
-        }).eq("id", existing.data[0]["id"]).execute()
+        supabase.table("platform_connections").update(db_data).eq("id", existing.data[0]["id"]).execute()
     else:
-        supabase.table("platform_connections").insert({
-            "user_id": user_id,
-            "platform": platform,
-            "access_token": encrypted_token,
-            "platform_account_name": platform_account_name,
-            "platform_account_id": platform_account_id,
-            "status": "active"
-        }).execute()
+        db_data["user_id"] = user_id
+        db_data["platform"] = platform
+        supabase.table("platform_connections").insert(db_data).execute()
     
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
     return RedirectResponse(url=f"{frontend_url}/connections?success=true")

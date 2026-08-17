@@ -33,7 +33,7 @@ class WhatsAppAdapter(PlatformAdapter):
                 "text": {"body": content}
             }
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(url, headers=headers, json=payload)
                 if resp.status_code not in (200, 201):
                     raise Exception(f"WhatsApp API Error: {resp.text}")

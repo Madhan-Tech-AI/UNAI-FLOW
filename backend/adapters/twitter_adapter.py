@@ -21,7 +21,7 @@ class TwitterAdapter(PlatformAdapter):
                     "Content-Type": "application/json"
                 }
                 payload = {"text": content}
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(timeout=30.0) as client:
                     return await client.post(url, headers=headers, json=payload)
             
             resp = await post_tweet(token)
@@ -68,7 +68,7 @@ async def refresh_twitter_token(connection_id: str, refresh_token: str) -> str:
         "client_id": client_id
     }
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(url, data=data, auth=(client_id, client_secret))
         if resp.status_code != 200:
             raise Exception(f"Twitter token refresh failed: {resp.text}")

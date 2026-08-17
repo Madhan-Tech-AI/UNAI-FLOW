@@ -114,7 +114,7 @@ async def orchestrate_publish(automation_id: str, user_id: str) -> List[Dict[str
             "event": event_type,
             "results": results
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             await client.post(edge_url, headers=headers, json=payload)
     except Exception as edge_err:
         print(f"Warning: Failed to call Supabase Edge Function: {edge_err}")

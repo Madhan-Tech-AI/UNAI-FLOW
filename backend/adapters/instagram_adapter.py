@@ -32,7 +32,7 @@ class InstagramAdapter(PlatformAdapter):
                 "access_token": token
             }
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 c_resp = await client.post(container_url, data=container_payload)
                 if c_resp.status_code != 200:
                     raise Exception(f"IG Media Container Error: {c_resp.text}")

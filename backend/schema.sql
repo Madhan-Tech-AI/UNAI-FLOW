@@ -112,6 +112,23 @@ create table if not exists brand_taglines (
 alter table brand_taglines enable row level security;
 create policy "Users can manage own taglines" on brand_taglines for all using (auth.uid() = user_id);
 
+-- PUBLISHED POSTS (Real posts only)
+create table if not exists published_posts (
+  id uuid primary key default gen_random_uuid(),
+  automation_id uuid references automations(id) on delete cascade,
+  variant_id uuid references content_variants(id) on delete cascade,
+  platform text not null,
+  post_id text not null,
+  post_url text,
+  content text not null,
+  created_at timestamptz default now()
+);
+
+alter table published_posts enable row level security;
+create policy "Users can view own published posts" on published_posts for select using (
+  exists (select 1 from automations where id = published_posts.automation_id and user_id = auth.uid())
+);
+
 -- Trigger to auto-create profile on signup
 create or replace function public.handle_new_user() 
 returns trigger as $$

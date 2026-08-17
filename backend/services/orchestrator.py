@@ -61,6 +61,20 @@ async def orchestrate_publish(automation_id: str, user_id: str) -> List[Dict[str
                 "demo_mode": is_demo
             })
             
+            # 4. If it's a real publish, store in published_posts table
+            if not is_demo:
+                try:
+                    supabase.table("published_posts").insert({
+                        "automation_id": automation_id,
+                        "variant_id": variant["id"],
+                        "platform": platform,
+                        "post_id": post_id,
+                        "post_url": result.get("post_url"),
+                        "content": content
+                    }).execute()
+                except Exception as db_err:
+                    print(f"Warning: Failed to save to published_posts table: {db_err}")
+            
         except Exception as e:
             _mark_failed(job_id, str(e))
             results.append({"platform": platform, "status": "failed", "error": str(e), "demo_mode": False})

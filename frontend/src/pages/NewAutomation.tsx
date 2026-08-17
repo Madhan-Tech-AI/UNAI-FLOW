@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Camera, AtSign, MessageCircle, Sparkles, Loader2, Link2, UploadCloud, Layers, Zap, Info } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
+import { supabase } from '../lib/supabaseClient';
 
 export default function NewAutomation() {
   const navigate = useNavigate();
@@ -26,23 +27,24 @@ export default function NewAutomation() {
     { id: 'storytelling', label: 'Storytelling', icon: '📖', desc: 'Engaging, narrative driven' }
   ];
 
-  const uploadToTmpFiles = async (file: File): Promise<string> => {
-    const formData = new FormData();
-    formData.append('file', file);
-    
-    const res = await fetch('https://tmpfiles.org/api/v1/upload', {
-      method: 'POST',
-      body: formData
-    });
-    
-    if (!res.ok) {
-      throw new Error('Failed to upload media to public server');
+  const uploadToSupabase = async (file: File): Promise<string> => {
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+    const filePath = `uploads/${fileName}`;
+
+    const { data, error } = await supabase.storage
+      .from('media')
+      .upload(filePath, file);
+
+    if (error) {
+      throw error;
     }
-    
-    const json = await res.json();
-    const url = json.data.url;
-    const directUrl = url.replace('https://tmpfiles.org/', 'https://tmpfiles.org/dl/');
-    return directUrl;
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('media')
+      .getPublicUrl(filePath);
+
+    return publicUrl;
   };
 
   const getBase64 = (file: File): Promise<string> => {
@@ -73,9 +75,9 @@ export default function NewAutomation() {
       if (selectedFile) {
         try {
           mediaBase64 = await getBase64(selectedFile);
-          mediaUrl = await uploadToTmpFiles(selectedFile);
+          mediaUrl = await uploadToSupabase(selectedFile);
         } catch (err) {
-          console.error("Failed to upload media, falling back to local base64", err);
+          console.error("Failed to upload media to Supabase, falling back to local base64", err);
           mediaUrl = mediaBase64;
         }
       }

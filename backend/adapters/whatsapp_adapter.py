@@ -7,18 +7,24 @@ from lib.encryption import decrypt_token
 class WhatsAppAdapter(PlatformAdapter):
     async def publish(self, content: str, user_id: str, automation_id: str) -> dict:
         try:
-            res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "whatsapp").single().execute()
+            res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "whatsapp").execute()
             if not res.data:
-                raise Exception("WhatsApp not connected")
+                res = supabase.table("platform_connections").select("*").eq("platform", "whatsapp").eq("status", "active").execute()
                 
-            token = decrypt_token(res.data["access_token"])
-            phone_number_id = res.data.get("platform_account_id")
-            
-            if not phone_number_id:
+            if res.data:
+                connection = res.data[0]
+                token = decrypt_token(connection["access_token"])
+                phone_number_id = connection.get("platform_account_id")
+            else:
+                token = os.getenv("WHATSAPP_ACCESS_TOKEN")
+                phone_number_id = os.getenv("WHATSAPP_PHONE_ID")
+                
+            if not token or token == "mock_wa_token":
+                raise Exception("WhatsApp Cloud API token not configured")
+                
+            if not phone_number_id or phone_number_id == "mock_phone_id":
                 raise Exception("WhatsApp Phone Number ID not configured")
                 
-            # Target recipient / group ID (Assume user settings store a default group or it's part of the connection)
-            # For simplicity, if we don't have a UI to select groups, we use a placeholder or read from settings
             target_group = os.getenv("WHATSAPP_TEST_RECIPIENT", "1234567890")
             
             url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"

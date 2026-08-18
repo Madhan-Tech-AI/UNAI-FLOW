@@ -61,6 +61,12 @@ export default function NewAutomation() {
 
     const targetPlatforms = Object.keys(platforms).filter((key) => platforms[key as keyof typeof platforms]);
     
+    if (!selectedFile) {
+      setError('Media attachment (Image or Video) is mandatory for post creation. Please upload an image or video.');
+      setLoading(false);
+      return;
+    }
+
     if (targetPlatforms.length === 0) {
       setError('Please select at least one target platform.');
       setLoading(false);
@@ -247,14 +253,14 @@ export default function NewAutomation() {
               </div>
 
               <div>
-                <label className="label" htmlFor="media">Media Attachment (Optional)</label>
+                <label className="label" htmlFor="media">Media Attachment <span style={{ color: '#ef4444' }}>(Mandatory *)</span></label>
                 <div
                   style={{
                     height: '44px',
-                    border: '1px dashed var(--border)',
+                    border: selectedFile ? '2px solid #10b981' : '2px dashed #f87171',
                     borderRadius: '12px',
                     padding: '0 1rem',
-                    backgroundColor: '#f8fafc',
+                    backgroundColor: selectedFile ? '#f0fdf4' : '#fff5f5',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '0.5rem',
@@ -263,9 +269,9 @@ export default function NewAutomation() {
                   }}
                   onClick={() => document.getElementById('media-upload')?.click()}
                 >
-                  <UploadCloud size={18} className="text-primary flex-shrink-0" />
-                  <span className="text-xs text-secondary truncate">
-                    {selectedFile ? selectedFile.name : 'Upload Image or Video'}
+                  <UploadCloud size={18} className={selectedFile ? "text-success" : "text-primary"} />
+                  <span className="text-xs font-semibold text-main truncate">
+                    {selectedFile ? `✓ ${selectedFile.name}` : 'Upload Image or Video (Required)'}
                   </span>
                   <input
                     type="file"
@@ -274,6 +280,7 @@ export default function NewAutomation() {
                     accept="image/*,video/*"
                     style={{ display: 'none' }}
                     onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                    required
                   />
                 </div>
               </div>
@@ -302,7 +309,37 @@ export default function NewAutomation() {
               <h3 className="font-bold text-base text-main flex items-center gap-2">
                 <Layers size={18} className="text-primary" /> Target Channels
               </h3>
-              <p className="text-xs text-secondary mt-1">Select channels to receive AI formatted content</p>
+              <p className="text-xs text-secondary mt-1">Select target channels to receive media & post content</p>
+            </div>
+
+            {/* Connection Preset Dropdown Selector */}
+            <div>
+              <label className="label text-xs mb-1" htmlFor="connectionPreset">Target Preset Dropdown</label>
+              <select
+                id="connectionPreset"
+                className="input text-xs font-semibold"
+                style={{ height: '40px', backgroundColor: '#f8fafc' }}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === 'all') {
+                    setPlatforms({ instagram: true, facebook: true, whatsapp: true, twitter: true });
+                  } else if (val === 'meta') {
+                    setPlatforms({ instagram: true, facebook: true, whatsapp: false, twitter: false });
+                  } else if (val === 'meta_wa') {
+                    setPlatforms({ instagram: true, facebook: true, whatsapp: true, twitter: false });
+                  } else if (val === 'insta_only') {
+                    setPlatforms({ instagram: true, facebook: false, whatsapp: false, twitter: false });
+                  } else if (val === 'fb_only') {
+                    setPlatforms({ instagram: false, facebook: true, whatsapp: false, twitter: false });
+                  }
+                }}
+              >
+                <option value="all">🌐 All Channels (Instagram + Facebook + WhatsApp + Twitter)</option>
+                <option value="meta">📸 Meta Suite Only (Instagram + Facebook)</option>
+                <option value="meta_wa">💬 Meta & WhatsApp (Instagram + Facebook + WhatsApp)</option>
+                <option value="insta_only">📷 Instagram Only</option>
+                <option value="fb_only">👍 Facebook Only</option>
+              </select>
             </div>
 
             <div className="flex-col gap-3">

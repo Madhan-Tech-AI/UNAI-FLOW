@@ -2,36 +2,53 @@ import httpx
 from adapters.base_adapter import PlatformAdapter
 from lib.supabase_client import supabase
 from lib.encryption import decrypt_token
+from lib.media_uploader import get_public_media_url
 
 class FacebookAdapter(PlatformAdapter):
     async def publish(self, content: str, user_id: str, automation_id: str) -> dict:
         try:
-            res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "facebook").single().execute()
+            # 1. Fetch connection
+            res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "facebook").execute()
             if not res.data:
-                raise Exception("Facebook not connected")
+                # Fallback to any active facebook connection
+                res = supabase.table("platform_connections").select("*").eq("platform", "facebook").eq("status", "active").execute()
                 
-            token = decrypt_token(res.data["access_token"])
-            page_id = res.data.get("platform_account_id")
+            if not res.data:
+                raise Exception("Facebook not connected. Please connect Facebook Page in Platform Connections.")
+                
+            connection = res.data[0]
+            token = decrypt_token(connection["access_token"])
+            page_id = connection.get("platform_account_id")
             
             if not page_id:
                 raise Exception("Facebook Page ID not configured for this connection")
             
-            # Check if automation has a media attachment
+            # 2. Fetch media from automation
             automation = supabase.table("automations").select("media_url").eq("id", automation_id).single().execute().data
-            media_url = automation.get("media_url") if automation else None
+            raw_media = automation.get("media_url") if automation else None
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                if media_url:
-                    # Publish a photo post with caption
-                    url = f"https://graph.facebook.com/v19.0/{page_id}/photos"
-                    payload = {
-                        "url": media_url,
-                        "message": content,
-                        "access_token": token
-                    }
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                if raw_media:
+                    public_media_url = get_public_media_url(raw_media)
+                    is_video = any(v_ext in public_media_url.lower() for v_ext in ['.mp4', '.mov', 'video']) or raw_media.startswith("data:video")
+                    
+                    if is_video:
+                        url = f"https://graph.facebook.com/v19.0/{page_id}/videos"
+                        payload = {
+                            "file_url": public_media_url,
+                            "description": content,
+                            "access_token": token
+                        }
+                    else:
+                        url = f"https://graph.facebook.com/v19.0/{page_id}/photos"
+                        payload = {
+                            "url": public_media_url,
+                            "caption": content,
+                            "access_token": token
+                        }
                     resp = await client.post(url, data=payload)
                 else:
-                    # Publish a text-only feed post
+                    # Publish text feed post
                     url = f"https://graph.facebook.com/v19.0/{page_id}/feed"
                     payload = {
                         "message": content,

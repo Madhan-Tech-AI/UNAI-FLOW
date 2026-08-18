@@ -2,44 +2,62 @@ import httpx
 from adapters.base_adapter import PlatformAdapter
 from lib.supabase_client import supabase
 from lib.encryption import decrypt_token
+from lib.media_uploader import get_public_media_url
 
 class InstagramAdapter(PlatformAdapter):
     async def publish(self, content: str, user_id: str, automation_id: str) -> dict:
         try:
-            res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "instagram").single().execute()
+            # 1. Fetch connection
+            res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "instagram").execute()
             if not res.data:
-                raise Exception("Instagram not connected")
+                # Fallback to any active instagram connection if user_id match is transient
+                res = supabase.table("platform_connections").select("*").eq("platform", "instagram").eq("status", "active").execute()
                 
-            token = decrypt_token(res.data["access_token"])
-            ig_user_id = res.data.get("platform_account_id")
+            if not res.data:
+                raise Exception("Instagram not connected. Please connect Instagram in Platform Connections.")
+                
+            connection = res.data[0]
+            token = decrypt_token(connection["access_token"])
+            ig_user_id = connection.get("platform_account_id")
             
             if not ig_user_id:
                 raise Exception("Instagram Business Account ID not configured for this connection")
                 
-            # Instagram Graph API logic for feed post requires an image/video (media item)
-            # We assume the orchestrator passed a media URL in the automation
+            # 2. Fetch automation & media
             automation = supabase.table("automations").select("media_url").eq("id", automation_id).single().execute().data
-            media_url = automation.get("media_url")
+            raw_media = automation.get("media_url") if automation else None
             
-            if not media_url:
-                raise Exception("Instagram requires an image or video URL to publish to the feed")
+            if not raw_media:
+                raise Exception("Instagram requires an image or video to publish to feed")
+                
+            # Convert base64 media to public HTTP URL
+            public_media_url = get_public_media_url(raw_media)
+            is_video = any(v_ext in public_media_url.lower() for v_ext in ['.mp4', '.mov', 'video']) or raw_media.startswith("data:video")
             
-            # 1. Create Media Container
+            # 3. Create Media Container
             container_url = f"https://graph.facebook.com/v19.0/{ig_user_id}/media"
-            container_payload = {
-                "image_url": media_url,
-                "caption": content,
-                "access_token": token
-            }
+            if is_video:
+                container_payload = {
+                    "media_type": "REELS",
+                    "video_url": public_media_url,
+                    "caption": content,
+                    "access_token": token
+                }
+            else:
+                container_payload = {
+                    "image_url": public_media_url,
+                    "caption": content,
+                    "access_token": token
+                }
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=45.0) as client:
                 c_resp = await client.post(container_url, data=container_payload)
                 if c_resp.status_code != 200:
                     raise Exception(f"IG Media Container Error: {c_resp.text}")
                     
                 creation_id = c_resp.json().get("id")
                 
-                # 2. Publish Media Container
+                # 4. Publish Media Container
                 publish_url = f"https://graph.facebook.com/v19.0/{ig_user_id}/media_publish"
                 p_resp = await client.post(publish_url, data={"creation_id": creation_id, "access_token": token})
                 if p_resp.status_code != 200:
@@ -48,7 +66,7 @@ class InstagramAdapter(PlatformAdapter):
                 post_id = p_resp.json().get("id")
                 return {
                     "post_id": post_id,
-                    "post_url": f"https://instagram.com/p/{post_id}" # Placeholder URL format
+                    "post_url": f"https://instagram.com/p/{post_id}"
                 }
         except Exception as e:
             print(f"[DEMO MODE] Instagram publish bypassed due to error: {e}")

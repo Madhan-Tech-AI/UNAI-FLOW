@@ -8,17 +8,23 @@ from lib.media_uploader import get_public_media_url
 class WhatsAppAdapter(PlatformAdapter):
     async def publish(self, content: str, user_id: str, automation_id: str) -> dict:
         # 1. Resolve connection & tokens
-        res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "whatsapp").execute()
-        if not res.data:
-            res = supabase.table("platform_connections").select("*").eq("platform", "whatsapp").eq("status", "active").execute()
-            
-        if res.data:
-            connection = res.data[0]
-            token = decrypt_token(connection["access_token"])
-            phone_number_id = connection.get("platform_account_id")
-        else:
-            token = os.getenv("WHATSAPP_ACCESS_TOKEN")
-            phone_number_id = os.getenv("WHATSAPP_PHONE_ID")
+        # Prioritize latest environment variable if configured
+        env_token = os.getenv("WHATSAPP_ACCESS_TOKEN")
+        env_phone_id = os.getenv("WHATSAPP_PHONE_ID")
+        
+        token = env_token
+        phone_number_id = env_phone_id
+        
+        # Fallback to database connection if environment token is not provided
+        if not token or token == "mock_wa_token":
+            res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "whatsapp").execute()
+            if not res.data:
+                res = supabase.table("platform_connections").select("*").eq("platform", "whatsapp").eq("status", "active").execute()
+                
+            if res.data:
+                connection = res.data[0]
+                token = decrypt_token(connection["access_token"])
+                phone_number_id = connection.get("platform_account_id") or env_phone_id
             
         if not token or token == "mock_wa_token":
             raise Exception("WhatsApp Cloud API token not configured in .env (WHATSAPP_ACCESS_TOKEN).")
@@ -29,7 +35,7 @@ class WhatsAppAdapter(PlatformAdapter):
         # Target WhatsApp Channel or Recipient
         channel_link = os.getenv("WHATSAPP_CHANNEL_LINK", "https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M")
         channel_id = os.getenv("WHATSAPP_CHANNEL_ID")
-        target_recipient = channel_id or os.getenv("WHATSAPP_TEST_RECIPIENT", "1234567890")
+        target_recipient = os.getenv("WHATSAPP_TEST_RECIPIENT") or channel_id or "1234567890"
         
         # 2. Check if automation has media
         automation = supabase.table("automations").select("media_url").eq("id", automation_id).single().execute().data

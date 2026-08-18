@@ -94,12 +94,12 @@ export default function Connections() {
     },
     {
       id: 'whatsapp',
-      name: 'WhatsApp Business API',
-      description: 'Connect Meta WhatsApp Cloud API to broadcast targeted updates to subscriber communities.',
+      name: 'WhatsApp Channel Broadcast',
+      description: 'Broadcast campaign media & posts to your official WhatsApp Channel (0029VbDxqHz6hENhNBcZM31M).',
       icon: MessageCircle,
       color: '#25D366',
       bgColor: '#dcfce7',
-      badge: 'Cloud API v18'
+      badge: 'Channel Broadcast API'
     },
     {
       id: 'facebook',

@@ -394,11 +394,11 @@ export default function PreviewVariants() {
               <div className="flex items-center justify-between p-3" style={{ backgroundColor: '#075e54', color: 'white' }}>
                 <div className="flex items-center gap-2">
                   <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: '#25d366', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.75rem' }}>
-                    WA
+                    📢
                   </div>
                   <div>
-                    <p className="font-bold text-xs text-white">Community Broadcast</p>
-                    <p className="text-xs opacity-75" style={{ fontSize: '0.62rem' }}>Preview Mode</p>
+                    <p className="font-bold text-xs text-white">WhatsApp Channel Broadcast</p>
+                    <p className="text-xs opacity-75" style={{ fontSize: '0.62rem' }}>channel/0029VbDxqHz6hENhNBcZM31M</p>
                   </div>
                 </div>
               </div>
@@ -414,6 +414,17 @@ export default function PreviewVariants() {
                     position: 'relative'
                   }}
                 >
+                  {/* WhatsApp Media Attachment Preview */}
+                  {mediaUrl && (
+                    <div style={{ borderRadius: '8px', overflow: 'hidden', marginBottom: '0.5rem', maxHeight: '160px', backgroundColor: '#000000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {mediaUrl.startsWith('data:video') || mediaUrl.includes('.mp4') || mediaUrl.includes('.mov') ? (
+                        <video src={mediaUrl} controls style={{ width: '100%', maxHeight: '160px', objectFit: 'contain' }} />
+                      ) : (
+                        <img src={mediaUrl} alt="WhatsApp Media" style={{ width: '100%', maxHeight: '160px', objectFit: 'cover' }} />
+                      )}
+                    </div>
+                  )}
+
                   {editingPlatform === 'whatsapp' ? (
                     <textarea
                       className="input text-xs"

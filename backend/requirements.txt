@@ -5,3 +5,5 @@ supabase
 google-generativeai
 python-dotenv
 cryptography
+httpx
+pillow

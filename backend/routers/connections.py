@@ -27,7 +27,7 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
     elif platform == "instagram":
         app_id = os.getenv("META_APP_ID")
         redirect_uri = f"{backend_url}/connections/instagram/callback"
-        url = f"https://www.facebook.com/v19.0/dialog/oauth?client_id={app_id}&redirect_uri={redirect_uri}&state={user['user_id']}&scope=instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement"
+        url = f"https://www.facebook.com/v19.0/dialog/oauth?client_id={app_id}&redirect_uri={redirect_uri}&response_type=code&state={user['user_id']}&scope=instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement"
         return {"authorization_url": url}
         
     elif platform == "whatsapp":
@@ -40,7 +40,7 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
     elif platform == "facebook":
         app_id = os.getenv("META_APP_ID")
         redirect_uri = f"{backend_url}/connections/facebook/callback"
-        url = f"https://www.facebook.com/v19.0/dialog/oauth?client_id={app_id}&redirect_uri={redirect_uri}&state={user['user_id']}&scope=pages_manage_posts,pages_read_engagement,pages_show_list"
+        url = f"https://www.facebook.com/v19.0/dialog/oauth?client_id={app_id}&redirect_uri={redirect_uri}&response_type=code&state={user['user_id']}&scope=pages_manage_posts,pages_read_engagement,pages_show_list"
         return {"authorization_url": url}
         
     raise HTTPException(status_code=400, detail="Unsupported platform")

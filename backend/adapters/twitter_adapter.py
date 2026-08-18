@@ -5,54 +5,44 @@ from lib.encryption import decrypt_token
 
 class TwitterAdapter(PlatformAdapter):
     async def publish(self, content: str, user_id: str, automation_id: str) -> dict:
-        try:
-            # Fetch connection
-            res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "twitter").single().execute()
-            if not res.data:
-                raise Exception("Twitter not connected")
-                
-            connection = res.data
-            token = decrypt_token(connection["access_token"])
+        # Fetch connection
+        res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "twitter").single().execute()
+        if not res.data:
+            raise Exception("Twitter not connected")
             
-            async def post_tweet(tok):
-                url = "https://api.twitter.com/2/tweets"
-                headers = {
-                    "Authorization": f"Bearer {tok}",
-                    "Content-Type": "application/json"
-                }
-                payload = {"text": content}
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    return await client.post(url, headers=headers, json=payload)
-            
-            resp = await post_tweet(token)
-            
-            # If token is expired, try to refresh
-            if resp.status_code == 401 and connection.get("refresh_token"):
-                try:
-                    print("Twitter token expired. Attempting refresh...")
-                    new_token = await refresh_twitter_token(connection["id"], decrypt_token(connection["refresh_token"]))
-                    resp = await post_tweet(new_token)
-                except Exception as refresh_err:
-                    print(f"Failed to refresh Twitter token: {refresh_err}")
-            
-            if resp.status_code != 201:
-                # E.g. 401 Unauthorized, token expired, etc.
-                raise Exception(f"Twitter API Error: {resp.text}")
-                
-            data = resp.json()
-            tweet_id = data.get("data", {}).get("id")
-            return {
-                "post_id": tweet_id,
-                "post_url": f"https://twitter.com/user/status/{tweet_id}"
+        connection = res.data
+        token = decrypt_token(connection["access_token"])
+        
+        async def post_tweet(tok):
+            url = "https://api.twitter.com/2/tweets"
+            headers = {
+                "Authorization": f"Bearer {tok}",
+                "Content-Type": "application/json"
             }
-        except Exception as e:
-            print(f"[DEMO MODE] Twitter publish bypassed due to error: {e}")
-            import uuid
-            demo_id = str(uuid.uuid4())[:8]
-            return {
-                "post_id": f"demo_tw_{demo_id}",
-                "post_url": f"https://twitter.com/demo/status/{demo_id}"
-            }
+            payload = {"text": content}
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                return await client.post(url, headers=headers, json=payload)
+        
+        resp = await post_tweet(token)
+        
+        # If token is expired, try to refresh
+        if resp.status_code == 401 and connection.get("refresh_token"):
+            try:
+                print("Twitter token expired. Attempting refresh...")
+                new_token = await refresh_twitter_token(connection["id"], decrypt_token(connection["refresh_token"]))
+                resp = await post_tweet(new_token)
+            except Exception as refresh_err:
+                print(f"Failed to refresh Twitter token: {refresh_err}")
+        
+        if resp.status_code != 201:
+            raise Exception(f"Twitter API Error: {resp.text}")
+            
+        data = resp.json()
+        tweet_id = data.get("data", {}).get("id")
+        return {
+            "post_id": tweet_id,
+            "post_url": f"https://twitter.com/user/status/{tweet_id}"
+        }
 
 async def refresh_twitter_token(connection_id: str, refresh_token: str) -> str:
     import os
@@ -86,4 +76,3 @@ async def refresh_twitter_token(connection_id: str, refresh_token: str) -> str:
             
         supabase.table("platform_connections").update(update_data).eq("id", connection_id).execute()
         return new_access
-

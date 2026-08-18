@@ -62,19 +62,15 @@ export default function PreviewVariants() {
       // Show summary of what happened
       if (response && response.results) {
         const realPosts = response.results.filter((r: any) => r.status === 'success');
-        const demoPosts = response.results.filter((r: any) => r.demo_mode);
         const failedPosts = response.results.filter((r: any) => r.status === 'failed');
         
         let summary = '';
         if (realPosts.length > 0) {
           summary += `✅ Published live: ${realPosts.map((r: any) => r.platform).join(', ')}\n`;
         }
-        if (demoPosts.length > 0) {
-          summary += `⚠️ Demo mode (not actually posted): ${demoPosts.map((r: any) => r.platform).join(', ')}\n`;
-          summary += `To publish for real, reconnect these platforms in the Connections page with valid API credentials.\n`;
-        }
         if (failedPosts.length > 0) {
-          summary += `❌ Failed: ${failedPosts.map((r: any) => `${r.platform} (${r.error})`).join(', ')}\n`;
+          summary += `❌ Publishing Failed for: ${failedPosts.map((r: any) => `${r.platform}: ${r.error}`).join('\n')}\n`;
+          setError(summary);
         }
         
         if (summary) {

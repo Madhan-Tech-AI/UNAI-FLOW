@@ -3,6 +3,24 @@ import { useNavigate } from 'react-router-dom';
 import { Camera, AtSign, MessageCircle, Sparkles, Loader2, Link2, UploadCloud, Layers, Zap, Info } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
+function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
+    </svg>
+  );
+}
+
 export default function NewAutomation() {
   const navigate = useNavigate();
   const [content, setContent] = useState('');
@@ -16,7 +34,8 @@ export default function NewAutomation() {
   const [platforms, setPlatforms] = useState({
     instagram: true,
     twitter: true,
-    whatsapp: true
+    whatsapp: true,
+    facebook: true
   });
 
   const tones = [
@@ -371,6 +390,35 @@ export default function NewAutomation() {
                   onChange={() => togglePlatform('whatsapp')}
                   onClick={(e) => e.stopPropagation()}
                   style={{ width: '1.2rem', height: '1.2rem', accentColor: '#25D366', cursor: 'pointer' }}
+                />
+              </div>
+
+              {/* Facebook Card */}
+              <div
+                onClick={() => togglePlatform('facebook')}
+                className="flex items-center justify-between p-3.5 cursor-pointer"
+                style={{
+                  borderRadius: '12px',
+                  border: platforms.facebook ? '2px solid #1877F2' : '1px solid var(--border)',
+                  backgroundColor: platforms.facebook ? '#eff6ff' : '#ffffff',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <div className="flex items-center gap-3">
+                  <span style={{ color: '#1877F2', backgroundColor: '#dbeafe', padding: '8px', borderRadius: '10px' }}>
+                    <Facebook size={18} />
+                  </span>
+                  <div>
+                    <h4 className="font-bold text-sm text-main">Facebook</h4>
+                    <p className="text-xs text-secondary">Page Posts & Link Shares</p>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={platforms.facebook}
+                  onChange={() => togglePlatform('facebook')}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ width: '1.2rem', height: '1.2rem', accentColor: '#1877F2', cursor: 'pointer' }}
                 />
               </div>
             </div>

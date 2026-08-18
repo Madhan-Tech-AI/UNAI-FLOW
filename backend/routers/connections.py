@@ -37,6 +37,12 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
         redirect_uri = f"{backend_url}/connections/whatsapp/callback?code=wa_auth_code&state={user['user_id']}"
         return {"authorization_url": redirect_uri}
         
+    elif platform == "facebook":
+        app_id = os.getenv("META_APP_ID")
+        redirect_uri = f"{backend_url}/connections/facebook/callback"
+        url = f"https://www.facebook.com/v19.0/dialog/oauth?client_id={app_id}&redirect_uri={redirect_uri}&state={user['user_id']}&scope=pages_manage_posts,pages_read_engagement,pages_show_list"
+        return {"authorization_url": url}
+        
     raise HTTPException(status_code=400, detail="Unsupported platform")
  
 @router.get("/{platform}/callback")
@@ -107,6 +113,32 @@ async def oauth_callback(platform: str, state: str, code: str = None):
         refresh_token = None
         platform_account_id = os.getenv("WHATSAPP_PHONE_ID", "mock_phone_id")
         platform_account_name = "WhatsApp Business"
+        
+    elif platform == "facebook":
+        app_id = os.getenv("META_APP_ID")
+        app_secret = os.getenv("META_APP_SECRET")
+        redirect_uri = f"{backend_url}/connections/facebook/callback"
+        token_url = f"https://graph.facebook.com/v19.0/oauth/access_token?client_id={app_id}&redirect_uri={redirect_uri}&client_secret={app_secret}&code={code}"
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(token_url)
+            if resp.status_code != 200:
+                print("Facebook Token Error:", resp.text)
+                raise HTTPException(status_code=400, detail="Failed to get Facebook access token")
+                
+            access_token = resp.json().get("access_token")
+            refresh_token = resp.json().get("refresh_token")
+            
+            # Fetch Facebook Pages managed by the user
+            pages_resp = await client.get(f"https://graph.facebook.com/v19.0/me/accounts?fields=id,name,access_token&access_token={access_token}")
+            if pages_resp.status_code == 200:
+                pages = pages_resp.json().get("data", [])
+                if pages:
+                    # Use the first page's long-lived token and ID
+                    page = pages[0]
+                    access_token = page["access_token"]  # Page-level token
+                    platform_account_id = page["id"]
+                    platform_account_name = page.get("name", "Facebook Page")
         
     if not access_token:
         raise HTTPException(status_code=400, detail="Failed to acquire access token")

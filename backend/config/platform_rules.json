@@ -13,5 +13,10 @@
         "max_length": 4096,
         "max_hashtags": 0,
         "instructions": "Rewrite the following content for WhatsApp Community. Keep it under 400 characters for readability. Conversational tone, no hashtags, short paragraphs. Emphasize clarity and a direct CTA. Use formatting like *bold* or _italic_. Output only the message text."
+    },
+    "facebook": {
+        "max_length": 63206,
+        "max_hashtags": 5,
+        "instructions": "Rewrite the following content as a Facebook Page post. Keep it engaging and shareable, optimized for the Facebook feed algorithm. Front-load the hook in the first 2 lines (pre-fold). Use line breaks for readability, 3-5 relevant hashtags at the end. Include a clear CTA. Conversational yet professional tone. Emoji-friendly. Output only the post text."
     }
 }

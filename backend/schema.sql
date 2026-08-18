@@ -18,7 +18,7 @@ create policy "Users can insert own profile" on profiles for insert with check (
 create table if not exists platform_connections (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users(id) on delete cascade,
-  platform text not null check (platform in ('whatsapp','instagram','twitter')),
+  platform text not null check (platform in ('whatsapp','instagram','twitter','facebook')),
   access_token text not null,          -- store encrypted (pgsodium / vault)
   refresh_token text,
   token_expires_at timestamptz,

@@ -2,6 +2,24 @@ import { useState, useEffect } from 'react';
 import { Camera, AtSign, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, Zap } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
+function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
+    </svg>
+  );
+}
+
 export default function Connections() {
   const [connections, setConnections] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -82,6 +100,15 @@ export default function Connections() {
       color: '#25D366',
       bgColor: '#dcfce7',
       badge: 'Cloud API v18'
+    },
+    {
+      id: 'facebook',
+      name: 'Facebook Pages',
+      description: 'Connect your Facebook Page to auto-publish feed posts, photos, and link shares via Graph API.',
+      icon: Facebook,
+      color: '#1877F2',
+      bgColor: '#dbeafe',
+      badge: 'Graph API v19.0'
     }
   ];
 
@@ -149,7 +176,7 @@ export default function Connections() {
               {activeCount > 0 ? 'Channel Integration Status' : 'No Channels Connected'}
             </h3>
             <p className="text-xs text-muted mt-1" style={{ color: '#94a3b8' }}>
-              {activeCount} of 3 core platforms active • OAuth Token Engine Active
+              {activeCount} of 4 core platforms active • OAuth Token Engine Active
             </p>
           </div>
         </div>

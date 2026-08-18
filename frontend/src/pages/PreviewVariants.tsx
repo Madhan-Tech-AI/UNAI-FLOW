@@ -1,7 +1,25 @@
 import { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { ArrowLeft, Loader2, Send, Edit3, Camera, AtSign, MessageCircle, Heart, MessageSquare, Share2, MoreHorizontal, CheckCircle2, Sparkles, Copy, Check, Inbox } from 'lucide-react';
+import { ArrowLeft, Loader2, Send, Edit3, Camera, AtSign, MessageCircle, Heart, MessageSquare, Share2, MoreHorizontal, CheckCircle2, Sparkles, Copy, Check, Inbox, ThumbsUp } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
+
+function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
+    </svg>
+  );
+}
 
 export default function PreviewVariants() {
   const navigate = useNavigate();
@@ -91,6 +109,7 @@ export default function PreviewVariants() {
   const instagramVariant = getVariant('instagram');
   const twitterVariant = getVariant('twitter');
   const whatsappVariant = getVariant('whatsapp');
+  const facebookVariant = getVariant('facebook');
 
   return (
     <div className="flex-col gap-8">
@@ -430,6 +449,114 @@ export default function PreviewVariants() {
                 title="Copy text"
               >
                 {copiedPlatform === 'whatsapp' ? <Check size={16} className="text-success" /> : <Copy size={16} />}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 4. Facebook Native Mockup Card */}
+        {facebookVariant && (
+          <div className="card flex-col gap-4 flex-1" style={{ minWidth: '320px', borderRadius: '20px' }}>
+            <div className="flex justify-between items-center pb-3" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-2">
+                <span style={{ color: '#1877F2', backgroundColor: '#dbeafe', padding: '6px', borderRadius: '8px' }}>
+                  <Facebook size={18} />
+                </span>
+                <h3 className="font-bold text-base text-main">Facebook Preview</h3>
+              </div>
+              <span className="chip chip-default text-xs">{facebookVariant.char_count} / 63206 chars</span>
+            </div>
+
+            {/* Facebook Feed Post Mockup UI */}
+            <div
+              style={{
+                backgroundColor: '#ffffff',
+                borderRadius: '16px',
+                border: '1px solid #e2e8f0',
+                overflow: 'hidden',
+                boxShadow: 'var(--shadow-sm)'
+              }}
+            >
+              {/* Profile Header */}
+              <div className="flex items-center justify-between p-3" style={{ borderBottom: '1px solid #f1f5f9' }}>
+                <div className="flex items-center gap-2.5">
+                  <div
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: '50%',
+                      background: 'linear-gradient(135deg, #1877F2, #42a5f5)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'white',
+                      fontWeight: 700,
+                      fontSize: '0.75rem'
+                    }}
+                  >
+                    FB
+                  </div>
+                  <div>
+                    <p className="font-bold text-xs text-main">Your Page</p>
+                    <p className="text-xs text-muted" style={{ fontSize: '0.65rem' }}>AI Preview · 🌐</p>
+                  </div>
+                </div>
+                <MoreHorizontal size={16} className="text-secondary" />
+              </div>
+
+              {/* Post Content Area */}
+              <div className="px-3 py-3">
+                {editingPlatform === 'facebook' ? (
+                  <textarea
+                    className="input text-xs"
+                    rows={6}
+                    value={facebookVariant.generated_text}
+                    onChange={(e) => updateVariantText('facebook', e.target.value)}
+                  />
+                ) : (
+                  <div className="text-xs text-main" style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
+                    {facebookVariant.generated_text}
+                  </div>
+                )}
+              </div>
+
+              {/* Engagement Stats Bar */}
+              <div className="flex items-center justify-between px-3 py-2" style={{ borderTop: '1px solid #f1f5f9', borderBottom: '1px solid #f1f5f9' }}>
+                <span className="text-xs text-muted flex items-center gap-1">
+                  <span style={{ color: '#1877F2' }}>👍</span> Preview
+                </span>
+                <span className="text-xs text-muted">0 Comments · 0 Shares</span>
+              </div>
+
+              {/* Action Buttons Bar */}
+              <div className="flex justify-around items-center p-2 text-secondary" style={{ fontSize: '0.75rem' }}>
+                <span className="flex items-center gap-1.5 cursor-pointer" style={{ padding: '0.4rem 0.75rem', borderRadius: '6px' }}>
+                  <ThumbsUp size={15} /> Like
+                </span>
+                <span className="flex items-center gap-1.5 cursor-pointer" style={{ padding: '0.4rem 0.75rem', borderRadius: '6px' }}>
+                  <MessageSquare size={15} /> Comment
+                </span>
+                <span className="flex items-center gap-1.5 cursor-pointer" style={{ padding: '0.4rem 0.75rem', borderRadius: '6px' }}>
+                  <Share2 size={15} /> Share
+                </span>
+              </div>
+            </div>
+
+            {/* Card Action Controls */}
+            <div className="flex gap-2 mt-auto">
+              <button
+                className="btn-secondary flex-1"
+                onClick={() => setEditingPlatform(editingPlatform === 'facebook' ? null : 'facebook')}
+              >
+                <Edit3 size={15} />
+                <span>{editingPlatform === 'facebook' ? 'Done Editing' : 'Edit Post'}</span>
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => handleCopy('facebook', facebookVariant.generated_text)}
+                title="Copy text"
+              >
+                {copiedPlatform === 'facebook' ? <Check size={16} className="text-success" /> : <Copy size={16} />}
               </button>
             </div>
           </div>

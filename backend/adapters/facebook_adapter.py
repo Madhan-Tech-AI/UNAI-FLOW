@@ -1,4 +1,5 @@
 import httpx
+import base64
 from adapters.base_adapter import PlatformAdapter
 from lib.supabase_client import supabase
 from lib.encryption import decrypt_token
@@ -9,7 +10,6 @@ class FacebookAdapter(PlatformAdapter):
         # 1. Fetch connection
         res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "facebook").execute()
         if not res.data:
-            # Fallback to any active facebook connection
             res = supabase.table("platform_connections").select("*").eq("platform", "facebook").eq("status", "active").execute()
             
         if not res.data:
@@ -27,7 +27,20 @@ class FacebookAdapter(PlatformAdapter):
         raw_media = automation.get("media_url") if automation else None
         
         async with httpx.AsyncClient(timeout=45.0) as client:
-            if raw_media:
+            if raw_media and raw_media.startswith("data:image"):
+                # Upload image file bytes directly to Facebook Graph API via multipart
+                header, encoded = raw_media.split(",", 1)
+                mime_type = header.split(";")[0].split(":")[1]
+                ext = mime_type.split("/")[1]
+                if ext == "jpeg":
+                    ext = "jpg"
+                file_bytes = base64.b64decode(encoded)
+                
+                url = f"https://graph.facebook.com/v19.0/{page_id}/photos"
+                files = {"source": (f"photo.{ext}", file_bytes, mime_type)}
+                data = {"caption": content, "access_token": token}
+                resp = await client.post(url, data=data, files=files)
+            elif raw_media:
                 public_media_url = get_public_media_url(raw_media)
                 is_video = any(v_ext in public_media_url.lower() for v_ext in ['.mp4', '.mov', 'video']) or raw_media.startswith("data:video")
                 

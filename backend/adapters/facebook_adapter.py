@@ -1,6 +1,4 @@
 import httpx
-import base64
-import io
 from adapters.base_adapter import PlatformAdapter
 from lib.supabase_client import supabase
 from lib.encryption import decrypt_token
@@ -28,51 +26,34 @@ class FacebookAdapter(PlatformAdapter):
         raw_media = automation.get("media_url") if automation else None
         
         async with httpx.AsyncClient(timeout=60.0) as client:
-            if raw_media and raw_media.startswith("data:"):
-                # Direct binary upload via multipart form-data
-                header, encoded = raw_media.split(",", 1)
-                mime_type = header.split(";")[0].split(":")[1]
-                file_bytes = base64.b64decode(encoded)
-                
-                is_video = mime_type.startswith("video/")
-                
-                if is_video:
-                    ext = mime_type.split("/")[1]
-                    if ext == "quicktime":
-                        ext = "mov"
-                    url = f"https://graph.facebook.com/v19.0/{page_id}/videos"
-                    resp = await client.post(
-                        url,
-                        data={"description": content, "access_token": token},
-                        files={"source": (f"video.{ext}", io.BytesIO(file_bytes), mime_type)}
-                    )
-                else:
-                    ext = mime_type.split("/")[1]
-                    if ext == "jpeg":
-                        ext = "jpg"
-                    url = f"https://graph.facebook.com/v19.0/{page_id}/photos"
-                    resp = await client.post(
-                        url,
-                        data={"message": content, "access_token": token},
-                        files={"source": (f"photo.{ext}", io.BytesIO(file_bytes), mime_type)}
-                    )
-            elif raw_media:
-                # External URL (already public HTTP)
+            if raw_media:
+                # Upload base64 to Supabase Storage and get a public URL
+                # (same approach that works for Instagram)
                 public_media_url = get_public_media_url(raw_media)
-                is_video = any(v in public_media_url.lower() for v in ['.mp4', '.mov', 'video'])
+                is_video = any(v in public_media_url.lower() for v in ['.mp4', '.mov']) or raw_media.startswith("data:video")
                 
                 if is_video:
                     url = f"https://graph.facebook.com/v19.0/{page_id}/videos"
-                    payload = {"file_url": public_media_url, "description": content, "access_token": token}
+                    resp = await client.post(url, params={
+                        "file_url": public_media_url,
+                        "description": content,
+                        "access_token": token
+                    })
                 else:
+                    # Use the public URL — same URL that Instagram successfully fetched
                     url = f"https://graph.facebook.com/v19.0/{page_id}/photos"
-                    payload = {"url": public_media_url, "message": content, "access_token": token}
-                resp = await client.post(url, data=payload)
+                    resp = await client.post(url, params={
+                        "url": public_media_url,
+                        "message": content,
+                        "access_token": token
+                    })
             else:
                 # Text-only feed post
                 url = f"https://graph.facebook.com/v19.0/{page_id}/feed"
-                payload = {"message": content, "access_token": token}
-                resp = await client.post(url, data=payload)
+                resp = await client.post(url, params={
+                    "message": content,
+                    "access_token": token
+                })
             
             if resp.status_code != 200:
                 raise Exception(f"Facebook API Error: {resp.text}")

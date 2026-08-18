@@ -16,7 +16,7 @@ async def get_connections(user: Dict[str, Any] = Depends(verify_jwt)):
 
 @router.post("/{platform}/start")
 async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt)):
-    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
     
     if platform == "twitter":
         client_id = os.getenv("TWITTER_CLIENT_ID")
@@ -48,7 +48,7 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
 @router.get("/{platform}/callback")
 async def oauth_callback(platform: str, state: str, code: str = None):
     user_id = state
-    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
     access_token = None
     platform_account_name = None
     platform_account_id = None

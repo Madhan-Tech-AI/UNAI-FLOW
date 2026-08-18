@@ -199,10 +199,14 @@ export default function PreviewVariants() {
                 <MoreHorizontal size={16} className="text-secondary" />
               </div>
 
-              {/* Image Frame Placeholder or Actual Image */}
+              {/* Image Frame Placeholder or Actual Image / Video */}
               {mediaUrl ? (
-                <div style={{ height: '180px', width: '100%', overflow: 'hidden' }}>
-                  <img src={mediaUrl} alt="Campaign Media" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div style={{ height: '180px', width: '100%', overflow: 'hidden', backgroundColor: '#000000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {mediaUrl.startsWith('data:video') || mediaUrl.includes('.mp4') || mediaUrl.includes('.mov') ? (
+                    <video src={mediaUrl} controls style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  ) : (
+                    <img src={mediaUrl} alt="Campaign Media" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  )}
                 </div>
               ) : (
                 <div
@@ -515,6 +519,17 @@ export default function PreviewVariants() {
                   </div>
                 )}
               </div>
+
+              {/* Facebook Media Attachment Frame */}
+              {mediaUrl ? (
+                <div style={{ maxHeight: '220px', width: '100%', overflow: 'hidden', backgroundColor: '#000000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {mediaUrl.startsWith('data:video') || mediaUrl.includes('.mp4') || mediaUrl.includes('.mov') ? (
+                    <video src={mediaUrl} controls style={{ width: '100%', maxHeight: '220px', objectFit: 'contain' }} />
+                  ) : (
+                    <img src={mediaUrl} alt="Facebook Post Media" style={{ width: '100%', maxHeight: '220px', objectFit: 'cover' }} />
+                  )}
+                </div>
+              ) : null}
 
               {/* Engagement Stats Bar */}
               <div className="flex items-center justify-between px-3 py-2" style={{ borderTop: '1px solid #f1f5f9', borderBottom: '1px solid #f1f5f9' }}>

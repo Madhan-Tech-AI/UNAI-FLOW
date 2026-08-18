@@ -1,5 +1,6 @@
 import httpx
 import base64
+import io
 from adapters.base_adapter import PlatformAdapter
 from lib.supabase_client import supabase
 from lib.encryption import decrypt_token
@@ -26,46 +27,51 @@ class FacebookAdapter(PlatformAdapter):
         automation = supabase.table("automations").select("media_url").eq("id", automation_id).single().execute().data
         raw_media = automation.get("media_url") if automation else None
         
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            if raw_media and raw_media.startswith("data:image"):
-                # Upload image file bytes directly to Facebook Graph API via multipart
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            if raw_media and raw_media.startswith("data:"):
+                # Direct binary upload via multipart form-data
                 header, encoded = raw_media.split(",", 1)
                 mime_type = header.split(";")[0].split(":")[1]
-                ext = mime_type.split("/")[1]
-                if ext == "jpeg":
-                    ext = "jpg"
                 file_bytes = base64.b64decode(encoded)
                 
-                url = f"https://graph.facebook.com/v19.0/{page_id}/photos"
-                files = {"source": (f"photo.{ext}", file_bytes, mime_type)}
-                data = {"caption": content, "access_token": token}
-                resp = await client.post(url, data=data, files=files)
+                is_video = mime_type.startswith("video/")
+                
+                if is_video:
+                    ext = mime_type.split("/")[1]
+                    if ext == "quicktime":
+                        ext = "mov"
+                    url = f"https://graph.facebook.com/v19.0/{page_id}/videos"
+                    resp = await client.post(
+                        url,
+                        data={"description": content, "access_token": token},
+                        files={"source": (f"video.{ext}", io.BytesIO(file_bytes), mime_type)}
+                    )
+                else:
+                    ext = mime_type.split("/")[1]
+                    if ext == "jpeg":
+                        ext = "jpg"
+                    url = f"https://graph.facebook.com/v19.0/{page_id}/photos"
+                    resp = await client.post(
+                        url,
+                        data={"message": content, "access_token": token},
+                        files={"source": (f"photo.{ext}", io.BytesIO(file_bytes), mime_type)}
+                    )
             elif raw_media:
+                # External URL (already public HTTP)
                 public_media_url = get_public_media_url(raw_media)
-                is_video = any(v_ext in public_media_url.lower() for v_ext in ['.mp4', '.mov', 'video']) or raw_media.startswith("data:video")
+                is_video = any(v in public_media_url.lower() for v in ['.mp4', '.mov', 'video'])
                 
                 if is_video:
                     url = f"https://graph.facebook.com/v19.0/{page_id}/videos"
-                    payload = {
-                        "file_url": public_media_url,
-                        "description": content,
-                        "access_token": token
-                    }
+                    payload = {"file_url": public_media_url, "description": content, "access_token": token}
                 else:
                     url = f"https://graph.facebook.com/v19.0/{page_id}/photos"
-                    payload = {
-                        "url": public_media_url,
-                        "caption": content,
-                        "access_token": token
-                    }
+                    payload = {"url": public_media_url, "message": content, "access_token": token}
                 resp = await client.post(url, data=payload)
             else:
-                # Publish text feed post
+                # Text-only feed post
                 url = f"https://graph.facebook.com/v19.0/{page_id}/feed"
-                payload = {
-                    "message": content,
-                    "access_token": token
-                }
+                payload = {"message": content, "access_token": token}
                 resp = await client.post(url, data=payload)
             
             if resp.status_code != 200:

@@ -1,4 +1,6 @@
 import httpx
+import asyncio
+import base64
 from adapters.base_adapter import PlatformAdapter
 from lib.supabase_client import supabase
 from lib.encryption import decrypt_token
@@ -9,7 +11,6 @@ class InstagramAdapter(PlatformAdapter):
         # 1. Fetch connection
         res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "instagram").execute()
         if not res.data:
-            # Fallback to any active instagram connection
             res = supabase.table("platform_connections").select("*").eq("platform", "instagram").eq("status", "active").execute()
             
         if not res.data:
@@ -49,14 +50,38 @@ class InstagramAdapter(PlatformAdapter):
                 "access_token": token
             }
         
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             c_resp = await client.post(container_url, data=container_payload)
             if c_resp.status_code != 200:
                 raise Exception(f"Instagram Media Container Error: {c_resp.text}")
                 
             creation_id = c_resp.json().get("id")
             
-            # 4. Publish Media Container
+            # 4. POLL: Wait for media container to be ready before publishing
+            status_url = f"https://graph.facebook.com/v19.0/{creation_id}"
+            max_attempts = 15
+            for attempt in range(max_attempts):
+                await asyncio.sleep(3)  # Wait 3 seconds between checks
+                
+                status_resp = await client.get(status_url, params={
+                    "fields": "status_code",
+                    "access_token": token
+                })
+                
+                if status_resp.status_code == 200:
+                    status_code = status_resp.json().get("status_code")
+                    print(f"[Instagram] Container {creation_id} status: {status_code} (attempt {attempt+1}/{max_attempts})")
+                    
+                    if status_code == "FINISHED":
+                        break
+                    elif status_code == "ERROR":
+                        raise Exception(f"Instagram media processing failed for container {creation_id}")
+                else:
+                    print(f"[Instagram] Status check failed: {status_resp.text}")
+            else:
+                raise Exception(f"Instagram media container {creation_id} did not finish processing after {max_attempts} attempts")
+            
+            # 5. Publish Media Container (now that it's FINISHED)
             publish_url = f"https://graph.facebook.com/v19.0/{ig_user_id}/media_publish"
             p_resp = await client.post(publish_url, data={"creation_id": creation_id, "access_token": token})
             if p_resp.status_code != 200:

@@ -115,13 +115,14 @@ async def confirm_whatsapp_connection(user: Dict[str, Any] = Depends(verify_jwt)
     
     channel_link = os.getenv("WHATSAPP_CHANNEL_LINK", "https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M")
     channel_id = os.getenv("WHATSAPP_CHANNEL_ID", "0029VbDxqHz6hENhNBcZM31M")
+    channel_name = os.getenv("WHATSAPP_CHANNEL_NAME", "Madhan Tech AI")
     
     encrypted_token = encrypt_token(wca_key)
     
     existing = supabase.table("platform_connections").select("id").eq("user_id", user_id).eq("platform", "whatsapp").execute()
     db_data = {
         "access_token": encrypted_token,
-        "platform_account_name": f"WhatsApp Channel ({channel_id})",
+        "platform_account_name": channel_name,
         "platform_account_id": channel_id,
         "status": "active"
     }
@@ -133,7 +134,7 @@ async def confirm_whatsapp_connection(user: Dict[str, Any] = Depends(verify_jwt)
         db_data["platform"] = "whatsapp"
         supabase.table("platform_connections").insert(db_data).execute()
         
-    return {"success": True, "status": "active", "channel_id": channel_id}
+    return {"success": True, "status": "active", "channel_id": channel_id, "channel_name": channel_name}
 
  
 @router.get("/{platform}/callback")

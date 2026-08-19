@@ -398,7 +398,7 @@ export default function PreviewVariants() {
                   </div>
                   <div>
                     <p className="font-bold text-xs text-white">WhatsApp Channel Broadcast</p>
-                    <p className="text-xs opacity-75" style={{ fontSize: '0.62rem' }}>channel/0029VbDxqHz6hENhNBcZM31M</p>
+                    <p className="text-xs opacity-75" style={{ fontSize: '0.62rem' }}>Madhan Tech AI</p>
                   </div>
                 </div>
               </div>

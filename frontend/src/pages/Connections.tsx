@@ -241,7 +241,7 @@ export default function Connections() {
           if (directResp.ok) res = await directResp.json();
         }
         if (res && res.whatsapp && res.whatsapp.isReady) {
-          alert(`✅ WhatsApp Channel Status: Connected & Live!\nTarget Channel: 0029VbDxqHz6hENhNBcZM31M`);
+          alert(`✅ WhatsApp Channel Status: Connected & Live!\nTarget Channel: Madhan Tech AI`);
         } else {
           alert(`⚠️ WhatsApp Channel status: ${res?.whatsapp?.state || 'Not ready'}. Please click Reconnect.`);
         }
@@ -491,7 +491,7 @@ export default function Connections() {
                 </div>
                 <div>
                   <h3 className="font-bold text-lg text-main">Connect WhatsApp</h3>
-                  <p className="text-xs text-secondary">Pair channel: 0029VbDxqHz6hENhNBcZM31M</p>
+                  <p className="text-xs text-secondary">Pair channel: Madhan Tech AI</p>
                 </div>
               </div>
               <button

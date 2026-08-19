@@ -54,17 +54,20 @@ class PublishRequest(BaseModel):
     mediaUrl: Optional[str] = None
     channelId: Optional[str] = None
     channelLink: Optional[str] = None
+    channelName: Optional[str] = None
 
 class TextPublishRequest(BaseModel):
     text: str
     channelId: Optional[str] = None
     channelLink: Optional[str] = None
+    channelName: Optional[str] = None
 
 class MediaPublishRequest(BaseModel):
     mediaUrl: str
     caption: Optional[str] = None
     channelId: Optional[str] = None
     channelLink: Optional[str] = None
+    channelName: Optional[str] = None
 
 # ── Lifecycle Events ──
 
@@ -169,7 +172,8 @@ async def publish_unified(req: PublishRequest, _auth: str = Depends(check_api_ke
             media_url=req.mediaUrl,
             caption=req.caption,
             channel_id=req.channelId,
-            channel_link=req.channelLink
+            channel_link=req.channelLink,
+            channel_name=req.channelName,
         )
         return result
     except Exception as e:
@@ -182,7 +186,8 @@ async def publish_text(req: TextPublishRequest, _auth: str = Depends(check_api_k
         return await whatsapp_engine.publish_to_channel(
             text=req.text,
             channel_id=req.channelId,
-            channel_link=req.channelLink
+            channel_link=req.channelLink,
+            channel_name=req.channelName,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -195,7 +200,8 @@ async def publish_image(req: MediaPublishRequest, _auth: str = Depends(check_api
             media_url=req.mediaUrl,
             caption=req.caption,
             channel_id=req.channelId,
-            channel_link=req.channelLink
+            channel_link=req.channelLink,
+            channel_name=req.channelName,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

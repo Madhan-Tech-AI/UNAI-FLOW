@@ -78,6 +78,7 @@ class WhatsAppAdapter(PlatformAdapter):
 
         # ── 4. Build publish payload dynamically for user's connected channel ──
         channel_id = None
+        channel_name = None
         channel_link = None
         try:
             conn = supabase.table("platform_connections") \
@@ -86,13 +87,16 @@ class WhatsAppAdapter(PlatformAdapter):
                 .eq("platform", "whatsapp") \
                 .single() \
                 .execute().data
-            if conn and conn.get("platform_account_id"):
+            if conn:
                 channel_id = conn.get("platform_account_id")
+                channel_name = conn.get("platform_account_name")
         except Exception:
             pass
 
         if not channel_id:
             channel_id = os.getenv("WHATSAPP_CHANNEL_ID", "0029VbDxqHz6hENhNBcZM31M")
+        if not channel_name:
+            channel_name = os.getenv("WHATSAPP_CHANNEL_NAME", "Madhan Tech AI")
 
         if channel_id and not channel_id.startswith("http"):
             channel_link = f"https://whatsapp.com/channel/{channel_id}"
@@ -101,6 +105,7 @@ class WhatsAppAdapter(PlatformAdapter):
 
         payload = {
             "channelId": channel_id,
+            "channelName": channel_name,
             "channelLink": channel_link,
         }
         if raw_media:
@@ -146,11 +151,17 @@ class WhatsAppAdapter(PlatformAdapter):
             }
 
         # Error response from the API
-        error = data.get("error", {})
-        error_code = error.get("code", "UNKNOWN")
-        error_msg = error.get("message", "Unknown error from WhatsApp Channel API")
+        error = data.get("error") if isinstance(data.get("error"), dict) else {}
+        error_code = error.get("code") or data.get("code") or "ERROR"
+        error_msg = (
+            error.get("message")
+            or data.get("detail")
+            or (data.get("error") if isinstance(data.get("error"), str) else None)
+            or data.get("message")
+            or f"HTTP {resp.status_code} from WhatsApp service"
+        )
 
-        if error_code == "NOT_CONNECTED":
+        if error_code == "NOT_CONNECTED" or "not connected" in str(error_msg).lower():
             raise Exception(
                 f"WhatsApp is not connected. Open {wca_url}/api/qr "
                 "in your browser and scan the QR code with your WhatsApp app."
@@ -172,5 +183,5 @@ class WhatsAppAdapter(PlatformAdapter):
             )
         else:
             raise Exception(
-                f"WhatsApp Channel publish failed ({error_code}): {error_msg}"
+                f"WhatsApp Channel publish failed: {error_msg}"
             )

@@ -31,11 +31,7 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
         return {"authorization_url": url}
         
     elif platform == "whatsapp":
-        # For WhatsApp, standard OAuth isn't directly applicable for end-users without embedded signup.
-        # We redirect them to business.facebook.com to manage their account.
-        # However, to simulate connection flow for this task, we will redirect to callback with a mock code.
-        redirect_uri = f"{backend_url}/connections/whatsapp/callback?code=wa_auth_code&state={user['user_id']}"
-        return {"authorization_url": redirect_uri}
+        return {"type": "modal", "platform": "whatsapp"}
         
     elif platform == "facebook":
         app_id = os.getenv("META_APP_ID")
@@ -44,6 +40,59 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
         return {"authorization_url": url}
         
     raise HTTPException(status_code=400, detail="Unsupported platform")
+
+@router.get("/whatsapp/status")
+async def get_whatsapp_status(user: Dict[str, Any] = Depends(verify_jwt)):
+    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{wca_url}/api/status")
+            return resp.json()
+    except Exception as e:
+        return {
+            "success": False,
+            "whatsapp": {"state": "disconnected", "isReady": False},
+            "error": f"Cannot connect to WhatsApp Channel service at {wca_url}"
+        }
+
+@router.get("/whatsapp/qr")
+async def get_whatsapp_qr(user: Dict[str, Any] = Depends(verify_jwt)):
+    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{wca_url}/api/qr?format=json")
+            return resp.json()
+    except Exception as e:
+        return {"success": False, "message": "WhatsApp service offline"}
+
+@router.post("/whatsapp/confirm")
+async def confirm_whatsapp_connection(user: Dict[str, Any] = Depends(verify_jwt)):
+    user_id = user["user_id"]
+    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    wca_key = os.getenv("WCA_API_KEY", "105eadef-beae-4e08-bcc0-85a06ff80727")
+    
+    channel_link = os.getenv("WHATSAPP_CHANNEL_LINK", "https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M")
+    channel_id = os.getenv("WHATSAPP_CHANNEL_ID", "0029VbDxqHz6hENhNBcZM31M")
+    
+    encrypted_token = encrypt_token(wca_key)
+    
+    existing = supabase.table("platform_connections").select("id").eq("user_id", user_id).eq("platform", "whatsapp").execute()
+    db_data = {
+        "access_token": encrypted_token,
+        "platform_account_name": f"WhatsApp Channel ({channel_id})",
+        "platform_account_id": channel_id,
+        "status": "active"
+    }
+    
+    if existing.data:
+        supabase.table("platform_connections").update(db_data).eq("id", existing.data[0]["id"]).execute()
+    else:
+        db_data["user_id"] = user_id
+        db_data["platform"] = "whatsapp"
+        supabase.table("platform_connections").insert(db_data).execute()
+        
+    return {"success": True, "status": "active", "channel_id": channel_id}
+
  
 @router.get("/{platform}/callback")
 async def oauth_callback(platform: str, state: str, code: str = None):

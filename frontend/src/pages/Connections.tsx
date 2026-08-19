@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Camera, AtSign, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, Zap } from 'lucide-react';
+import { Camera, AtSign, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, Zap, X } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
 function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
@@ -24,6 +24,9 @@ export default function Connections() {
   const [connections, setConnections] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [isWaModalOpen, setIsWaModalOpen] = useState(false);
+  const [waQr, setWaQr] = useState<string | null>(null);
+  const [waPaired, setWaPaired] = useState(false);
 
   const loadConnections = async () => {
     try {
@@ -42,7 +45,48 @@ export default function Connections() {
     loadConnections();
   }, []);
 
+  // WhatsApp QR & Status Poller when modal is open
+  useEffect(() => {
+    if (!isWaModalOpen) return;
+    
+    let interval: any;
+    const checkWaStatus = async () => {
+      try {
+        const res = await fetchApi('/connections/whatsapp/status');
+        
+        if (res && res.whatsapp && res.whatsapp.isReady) {
+          // Successfully paired!
+          setWaPaired(true);
+          await fetchApi('/connections/whatsapp/confirm', { method: 'POST' });
+          await loadConnections();
+          setTimeout(() => {
+            setIsWaModalOpen(false);
+            setWaPaired(false);
+          }, 1800);
+        } else if (res && res.whatsapp && res.whatsapp.state === 'qr_pending') {
+          // Fetch QR
+          const qrRes = await fetchApi('/connections/whatsapp/qr');
+          if (qrRes && qrRes.qr) {
+            setWaQr(qrRes.qr);
+          }
+        }
+      } catch (err) {
+        console.error("Error polling WhatsApp status:", err);
+      }
+    };
+
+    checkWaStatus();
+    interval = setInterval(checkWaStatus, 2000);
+    return () => clearInterval(interval);
+  }, [isWaModalOpen]);
+
   const handleConnect = async (platformId: string) => {
+    if (platformId === 'whatsapp') {
+      setIsWaModalOpen(true);
+      setWaPaired(false);
+      setWaQr(null);
+      return;
+    }
     try {
       const res = await fetchApi(`/connections/${platformId}/start`, { method: 'POST' });
       if (res.authorization_url) {
@@ -60,6 +104,23 @@ export default function Connections() {
       setConnections(prev => prev.filter(c => c.platform !== platformId));
     } catch (err) {
       alert("Failed to disconnect.");
+    }
+  };
+
+  const handleTestSync = async (platformId: string) => {
+    if (platformId === 'whatsapp') {
+      try {
+        const res = await fetchApi('/connections/whatsapp/status');
+        if (res && res.whatsapp && res.whatsapp.isReady) {
+          alert(`✅ WhatsApp Channel Status: Connected & Live!\nTarget Channel: 0029VbDxqHz6hENhNBcZM31M`);
+        } else {
+          alert(`⚠️ WhatsApp Channel status: ${res?.whatsapp?.state || 'Not ready'}. Please click Reconnect.`);
+        }
+      } catch (err) {
+        alert("Failed to test sync with WhatsApp gateway.");
+      }
+    } else {
+      alert("Token Status: Active OAuth2 Session");
     }
   };
 
@@ -248,7 +309,7 @@ export default function Connections() {
               <div className="flex items-center gap-3">
                 {connected ? (
                   <>
-                    <button className="btn-secondary" onClick={() => alert("Token Status: Active OAuth2 Session")}>
+                    <button className="btn-secondary" onClick={() => handleTestSync(platform.id)}>
                       <ExternalLink size={15} />
                       <span>Test Sync</span>
                     </button>
@@ -302,6 +363,182 @@ export default function Connections() {
           Request Connector
         </button>
       </div>
+
+      {/* WhatsApp QR Pairing Modal (Directly in UNAI Flow Dashboard) */}
+      {isWaModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsWaModalOpen(false);
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '460px',
+              backgroundColor: '#ffffff',
+              borderRadius: '20px',
+              padding: '2rem',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1.25rem',
+              animation: 'fadeIn 0.2s ease-out'
+            }}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div
+                  style={{
+                    backgroundColor: '#dcfce7',
+                    color: '#25D366',
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <MessageCircle size={22} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg text-main">Connect WhatsApp</h3>
+                  <p className="text-xs text-secondary">Pair channel: 0029VbDxqHz6hENhNBcZM31M</p>
+                </div>
+              </div>
+              <button
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  color: '#64748b'
+                }}
+                onClick={() => setIsWaModalOpen(false)}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            {waPaired ? (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  padding: '2rem 1rem',
+                  gap: '1rem',
+                  textAlign: 'center'
+                }}
+              >
+                <div
+                  style={{
+                    width: '64px',
+                    height: '64px',
+                    borderRadius: '50%',
+                    backgroundColor: '#dcfce7',
+                    color: '#25D366',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <CheckCircle2 size={36} />
+                </div>
+                <h4 className="font-bold text-lg text-main">Connected Successfully!</h4>
+                <p className="text-sm text-secondary">Your WhatsApp Channel is now linked to UNAI Flow.</p>
+              </div>
+            ) : (
+              <>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '1rem',
+                    backgroundColor: '#f8fafc',
+                    padding: '1.5rem',
+                    borderRadius: '16px',
+                    border: '1px solid #e2e8f0'
+                  }}
+                >
+                  {/* QR Box */}
+                  <div
+                    style={{
+                      width: '240px',
+                      height: '240px',
+                      backgroundColor: '#ffffff',
+                      borderRadius: '12px',
+                      padding: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+                      border: '1px solid #e2e8f0',
+                      position: 'relative'
+                    }}
+                  >
+                    <img
+                      src={`http://localhost:3001/api/qr?t=${Date.now()}`}
+                      alt="WhatsApp QR Code"
+                      style={{ width: '100%', height: '100%', borderRadius: '8px' }}
+                      onError={(e: any) => {
+                        e.target.style.display = 'none';
+                        if (e.target.nextSibling) e.target.nextSibling.style.display = 'flex';
+                      }}
+                    />
+                    <div
+                      style={{
+                        display: 'none',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.5rem',
+                        color: '#64748b',
+                        fontSize: '0.85rem',
+                        textAlign: 'center',
+                        padding: '1rem'
+                      }}
+                    >
+                      <Loader2 size={24} className="animate-spin text-primary" />
+                      <span>Generating live QR code...</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs text-secondary font-medium">
+                    <span className="dot" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#25D366' }}></span>
+                    <span>QR updates automatically</span>
+                  </div>
+                </div>
+
+                {/* Instructions */}
+                <div style={{ fontSize: '0.85rem', color: '#475569', lineHeight: '1.6' }}>
+                  <p className="font-semibold text-main mb-1">How to scan:</p>
+                  <ol style={{ paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                    <li>Open <strong>WhatsApp</strong> on your phone</li>
+                    <li>Go to <strong>Settings</strong> or <strong>⋮ (3 dots)</strong> &gt; <strong>Linked Devices</strong></li>
+                    <li>Tap <strong>Link a Device</strong> and point camera here</li>
+                  </ol>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,0 +1,24 @@
+{
+  "name": "whatsapp-channel-api",
+  "version": "1.0.0",
+  "description": "Self-hosted WhatsApp Channel publishing API for UNAI Flow",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "whatsapp-web.js": "^1.26.1-alpha.3",
+    "qrcode-terminal": "^0.12.0",
+    "qrcode": "^1.5.4",
+    "helmet": "^8.0.0",
+    "uuid": "^10.0.0",
+    "express-rate-limit": "^7.4.1",
+    "dotenv": "^16.4.5",
+    "mime-types": "^2.1.35"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

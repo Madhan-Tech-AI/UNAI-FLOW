@@ -119,6 +119,19 @@ class WhatsAppEngine:
                     await asyncio.sleep(3)
                     continue
 
+                # Ensure we are actually on WhatsApp Web
+                try:
+                    current_url = self.page.url
+                    if "web.whatsapp.com" not in current_url:
+                        logger.warning(f"Browser is not on WhatsApp Web (current url: {current_url}). Navigating...")
+                        await self.page.goto("https://web.whatsapp.com", wait_until="domcontentloaded", timeout=60000)
+                        await asyncio.sleep(5)
+                        continue
+                except Exception as nav_err:
+                    logger.debug(f"Navigation check failed: {nav_err}")
+                    await asyncio.sleep(3)
+                    continue
+
                 # 1. Check if logged in
                 is_logged_in = await self.page.evaluate("""
                     () => {

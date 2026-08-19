@@ -138,45 +138,53 @@ class WhatsAppEngine:
                     continue
 
                 # 2. Check if QR code is visible or needs reload
-                qr_ref = await self.page.evaluate("""
+                qr_info = await self.page.evaluate("""
                     () => {
                         // Click reload button if present (QR code timed out)
                         const refreshBtn = document.querySelector('span[data-icon="refresh"]')?.closest('button') || document.querySelector('button[aria-label="Reload QR code"]');
                         if (refreshBtn) {
                             refreshBtn.click();
-                            return 'RELOADING';
+                            return { state: 'RELOADING' };
                         }
                         
                         const qrDiv = document.querySelector('div[data-ref]');
-                        if (qrDiv) return qrDiv.getAttribute('data-ref');
+                        const ref = qrDiv ? qrDiv.getAttribute('data-ref') : null;
                         const canvas = document.querySelector('canvas[aria-label="Scan this QR code with WhatsApp to log in"]') || document.querySelector('canvas');
-                        return canvas ? 'CANVAS_PRESENT' : null;
+                        
+                        if (canvas) {
+                            return { state: 'CANVAS_PRESENT', ref: ref || 'unknown_ref' };
+                        }
+                        return { state: null };
                     }
                 """)
                 
-                if qr_ref == 'RELOADING':
+                if not qr_info:
+                    continue
+
+                state = qr_info.get("state")
+                
+                if state == 'RELOADING':
                     logger.info("🔄 QR code timed out, clicked reload button.")
                     await asyncio.sleep(2)
                     continue
 
-                if qr_ref and qr_ref != "CANVAS_PRESENT":
-                    if self.current_qr != qr_ref:
-                        self.current_qr = qr_ref
+                if state == "CANVAS_PRESENT":
+                    ref = qr_info.get("ref")
+                    # If the ref changed OR we don't have the image yet
+                    if self.current_qr != ref or not self.qr_png_bytes:
+                        self.current_qr = ref
                         self.last_qr_time = time.time()
                         self.connection_state = "qr_pending"
                         self.is_ready = False
-                        self._generate_qr_image(qr_ref)
-                        logger.info("📱 New WhatsApp QR Code generated. Scan from your phone.")
-                elif qr_ref == "CANVAS_PRESENT":
-                    # Capture canvas screenshot directly
-                    try:
-                        canvas_el = await self.page.query_selector("canvas")
-                        if canvas_el:
-                            self.qr_png_bytes = await canvas_el.screenshot()
-                            self.connection_state = "qr_pending"
-                            self.last_qr_time = time.time()
-                    except Exception:
-                        pass
+                        
+                        # Always take screenshot of the actual canvas rendered by WhatsApp
+                        try:
+                            canvas_el = await self.page.query_selector("canvas")
+                            if canvas_el:
+                                self.qr_png_bytes = await canvas_el.screenshot()
+                                logger.info("📱 New WhatsApp QR Code generated (Canvas captured). Scan from your phone.")
+                        except Exception as e:
+                            logger.error(f"Failed to capture QR canvas: {e}")
                 else:
                     if not self.is_ready:
                         self.connection_state = "connecting"
@@ -187,23 +195,8 @@ class WhatsAppEngine:
             await asyncio.sleep(2.5)
 
     def _generate_qr_image(self, qr_text: str):
-        """Generates a PNG byte buffer from the QR string."""
-        try:
-            from qrcode.image.pil import PilImage
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,
-                border=2,
-            )
-            qr.add_data(qr_text)
-            qr.make(fit=True)
-            img = qr.make_image(image_factory=PilImage, fill_color="black", back_color="white")
-            buffer = io.BytesIO()
-            img.save(buffer)
-            self.qr_png_bytes = buffer.getvalue()
-        except Exception as e:
-            logger.error(f"Error generating QR image: {e}")
+        # Deprecated: We now capture the canvas directly.
+        pass
 
     async def get_status(self) -> Dict[str, Any]:
         return {

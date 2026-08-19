@@ -92,16 +92,22 @@ class WhatsAppEngine:
             """)
 
             logger.info("Navigating to https://web.whatsapp.com...")
-            await self.page.goto("https://web.whatsapp.com", wait_until="domcontentloaded", timeout=60000)
+            try:
+                await self.page.goto("https://web.whatsapp.com", wait_until="domcontentloaded", timeout=120000)
+            except Exception as nav_err:
+                logger.warning(f"Initial navigation timed out or failed: {nav_err}. Monitor task will handle recovery.")
 
-            # Start background session watcher
+            # Start background session watcher regardless of initial navigation success
             self._monitor_task = asyncio.create_task(self._monitor_session())
-            logger.info("✅ WhatsApp Web session watcher started.")
 
         except Exception as e:
             logger.error(f"Failed to initialize WhatsApp Engine: {e}")
             self.last_error = str(e)
-            self.connection_state = "error"
+            self.is_ready = False
+            self.connection_state = "disconnected"
+            # Ensure monitor task runs to attempt recovery later
+            if self.browser_context and not getattr(self, '_monitor_task', None):
+                self._monitor_task = asyncio.create_task(self._monitor_session())
             self.is_ready = False
 
     async def _monitor_session(self):

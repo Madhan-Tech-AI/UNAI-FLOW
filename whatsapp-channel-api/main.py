@@ -128,6 +128,12 @@ async def pair_phone(req: PhonePairRequest):
         raise HTTPException(status_code=400, detail=result.get("error", "Failed to start phone pairing"))
     return {"success": True, "message": result["message"]}
 
+@app.post("/api/session/reset")
+async def reset_session():
+    """Force clear stale session data and restart fresh pairing."""
+    result = await whatsapp_engine.reset_session()
+    return result
+
 # ── Protected Publishing Endpoints ──
 
 @app.post("/api/channel/publish")

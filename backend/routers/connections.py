@@ -96,6 +96,17 @@ async def pair_whatsapp_phone(body: dict, user: Dict[str, Any] = Depends(verify_
         print(f"Proxy pair-phone error: {e}")
         raise HTTPException(status_code=503, detail="WhatsApp service offline or timed out")
 
+@router.post("/whatsapp/reset")
+async def reset_whatsapp_session(user: Dict[str, Any] = Depends(verify_jwt)):
+    from fastapi import HTTPException
+    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(f"{wca_url}/api/session/reset")
+            return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail="WhatsApp service offline")
+
 @router.post("/whatsapp/confirm")
 async def confirm_whatsapp_connection(user: Dict[str, Any] = Depends(verify_jwt)):
     user_id = user["user_id"]

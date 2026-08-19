@@ -36,7 +36,8 @@ export default function Connections() {
   const [phoneNumber, setPhoneNumber] = useState<string>('');
   const [phoneSubmitted, setPhoneSubmitted] = useState(false);
   const [phoneError, setPhoneError] = useState<string>('');
-  const [usePhoneMode, setUsePhoneMode] = useState(true); // default to phone pairing
+  const [usePhoneMode, setUsePhoneMode] = useState(false); // default to fresh QR code mode
+  const [isResetting, setIsResetting] = useState(false);
   const qrBlobUrlRef = useRef<string | null>(null);
 
   const loadConnections = async () => {
@@ -180,6 +181,24 @@ export default function Connections() {
     } catch (err) {
       setPhoneError('Failed to request pairing. Make sure gateway is running.');
       setPhoneSubmitted(false);
+    }
+  };
+
+  const handleResetSession = async () => {
+    setIsResetting(true);
+    setQrImageUrl(null);
+    setWaStatus('starting');
+    try {
+      await fetchApi('/connections/whatsapp/reset', { method: 'POST' });
+    } catch {
+      try {
+        await fetch(`${WCA_DIRECT_URL}/api/session/reset`, { method: 'POST' });
+      } catch {}
+    } finally {
+      setTimeout(() => {
+        setIsResetting(false);
+        fetchQrImage();
+      }, 3000);
     }
   };
 
@@ -699,7 +718,7 @@ export default function Connections() {
 
                 {/* Instructions / Toggle */}
                 {usePhoneMode ? (
-                  <div className="text-center mt-2">
+                  <div className="text-center mt-2 flex flex-col gap-2">
                     <button 
                       onClick={() => setUsePhoneMode(false)}
                       className="text-sm font-medium hover:underline"
@@ -714,15 +733,23 @@ export default function Connections() {
                     <ol style={{ paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                       <li>Open <strong>WhatsApp</strong> on your phone</li>
                       <li>Go to <strong>Settings</strong> or <strong>⋮ (3 dots)</strong> &gt; <strong>Linked Devices</strong></li>
-                      <li>Tap <strong>Link a Device</strong> and point camera at the QR code</li>
+                      <li>Tap <strong>Link a Device</strong> and scan the QR code above</li>
                     </ol>
-                    <div className="text-center mt-4">
+                    <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-200">
+                      <button 
+                        onClick={handleResetSession}
+                        disabled={isResetting}
+                        className="text-xs text-slate-500 hover:text-slate-700 underline"
+                        style={{ background: 'none', border: 'none', cursor: isResetting ? 'wait' : 'pointer' }}
+                      >
+                        {isResetting ? 'Resetting session...' : '🔄 Reset Session / Force Fresh QR'}
+                      </button>
                       <button 
                         onClick={() => setUsePhoneMode(true)}
-                        className="text-sm font-medium hover:underline"
+                        className="text-xs font-semibold hover:underline"
                         style={{ color: '#25D366', background: 'none', border: 'none', cursor: 'pointer' }}
                       >
-                        Link with phone number instead
+                        Link with phone number instead &rarr;
                       </button>
                     </div>
                   </div>

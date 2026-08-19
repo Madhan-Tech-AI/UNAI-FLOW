@@ -101,7 +101,10 @@ async def get_qr(format: Optional[str] = None):
 
     if format == "json":
         if not status["hasQR"]:
-            raise HTTPException(status_code=404, detail="QR code not ready yet. Please wait a few seconds.")
+            return JSONResponse(
+                status_code=200,
+                content={"success": False, "state": status["state"], "message": "QR generating. Refresh in 2 seconds."}
+            )
         return {
             "success": True,
             "qr": whatsapp_engine.current_qr,
@@ -112,7 +115,7 @@ async def get_qr(format: Optional[str] = None):
     # Default: return PNG image
     qr_bytes = await whatsapp_engine.get_qr_image()
     if not qr_bytes:
-        raise HTTPException(status_code=404, detail="QR code generating. Refresh in 2 seconds.")
+        return Response(status_code=204, headers={"Cache-Control": "no-cache, no-store"})
 
     return Response(
         content=qr_bytes,

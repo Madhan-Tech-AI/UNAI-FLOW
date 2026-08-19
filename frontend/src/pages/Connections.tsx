@@ -21,8 +21,8 @@ function Facebook({ size = 18, className = "" }: { size?: number; className?: st
   );
 }
 
-const WCA_DIRECT_URL = 'https://unai-whatsapp-channelapi.onrender.com';
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const WCA_DIRECT_URL = import.meta.env.VITE_WCA_API_URL || 'https://unai-whatsapp-channelapi.onrender.com';
+const API_BASE = import.meta.env.VITE_API_URL || 'https://unai-flow-backend.onrender.com';
 
 export default function Connections() {
   const [connections, setConnections] = useState<any[]>([]);

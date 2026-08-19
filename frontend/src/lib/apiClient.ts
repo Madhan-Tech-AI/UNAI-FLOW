@@ -1,6 +1,6 @@
 import { supabase } from './supabaseClient';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://unai-flow-backend.onrender.com';
 
 export async function fetchApi(endpoint: string, options: RequestInit = {}) {
   const { data: { session } } = await supabase.auth.getSession();

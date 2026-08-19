@@ -14,7 +14,7 @@ Architecture:
   UNAI Flow Backend → HTTP → WhatsApp Channel API → WhatsApp Web → Channel
 
 Required env vars:
-  WCA_API_URL  = http://localhost:3001  (URL of the WhatsApp Channel API)
+  WCA_API_URL  = https://unai-whatsapp-channelapi.onrender.com  (URL of the WhatsApp Channel API)
   WCA_API_KEY  = <your-api-key>        (same key configured in the WCA service)
 """
 
@@ -22,13 +22,13 @@ Required env vars:
 class WhatsAppAdapter(PlatformAdapter):
     async def publish(self, content: str, user_id: str, automation_id: str) -> dict:
         # ── 1. Load WhatsApp Channel API credentials ──
-        wca_url = os.getenv("WCA_API_URL", "").rstrip("/")
-        wca_key = os.getenv("WCA_API_KEY", "")
+        wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
+        wca_key = os.getenv("WCA_API_KEY", "105eadef-beae-4e08-bcc0-85a06ff80727")
 
         if not wca_url:
             raise Exception(
                 "WhatsApp Channel API URL not configured. "
-                "Set WCA_API_URL in your environment variables (e.g., http://localhost:3001)."
+                "Set WCA_API_URL in your environment variables."
             )
 
         if not wca_key:

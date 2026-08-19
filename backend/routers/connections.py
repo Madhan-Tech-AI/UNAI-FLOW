@@ -16,7 +16,7 @@ async def get_connections(user: Dict[str, Any] = Depends(verify_jwt)):
 
 @router.post("/{platform}/start")
 async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt)):
-    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+    backend_url = os.getenv("BACKEND_URL", "https://unai-flow-backend.onrender.com").rstrip("/")
     
     if platform == "twitter":
         client_id = os.getenv("TWITTER_CLIENT_ID")
@@ -43,7 +43,7 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
 
 @router.get("/whatsapp/status")
 async def get_whatsapp_status(user: Dict[str, Any] = Depends(verify_jwt)):
-    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{wca_url}/api/status")
@@ -57,7 +57,7 @@ async def get_whatsapp_status(user: Dict[str, Any] = Depends(verify_jwt)):
 
 @router.get("/whatsapp/qr")
 async def get_whatsapp_qr(user: Dict[str, Any] = Depends(verify_jwt)):
-    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{wca_url}/api/qr?format=json")
@@ -68,21 +68,20 @@ async def get_whatsapp_qr(user: Dict[str, Any] = Depends(verify_jwt)):
 @router.get("/whatsapp/qr-image")
 async def get_whatsapp_qr_image():
     from fastapi.responses import Response
-    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{wca_url}/api/qr")
-            if resp.status_code != 200:
-                return Response(status_code=resp.status_code, content=resp.content, media_type="application/json")
-            return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "no-cache, no-store"})
+            if resp.status_code == 200:
+                return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "no-cache, no-store"})
+            return Response(status_code=204, headers={"Cache-Control": "no-cache, no-store"})
     except Exception as e:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=503, detail="WhatsApp service offline")
+        return Response(status_code=204, headers={"Cache-Control": "no-cache, no-store"})
 
 @router.post("/whatsapp/pair-phone")
 async def pair_whatsapp_phone(body: dict, user: Dict[str, Any] = Depends(verify_jwt)):
     from fastapi import HTTPException, Response
-    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
     phone = body.get("phone", "")
     if not phone:
         raise HTTPException(status_code=400, detail="Phone number required")
@@ -99,7 +98,7 @@ async def pair_whatsapp_phone(body: dict, user: Dict[str, Any] = Depends(verify_
 @router.post("/whatsapp/reset")
 async def reset_whatsapp_session(user: Dict[str, Any] = Depends(verify_jwt)):
     from fastapi import HTTPException
-    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(f"{wca_url}/api/session/reset")
@@ -109,7 +108,7 @@ async def reset_whatsapp_session(user: Dict[str, Any] = Depends(verify_jwt)):
 
 @router.get("/whatsapp/channels")
 async def get_whatsapp_channels(user: Dict[str, Any] = Depends(verify_jwt)):
-    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(f"{wca_url}/api/channels")
@@ -189,7 +188,7 @@ async def confirm_whatsapp_connection(body: dict = None, user: Dict[str, Any] = 
 @router.get("/{platform}/callback")
 async def oauth_callback(platform: str, state: str, code: str = None):
     user_id = state
-    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+    backend_url = os.getenv("BACKEND_URL", "https://unai-flow-backend.onrender.com").rstrip("/")
     access_token = None
     platform_account_name = None
     platform_account_id = None
@@ -306,13 +305,13 @@ async def oauth_callback(platform: str, state: str, code: str = None):
         db_data["platform"] = platform
         supabase.table("platform_connections").insert(db_data).execute()
     
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    frontend_url = os.getenv("FRONTEND_URL", "https://unai-flow-rc39.vercel.app")
     return RedirectResponse(url=f"{frontend_url}/connections?success=true")
 
 @router.delete("/{platform}")
 async def disconnect_platform(platform: str, user: Dict[str, Any] = Depends(verify_jwt)):
     if platform == "whatsapp":
-        wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+        wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 await client.post(f"{wca_url}/api/logout")

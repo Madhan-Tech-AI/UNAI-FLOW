@@ -72,6 +72,8 @@ async def get_whatsapp_qr_image():
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{wca_url}/api/qr")
+            if resp.status_code != 200:
+                return Response(status_code=resp.status_code, content=resp.content, media_type="application/json")
             return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "no-cache, no-store"})
     except Exception as e:
         from fastapi import HTTPException

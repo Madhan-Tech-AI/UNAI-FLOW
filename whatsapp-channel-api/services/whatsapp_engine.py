@@ -177,14 +177,32 @@ class WhatsAppEngine:
                         self.connection_state = "qr_pending"
                         self.is_ready = False
                         
-                        # Always take screenshot of the actual canvas rendered by WhatsApp
+                        # Attempt 1: Screenshot the QR container div
+                        screenshot_success = False
                         try:
-                            canvas_el = await self.page.query_selector("canvas")
-                            if canvas_el:
-                                self.qr_png_bytes = await canvas_el.screenshot()
-                                logger.info("📱 New WhatsApp QR Code generated (Canvas captured). Scan from your phone.")
-                        except Exception as e:
-                            logger.error(f"Failed to capture QR canvas: {e}")
+                            qr_div = await self.page.query_selector("div[data-ref]")
+                            if qr_div:
+                                self.qr_png_bytes = await qr_div.screenshot()
+                                screenshot_success = True
+                                logger.info("📱 Captured QR from div[data-ref]")
+                        except Exception:
+                            pass
+                            
+                        # Attempt 2: Screenshot the canvas
+                        if not screenshot_success:
+                            try:
+                                canvas_el = await self.page.query_selector("canvas")
+                                if canvas_el:
+                                    self.qr_png_bytes = await canvas_el.screenshot()
+                                    screenshot_success = True
+                                    logger.info("📱 Captured QR from canvas")
+                            except Exception:
+                                pass
+                                
+                        # Attempt 3: Fallback to manual QR generation
+                        if not screenshot_success and ref and ref != 'unknown_ref':
+                            self._generate_qr_image(ref)
+                            logger.info("📱 Fallback: Generated manual QR from data-ref")
                 else:
                     if not self.is_ready:
                         self.connection_state = "connecting"
@@ -195,8 +213,27 @@ class WhatsAppEngine:
             await asyncio.sleep(2.5)
 
     def _generate_qr_image(self, qr_text: str):
-        # Deprecated: We now capture the canvas directly.
-        pass
+        """Generates a PNG byte buffer from the QR string."""
+        try:
+            import qrcode
+            from qrcode.image.pil import PilImage
+            import io
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=2,
+            )
+            qr.add_data(qr_text)
+            qr.make(fit=True)
+            img = qr.make_image(image_factory=PilImage, fill_color="black", back_color="white")
+            buffer = io.BytesIO()
+            img.save(buffer)
+            self.qr_png_bytes = buffer.getvalue()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error generating manual QR: {e}")
+            self.qr_png_bytes = None
 
     async def get_status(self) -> Dict[str, Any]:
         return {

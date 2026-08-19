@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Camera, AtSign, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, Zap, X } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
+import { supabase } from '../lib/supabaseClient';
 
 function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
   return (
@@ -20,6 +21,9 @@ function Facebook({ size = 18, className = "" }: { size?: number; className?: st
   );
 }
 
+const WCA_DIRECT_URL = 'https://unai-whatsapp-channelapi.onrender.com';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 export default function Connections() {
   const [connections, setConnections] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,6 +31,9 @@ export default function Connections() {
   const [isWaModalOpen, setIsWaModalOpen] = useState(false);
   const [waQr, setWaQr] = useState<string | null>(null);
   const [waPaired, setWaPaired] = useState(false);
+  const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
+  const [waStatus, setWaStatus] = useState<string>('checking');
+  const qrBlobUrlRef = useRef<string | null>(null);
 
   const loadConnections = async () => {
     try {
@@ -45,39 +52,121 @@ export default function Connections() {
     loadConnections();
   }, []);
 
-  // WhatsApp QR & Status Poller when modal is open
+  // Fetch QR image as blob — tries backend proxy first, falls back to direct gateway
+  const fetchQrImage = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {};
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const response = await fetch(`${API_BASE}/connections/whatsapp/qr-image?t=${Date.now()}`, {
+        headers,
+      });
+
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('image')) {
+          const blob = await response.blob();
+          if (qrBlobUrlRef.current) URL.revokeObjectURL(qrBlobUrlRef.current);
+          const url = URL.createObjectURL(blob);
+          qrBlobUrlRef.current = url;
+          setQrImageUrl(url);
+          return true;
+        }
+      }
+    } catch {
+      // Backend proxy unreachable
+    }
+
+    // Fallback: fetch QR directly from WhatsApp gateway
+    try {
+      const directResp = await fetch(`${WCA_DIRECT_URL}/api/qr?t=${Date.now()}`);
+      if (directResp.ok) {
+        const contentType = directResp.headers.get('content-type') || '';
+        if (contentType.includes('image')) {
+          const blob = await directResp.blob();
+          if (qrBlobUrlRef.current) URL.revokeObjectURL(qrBlobUrlRef.current);
+          const url = URL.createObjectURL(blob);
+          qrBlobUrlRef.current = url;
+          setQrImageUrl(url);
+          return true;
+        }
+      }
+    } catch {
+      // Gateway also down or starting
+    }
+
+    return false;
+  };
+
+  // WhatsApp status poller + QR fetcher when modal is open
   useEffect(() => {
     if (!isWaModalOpen) return;
-    
+
     let interval: any;
+    let cancelled = false;
+
     const checkWaStatus = async () => {
+      if (cancelled) return;
+
+      // Try backend proxy first, fall back to direct gateway
+      let statusData: any = null;
       try {
-        const res = await fetchApi('/connections/whatsapp/status');
-        
-        if (res && res.whatsapp && res.whatsapp.isReady) {
-          // Successfully paired!
-          setWaPaired(true);
+        statusData = await fetchApi('/connections/whatsapp/status');
+      } catch {
+        // Backend proxy unreachable — try direct gateway
+        try {
+          const directResp = await fetch(`${WCA_DIRECT_URL}/api/status`);
+          if (directResp.ok) statusData = await directResp.json();
+        } catch { /* gateway also down */ }
+      }
+
+      if (cancelled) return;
+
+      if (statusData && statusData.whatsapp && statusData.whatsapp.isReady) {
+        // Successfully paired!
+        setWaStatus('connected');
+        setWaPaired(true);
+        try {
           await fetchApi('/connections/whatsapp/confirm', { method: 'POST' });
           await loadConnections();
-          setTimeout(() => {
+        } catch { /* ignore confirm errors */ }
+        setTimeout(() => {
+          if (!cancelled) {
             setIsWaModalOpen(false);
             setWaPaired(false);
-          }, 1800);
-        } else if (res && res.whatsapp && res.whatsapp.state === 'qr_pending') {
-          // Fetch QR
-          const qrRes = await fetchApi('/connections/whatsapp/qr');
-          if (qrRes && qrRes.qr) {
-            setWaQr(qrRes.qr);
           }
+        }, 2000);
+        return;
+      }
+
+      if (statusData && statusData.whatsapp) {
+        const state = statusData.whatsapp.state;
+        setWaStatus(state);
+
+        if (state === 'qr_pending' || state === 'connecting') {
+          await fetchQrImage();
         }
-      } catch (err) {
-        console.error("Error polling WhatsApp status:", err);
+      } else {
+        setWaStatus('starting');
+        // Gateway may still be cold-starting, try QR anyway
+        await fetchQrImage();
       }
     };
 
     checkWaStatus();
-    interval = setInterval(checkWaStatus, 2000);
-    return () => clearInterval(interval);
+    interval = setInterval(checkWaStatus, 4000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      if (qrBlobUrlRef.current) {
+        URL.revokeObjectURL(qrBlobUrlRef.current);
+        qrBlobUrlRef.current = null;
+      }
+    };
   }, [isWaModalOpen]);
 
   const handleConnect = async (platformId: string) => {
@@ -85,6 +174,8 @@ export default function Connections() {
       setIsWaModalOpen(true);
       setWaPaired(false);
       setWaQr(null);
+      setQrImageUrl(null);
+      setWaStatus('checking');
       return;
     }
     try {
@@ -110,7 +201,13 @@ export default function Connections() {
   const handleTestSync = async (platformId: string) => {
     if (platformId === 'whatsapp') {
       try {
-        const res = await fetchApi('/connections/whatsapp/status');
+        let res: any = null;
+        try {
+          res = await fetchApi('/connections/whatsapp/status');
+        } catch {
+          const directResp = await fetch(`${WCA_DIRECT_URL}/api/status`);
+          if (directResp.ok) res = await directResp.json();
+        }
         if (res && res.whatsapp && res.whatsapp.isReady) {
           alert(`✅ WhatsApp Channel Status: Connected & Live!\nTarget Channel: 0029VbDxqHz6hENhNBcZM31M`);
         } else {
@@ -119,174 +216,120 @@ export default function Connections() {
       } catch (err) {
         alert("Failed to test sync with WhatsApp gateway.");
       }
-    } else {
-      alert("Token Status: Active OAuth2 Session");
+      return;
+    }
+
+    try {
+      const res = await fetchApi(`/connections/${platformId}/test`);
+      if (res.success) {
+        alert(`✅ Test sync succeeded for ${platformId}!`);
+      } else {
+        alert(`⚠️ Test sync issue: ${res.message || 'Unknown error'}`);
+      }
+    } catch (err) {
+      alert(`Failed to test sync for ${platformId}.`);
     }
   };
 
-  const isConnected = (platformId: string) => {
-    return connections.some(c => c.platform === platformId && c.status === 'active');
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadConnections();
   };
-
-  const getAccountInfo = (platformId: string) => {
-    return connections.find(c => c.platform === platformId);
-  };
-
-  const activeCount = connections.filter(c => c.status === 'active').length;
 
   const platforms = [
     {
       id: 'instagram',
-      name: 'Instagram Business',
-      description: 'Connect your Instagram Graph API to automatically publish carousels, reels, and stories.',
-      icon: Camera,
+      name: 'Instagram',
+      icon: <Camera size={22} />,
+      description: 'Post photos, carousels, and stories to your Instagram Business account.',
       color: '#E1306C',
-      bgColor: '#fee2e2',
-      badge: 'Graph API v19.0'
+      bgColor: '#fce7f3',
     },
     {
-      id: 'twitter',
-      name: 'Twitter / X Enterprise',
-      description: 'Connect your X API v2 to publish tweets, threads, polls, and media attachments instantly.',
-      icon: AtSign,
-      color: '#0f172a',
-      bgColor: '#f1f5f9',
-      badge: 'X OAuth 2.0'
+      id: 'facebook',
+      name: 'Facebook Page',
+      icon: <Facebook size={22} />,
+      description: 'Publish posts and media directly to your Facebook Page.',
+      color: '#1877F2',
+      bgColor: '#dbeafe',
     },
     {
       id: 'whatsapp',
       name: 'WhatsApp Channel Broadcast',
-      description: 'Broadcast campaign media & posts to your official WhatsApp Channel (0029VbDxqHz6hENhNBcZM31M).',
-      icon: MessageCircle,
+      icon: <MessageCircle size={22} />,
+      description: 'Broadcast updates to your WhatsApp Channel subscribers.',
       color: '#25D366',
       bgColor: '#dcfce7',
-      badge: 'Channel Broadcast API'
     },
-    {
-      id: 'facebook',
-      name: 'Facebook Pages',
-      description: 'Connect your Facebook Page to auto-publish feed posts, photos, and link shares via Graph API.',
-      icon: Facebook,
-      color: '#1877F2',
-      bgColor: '#dbeafe',
-      badge: 'Graph API v19.0'
-    }
   ];
 
   if (loading) {
     return (
-      <div className="flex justify-center py-12 text-secondary">
-        <Loader2 size={24} className="animate-spin text-primary" />
+      <div className="flex items-center justify-center" style={{ minHeight: '60vh' }}>
+        <Loader2 size={32} className="animate-spin text-primary" />
       </div>
     );
   }
 
   return (
-    <div className="flex-col gap-8">
-      {/* Top Banner Header */}
-      <div className="flex justify-between items-center flex-wrap gap-4">
+    <div className="container" style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem 1.5rem' }}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-extrabold" style={{ color: 'var(--text-main)' }}>
-            Platform Connections
-          </h1>
-          <p className="text-secondary mt-1 text-sm">
-            Manage your social media integrations & OAuth authentication tokens.
-          </p>
+          <h1 className="text-2xl font-bold text-main">Connections</h1>
+          <p className="text-sm text-secondary mt-1">Manage your social media platform connections.</p>
         </div>
-
-        <div className="flex items-center gap-3">
-          <button
-            className="btn-secondary"
-            onClick={() => { setRefreshing(true); loadConnections(); }}
-            disabled={refreshing}
-          >
-            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
-            <span>Sync Tokens</span>
-          </button>
-        </div>
+        <button className="btn-secondary" onClick={handleRefresh} disabled={refreshing}>
+          <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+          <span>Refresh</span>
+        </button>
       </div>
 
-      {/* System Health Card Banner */}
+      {/* Security Banner */}
       <div
-        className="p-6 flex items-center justify-between flex-wrap gap-4"
-        style={{
-          background: 'linear-gradient(135deg, #09101d 0%, #111c2e 100%)',
-          borderRadius: '18px',
-          color: 'white',
-          border: '1px solid rgba(255,255,255,0.1)',
-          boxShadow: '0 10px 30px rgba(9, 16, 29, 0.2)'
-        }}
+        className="card flex items-center gap-3 p-4 mb-6"
+        style={{ backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }}
       >
-        <div className="flex items-center gap-4">
-          <div
-            style={{
-              width: '48px',
-              height: '48px',
-              borderRadius: '14px',
-              background: activeCount > 0 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #64748b 0%, #475569 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: activeCount > 0 ? '0 6px 16px rgba(16, 185, 129, 0.3)' : 'none'
-            }}
-          >
-            <ShieldCheck size={26} color="white" />
-          </div>
-          <div>
-            <h3 className="font-bold text-lg text-white">
-              {activeCount > 0 ? 'Channel Integration Status' : 'No Channels Connected'}
-            </h3>
-            <p className="text-xs text-muted mt-1" style={{ color: '#94a3b8' }}>
-              {activeCount} of 4 core platforms active • OAuth Token Engine Active
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <span className={`chip ${activeCount > 0 ? 'chip-success' : 'chip-default'}`} style={{ padding: '0.4rem 0.85rem' }}>
-            <Zap size={13} /> {activeCount > 0 ? 'OAuth Active' : 'Standby Mode'}
-          </span>
+        <ShieldCheck size={20} style={{ color: '#16a34a', flexShrink: 0 }} />
+        <div>
+          <p className="text-sm font-semibold text-main">End-to-End Encrypted Connections</p>
+          <p className="text-xs text-secondary">All OAuth tokens are encrypted at rest using AES-256. Tokens are never stored in plain text.</p>
         </div>
       </div>
 
       {/* Platform Cards */}
-      <div className="flex-col gap-5">
-        {platforms.map(platform => {
-          const Icon = platform.icon;
-          const connected = isConnected(platform.id);
-          const account = getAccountInfo(platform.id);
-          
+      <div className="flex flex-col gap-4">
+        {platforms.map((platform) => {
+          const account = connections.find((c: any) => c.platform === platform.id);
+          const connected = Boolean(account);
           return (
             <div
               key={platform.id}
-              className="card flex items-center justify-between flex-wrap gap-6"
+              className="card flex items-center justify-between p-5"
               style={{
-                borderRadius: '18px',
-                padding: '1.75rem',
-                border: connected ? '1px solid #bfdbfe' : '1px solid var(--border)'
+                borderLeft: `4px solid ${connected ? platform.color : '#e2e8f0'}`,
+                transition: 'border-color 0.2s ease',
               }}
             >
-              <div className="flex items-start gap-5 flex-1" style={{ minWidth: '280px' }}>
+              <div className="flex items-center gap-4">
                 <div
                   style={{
+                    width: '44px',
+                    height: '44px',
+                    borderRadius: '12px',
                     backgroundColor: platform.bgColor,
-                    color: platform.color,
-                    width: '56px',
-                    height: '56px',
-                    borderRadius: '16px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    color: platform.color,
                     flexShrink: 0,
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.04)'
                   }}
                 >
-                  <Icon size={28} />
+                  {platform.icon}
                 </div>
                 <div>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <h3 className="font-bold text-lg" style={{ color: 'var(--text-main)' }}>{platform.name}</h3>
-                    <span className="chip chip-default text-xs">{platform.badge}</span>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-base text-main">{platform.name}</h4>
                     {connected && (
                       <span className="chip chip-success">
                         <CheckCircle2 size={12} /> Connected
@@ -331,7 +374,7 @@ export default function Connections() {
 
       {/* Add Custom Integration Card */}
       <div
-        className="card flex items-center justify-between p-6"
+        className="card flex items-center justify-between p-6 mt-4"
         style={{
           borderStyle: 'dashed',
           borderColor: '#cbd5e1',
@@ -364,7 +407,7 @@ export default function Connections() {
         </button>
       </div>
 
-      {/* WhatsApp QR Pairing Modal (Directly in UNAI Flow Dashboard) */}
+      {/* WhatsApp QR Pairing Modal */}
       {isWaModalOpen && (
         <div
           style={{
@@ -489,63 +532,66 @@ export default function Connections() {
                       justifyContent: 'center',
                       boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
                       border: '1px solid #e2e8f0',
-                      position: 'relative'
                     }}
                   >
-                    <img
-                      src={`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/connections/whatsapp/qr-image?t=${Date.now()}`}
-                      alt="WhatsApp QR Code"
-                      style={{ width: '100%', height: '100%', borderRadius: '8px', objectFit: 'contain' }}
-                      onError={(e: any) => {
-                        e.target.style.display = 'none';
-                        const loader = document.getElementById('qrLoadingState');
-                        if (loader) loader.style.display = 'flex';
-                      }}
-                      onLoad={(e: any) => {
-                        e.target.style.display = 'block';
-                        const loader = document.getElementById('qrLoadingState');
-                        if (loader) loader.style.display = 'none';
-                      }}
-                    />
-                    <div
-                      id="qrLoadingState"
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '0.75rem',
-                        color: '#64748b',
-                        fontSize: '0.85rem',
-                        textAlign: 'center',
-                        padding: '1rem'
-                      }}
-                    >
-                      <Loader2 size={28} className="animate-spin text-primary" />
-                      <span>Loading live QR code...<br/><span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Starting gateway on Render</span></span>
-                    </div>
+                    {qrImageUrl ? (
+                      <img
+                        src={qrImageUrl}
+                        alt="WhatsApp QR Code"
+                        style={{ width: '100%', height: '100%', borderRadius: '8px', objectFit: 'contain' }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '0.75rem',
+                          color: '#64748b',
+                          fontSize: '0.85rem',
+                          textAlign: 'center',
+                          padding: '1rem'
+                        }}
+                      >
+                        <Loader2 size={28} className="animate-spin" style={{ color: '#25D366' }} />
+                        <span>
+                          {waStatus === 'checking' || waStatus === 'starting'
+                            ? 'Waking up WhatsApp gateway...'
+                            : waStatus === 'connecting'
+                            ? 'Connecting to WhatsApp Web...'
+                            : 'Loading QR code...'}
+                          <br/>
+                          <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                            {waStatus === 'checking' || waStatus === 'starting'
+                              ? 'Render free tier may take ~30s to start'
+                              : 'Please wait a moment'}
+                          </span>
+                        </span>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex items-center justify-between w-full text-xs text-secondary font-medium px-2">
+                  <div className="flex items-center justify-between" style={{ width: '100%', fontSize: '0.75rem', color: '#64748b', fontWeight: 500, padding: '0 0.25rem' }}>
                     <div className="flex items-center gap-1.5">
-                      <span className="dot" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#25D366' }}></span>
-                      <span>Live Gateway</span>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: qrImageUrl ? '#25D366' : '#f59e0b', display: 'inline-block' }}></span>
+                      <span>{qrImageUrl ? 'QR Ready — Scan now' : 'Gateway starting...'}</span>
                     </div>
                     <a
-                      href="https://unai-whatsapp-channelapi.onrender.com"
+                      href={WCA_DIRECT_URL}
                       target="_blank"
                       rel="noreferrer"
                       style={{ color: '#25D366', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px' }}
                     >
-                      <span>Open Direct Gateway</span>
-                      <ExternalLink size={12} />
+                      <span>Open Direct</span>
+                      <ExternalLink size={11} />
                     </a>
                   </div>
                 </div>
 
                 {/* Instructions */}
                 <div style={{ fontSize: '0.85rem', color: '#475569', lineHeight: '1.6' }}>
-                  <p className="font-semibold text-main mb-1">How to scan:</p>
+                  <p className="font-semibold text-main" style={{ marginBottom: '0.25rem' }}>How to scan:</p>
                   <ol style={{ paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                     <li>Open <strong>WhatsApp</strong> on your phone</li>
                     <li>Go to <strong>Settings</strong> or <strong>⋮ (3 dots)</strong> &gt; <strong>Linked Devices</strong></li>

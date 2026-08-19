@@ -117,6 +117,17 @@ async def get_qr(format: Optional[str] = None):
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
     )
 
+class PhonePairRequest(BaseModel):
+    phone: str  # e.g. "+919876543210"
+
+@app.post("/api/pair-phone")
+async def pair_phone(req: PhonePairRequest):
+    """Trigger phone number pairing mode. Returns pairing code via /api/status."""
+    result = await whatsapp_engine.request_phone_pairing(req.phone)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed to start phone pairing"))
+    return {"success": True, "message": result["message"]}
+
 # ── Protected Publishing Endpoints ──
 
 @app.post("/api/channel/publish")

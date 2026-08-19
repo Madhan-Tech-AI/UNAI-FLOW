@@ -79,6 +79,20 @@ async def get_whatsapp_qr_image():
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="WhatsApp service offline")
 
+@router.post("/whatsapp/pair-phone")
+async def pair_whatsapp_phone(body: dict, user: Dict[str, Any] = Depends(verify_jwt)):
+    from fastapi import HTTPException
+    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    phone = body.get("phone", "")
+    if not phone:
+        raise HTTPException(status_code=400, detail="Phone number required")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(f"{wca_url}/api/pair-phone", json={"phone": phone})
+            return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail="WhatsApp service offline")
+
 @router.post("/whatsapp/confirm")
 async def confirm_whatsapp_connection(user: Dict[str, Any] = Depends(verify_jwt)):
     user_id = user["user_id"]

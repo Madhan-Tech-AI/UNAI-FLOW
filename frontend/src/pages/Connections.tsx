@@ -32,6 +32,11 @@ export default function Connections() {
   const [waPaired, setWaPaired] = useState(false);
   const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
   const [waStatus, setWaStatus] = useState<string>('checking');
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [phoneNumber, setPhoneNumber] = useState<string>('');
+  const [phoneSubmitted, setPhoneSubmitted] = useState(false);
+  const [phoneError, setPhoneError] = useState<string>('');
+  const [usePhoneMode, setUsePhoneMode] = useState(true); // default to phone pairing
   const qrBlobUrlRef = useRef<string | null>(null);
 
   const loadConnections = async () => {
@@ -100,7 +105,7 @@ export default function Connections() {
     return false;
   };
 
-  // WhatsApp status poller + QR fetcher when modal is open
+  // WhatsApp status poller + QR/code fetcher when modal is open
   useEffect(() => {
     if (!isWaModalOpen) return;
 
@@ -110,47 +115,41 @@ export default function Connections() {
     const checkWaStatus = async () => {
       if (cancelled) return;
 
-      // Try backend proxy first, fall back to direct gateway
       let statusData: any = null;
       try {
         statusData = await fetchApi('/connections/whatsapp/status');
       } catch {
-        // Backend proxy unreachable — try direct gateway
         try {
           const directResp = await fetch(`${WCA_DIRECT_URL}/api/status`);
           if (directResp.ok) statusData = await directResp.json();
-        } catch { /* gateway also down */ }
+        } catch { /* gateway down */ }
       }
 
       if (cancelled) return;
 
-      if (statusData && statusData.whatsapp && statusData.whatsapp.isReady) {
-        // Successfully paired!
+      const wa = statusData?.whatsapp;
+      if (!wa) { setWaStatus('starting'); await fetchQrImage(); return; }
+
+      if (wa.isReady) {
         setWaStatus('connected');
         setWaPaired(true);
         try {
           await fetchApi('/connections/whatsapp/confirm', { method: 'POST' });
           await loadConnections();
-        } catch { /* ignore confirm errors */ }
-        setTimeout(() => {
-          if (!cancelled) {
-            setIsWaModalOpen(false);
-            setWaPaired(false);
-          }
-        }, 2000);
+        } catch { /* ignore */ }
+        setTimeout(() => { if (!cancelled) { setIsWaModalOpen(false); setWaPaired(false); } }, 2000);
         return;
       }
 
-      if (statusData && statusData.whatsapp) {
-        const state = statusData.whatsapp.state;
-        setWaStatus(state);
+      // Phone pairing code available
+      if (wa.pairingCode) {
+        setPairingCode(wa.pairingCode);
+        setWaStatus('phone_pairing');
+        return;
+      }
 
-        if (state === 'qr_pending' || state === 'connecting') {
-          await fetchQrImage();
-        }
-      } else {
-        setWaStatus('starting');
-        // Gateway may still be cold-starting, try QR anyway
+      setWaStatus(wa.state || 'connecting');
+      if (wa.state === 'qr_pending' || wa.state === 'connecting') {
         await fetchQrImage();
       }
     };
@@ -167,6 +166,22 @@ export default function Connections() {
       }
     };
   }, [isWaModalOpen]);
+
+  const handlePhoneSubmit = async () => {
+    if (!phoneNumber.trim()) { setPhoneError('Please enter your phone number'); return; }
+    setPhoneError('');
+    setPhoneSubmitted(true);
+    setPairingCode(null);
+    try {
+      await fetchApi('/connections/whatsapp/pair-phone', {
+        method: 'POST',
+        body: JSON.stringify({ phone: phoneNumber.trim() }),
+      });
+    } catch (err) {
+      setPhoneError('Failed to request pairing. Make sure gateway is running.');
+      setPhoneSubmitted(false);
+    }
+  };
 
   const handleConnect = async (platformId: string) => {
     if (platformId === 'whatsapp') {
@@ -517,85 +532,201 @@ export default function Connections() {
                     border: '1px solid #e2e8f0'
                   }}
                 >
-                  {/* QR Box */}
-                  <div
-                    style={{
-                      width: '240px',
-                      height: '240px',
-                      backgroundColor: '#ffffff',
-                      borderRadius: '12px',
-                      padding: '8px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-                      border: '1px solid #e2e8f0',
-                    }}
-                  >
-                    {qrImageUrl ? (
-                      <img
-                        src={qrImageUrl}
-                        alt="WhatsApp QR Code"
-                        style={{ width: '100%', height: '100%', borderRadius: '8px', objectFit: 'contain' }}
-                      />
-                    ) : (
+                  {usePhoneMode ? (
+                    /* Phone Pairing UI */
+                    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
+                      {pairingCode ? (
+                        <>
+                          <div style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
+                            <p className="font-semibold text-main mb-1">Enter this code on your phone</p>
+                            <p className="text-sm text-secondary">WhatsApp &gt; Linked Devices &gt; Link with phone number</p>
+                          </div>
+                          <div style={{
+                            display: 'flex',
+                            gap: '0.5rem',
+                            fontSize: '2rem',
+                            fontWeight: 'bold',
+                            letterSpacing: '4px',
+                            color: '#0f172a',
+                            backgroundColor: '#fff',
+                            padding: '1rem 2rem',
+                            borderRadius: '12px',
+                            border: '1px solid #e2e8f0',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+                          }}>
+                            {pairingCode.slice(0, 4)} - {pairingCode.slice(4, 8)}
+                          </div>
+                          <p className="text-xs text-amber-600 mt-2 flex items-center gap-1 font-medium">
+                            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                            Waiting for you to enter code...
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ textAlign: 'center', width: '100%' }}>
+                            <p className="font-semibold text-main mb-2">Link with Phone Number</p>
+                            <p className="text-xs text-secondary mb-4">Enter the phone number of the WhatsApp account you want to link. Include country code (e.g. +1234567890).</p>
+                            
+                            <input
+                              type="text"
+                              placeholder="+1 234 567 8900"
+                              value={phoneNumber}
+                              onChange={(e) => setPhoneNumber(e.target.value)}
+                              disabled={phoneSubmitted}
+                              style={{
+                                width: '100%',
+                                padding: '0.75rem 1rem',
+                                borderRadius: '8px',
+                                border: '1px solid #cbd5e1',
+                                outline: 'none',
+                                fontSize: '0.95rem',
+                                marginBottom: '0.5rem'
+                              }}
+                            />
+                            {phoneError && <p className="text-xs text-red-500 text-left mb-2">{phoneError}</p>}
+                            
+                            <button
+                              onClick={handlePhoneSubmit}
+                              disabled={phoneSubmitted || !phoneNumber.trim()}
+                              style={{
+                                width: '100%',
+                                padding: '0.75rem',
+                                backgroundColor: phoneSubmitted ? '#94a3b8' : '#25D366',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '8px',
+                                fontWeight: 600,
+                                cursor: phoneSubmitted ? 'not-allowed' : 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.5rem'
+                              }}
+                            >
+                              {phoneSubmitted ? (
+                                <>
+                                  <Loader2 size={16} className="animate-spin" />
+                                  Requesting Code...
+                                </>
+                              ) : (
+                                'Get Pairing Code'
+                              )}
+                            </button>
+                            
+                            {phoneSubmitted && (
+                              <p className="text-xs text-secondary mt-3 flex items-center justify-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                                Gateway is processing request (may take ~30s)...
+                              </p>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    /* QR Code UI */
+                    <>
                       <div
                         style={{
+                          width: '240px',
+                          height: '240px',
+                          backgroundColor: '#ffffff',
+                          borderRadius: '12px',
+                          padding: '8px',
                           display: 'flex',
-                          flexDirection: 'column',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          gap: '0.75rem',
-                          color: '#64748b',
-                          fontSize: '0.85rem',
-                          textAlign: 'center',
-                          padding: '1rem'
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+                          border: '1px solid #e2e8f0',
                         }}
                       >
-                        <Loader2 size={28} className="animate-spin" style={{ color: '#25D366' }} />
-                        <span>
-                          {waStatus === 'checking' || waStatus === 'starting'
-                            ? 'Waking up WhatsApp gateway...'
-                            : waStatus === 'connecting'
-                            ? 'Connecting to WhatsApp Web...'
-                            : 'Loading QR code...'}
-                          <br/>
-                          <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-                            {waStatus === 'checking' || waStatus === 'starting'
-                              ? 'Render free tier may take ~30s to start'
-                              : 'Please wait a moment'}
-                          </span>
-                        </span>
+                        {qrImageUrl ? (
+                          <img
+                            src={qrImageUrl}
+                            alt="WhatsApp QR Code"
+                            style={{ width: '100%', height: '100%', borderRadius: '8px', objectFit: 'contain' }}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '0.75rem',
+                              color: '#64748b',
+                              fontSize: '0.85rem',
+                              textAlign: 'center',
+                              padding: '1rem'
+                            }}
+                          >
+                            <Loader2 size={28} className="animate-spin" style={{ color: '#25D366' }} />
+                            <span>
+                              {waStatus === 'checking' || waStatus === 'starting'
+                                ? 'Waking up WhatsApp gateway...'
+                                : waStatus === 'connecting'
+                                ? 'Connecting to WhatsApp Web...'
+                                : 'Loading QR code...'}
+                              <br/>
+                              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                                {waStatus === 'checking' || waStatus === 'starting'
+                                  ? 'Render free tier may take ~30s to start'
+                                  : 'Please wait a moment'}
+                              </span>
+                            </span>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
 
-                  <div className="flex items-center justify-between" style={{ width: '100%', fontSize: '0.75rem', color: '#64748b', fontWeight: 500, padding: '0 0.25rem' }}>
-                    <div className="flex items-center gap-1.5">
-                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: qrImageUrl ? '#25D366' : '#f59e0b', display: 'inline-block' }}></span>
-                      <span>{qrImageUrl ? 'QR Ready — Scan now' : 'Gateway starting...'}</span>
-                    </div>
-                    <a
-                      href={WCA_DIRECT_URL}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ color: '#25D366', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px' }}
+                      <div className="flex items-center justify-between" style={{ width: '100%', fontSize: '0.75rem', color: '#64748b', fontWeight: 500, padding: '0 0.25rem' }}>
+                        <div className="flex items-center gap-1.5">
+                          <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: qrImageUrl ? '#25D366' : '#f59e0b', display: 'inline-block' }}></span>
+                          <span>{qrImageUrl ? 'QR Ready — Scan now' : 'Gateway starting...'}</span>
+                        </div>
+                        <a
+                          href={WCA_DIRECT_URL}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: '#25D366', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px' }}
+                        >
+                          <span>Open Direct</span>
+                          <ExternalLink size={11} />
+                        </a>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Instructions / Toggle */}
+                {usePhoneMode ? (
+                  <div className="text-center mt-2">
+                    <button 
+                      onClick={() => setUsePhoneMode(false)}
+                      className="text-sm font-medium hover:underline"
+                      style={{ color: '#25D366', background: 'none', border: 'none', cursor: 'pointer' }}
                     >
-                      <span>Open Direct</span>
-                      <ExternalLink size={11} />
-                    </a>
+                      Scan QR code instead
+                    </button>
                   </div>
-                </div>
-
-                {/* Instructions */}
-                <div style={{ fontSize: '0.85rem', color: '#475569', lineHeight: '1.6' }}>
-                  <p className="font-semibold text-main" style={{ marginBottom: '0.25rem' }}>How to scan:</p>
-                  <ol style={{ paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                    <li>Open <strong>WhatsApp</strong> on your phone</li>
-                    <li>Go to <strong>Settings</strong> or <strong>⋮ (3 dots)</strong> &gt; <strong>Linked Devices</strong></li>
-                    <li>Tap <strong>Link a Device</strong> and point camera at the QR code</li>
-                  </ol>
-                </div>
+                ) : (
+                  <div style={{ fontSize: '0.85rem', color: '#475569', lineHeight: '1.6' }}>
+                    <p className="font-semibold text-main" style={{ marginBottom: '0.25rem' }}>How to scan:</p>
+                    <ol style={{ paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      <li>Open <strong>WhatsApp</strong> on your phone</li>
+                      <li>Go to <strong>Settings</strong> or <strong>⋮ (3 dots)</strong> &gt; <strong>Linked Devices</strong></li>
+                      <li>Tap <strong>Link a Device</strong> and point camera at the QR code</li>
+                    </ol>
+                    <div className="text-center mt-4">
+                      <button 
+                        onClick={() => setUsePhoneMode(true)}
+                        className="text-sm font-medium hover:underline"
+                        style={{ color: '#25D366', background: 'none', border: 'none', cursor: 'pointer' }}
+                      >
+                        Link with phone number instead
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>

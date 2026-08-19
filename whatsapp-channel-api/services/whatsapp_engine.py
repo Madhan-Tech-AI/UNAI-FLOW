@@ -20,10 +20,11 @@ class WhatsAppEngine:
         self.playwright = None
         self.browser_context = None
         self.page = None
-        self.connection_state: str = "disconnected"  # disconnected | connecting | qr_pending | connected
+        self.connection_state: str = "disconnected"  # disconnected | connecting | qr_pending | phone_pairing | connected
         self.is_ready: bool = False
         self.current_qr: Optional[str] = None
         self.qr_png_bytes: Optional[bytes] = None
+        self.pairing_code: Optional[str] = None  # 8-digit phone pairing code
         self.user_info: Optional[Dict[str, Any]] = None
         self.last_qr_time: Optional[float] = None
         self._monitor_task: Optional[asyncio.Task] = None
@@ -111,14 +112,14 @@ class WhatsAppEngine:
             self.is_ready = False
 
     async def _monitor_session(self):
-        """Continuously monitors login state and extracts QR codes when needed."""
+        """Continuously monitors login state and extracts pairing code or QR when needed."""
         while True:
             try:
                 if not self.page or self.page.is_closed():
                     await asyncio.sleep(3)
                     continue
 
-                # 1. Check if logged in (Look for chat list or search bar)
+                # 1. Check if logged in
                 is_logged_in = await self.page.evaluate("""
                     () => {
                         const side = document.querySelector('#side') || document.querySelector('div[data-testid="chat-list"]');
@@ -130,11 +131,12 @@ class WhatsAppEngine:
 
                 if is_logged_in:
                     if not self.is_ready:
-                        logger.info("🎉 WhatsApp Web is LOGGED IN and ready!")
+                        logger.info("🎉 WhatsApp Web LOGGED IN and ready!")
                         self.connection_state = "connected"
                         self.is_ready = True
                         self.current_qr = None
                         self.qr_png_bytes = None
+                        self.pairing_code = None
                         self.user_info = {
                             "status": "active",
                             "channel_id": config.CHANNEL_ID,
@@ -143,80 +145,149 @@ class WhatsAppEngine:
                     await asyncio.sleep(4)
                     continue
 
-                # 2. Check if QR code is visible or needs reload
+                # 2. Check for phone pairing code already displayed
+                pairing_info = await self.page.evaluate("""
+                    () => {
+                        // Look for the pairing code digits (e.g. "ABCD-EFGH" or 8 character spans)
+                        const codeEl = document.querySelector('[data-testid="link-device-phone-number-code"]')
+                            || document.querySelector('div._ao3e');
+                        if (codeEl) {
+                            const text = codeEl.innerText || codeEl.textContent;
+                            const clean = text.replace(/\\s/g, '').replace(/-/g, '');
+                            if (clean.length >= 8) return { code: clean.slice(0, 8) };
+                        }
+                        // Fallback: find any large code-like spans  
+                        const spans = Array.from(document.querySelectorAll('span, div'));
+                        for (const el of spans) {
+                            const t = (el.innerText || '').trim();
+                            if (/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(t)) return { code: t.replace('-','') };
+                            if (/^[A-Z0-9]{8}$/.test(t)) return { code: t };
+                        }
+                        return null;
+                    }
+                """)
+
+                if pairing_info and pairing_info.get('code'):
+                    code = pairing_info['code']
+                    if self.pairing_code != code:
+                        self.pairing_code = code
+                        self.connection_state = "phone_pairing"
+                        self.is_ready = False
+                        logger.info(f"🔑 Phone pairing code: {code}")
+                    await asyncio.sleep(2.5)
+                    continue
+
+                # 3. Check for QR canvas (fallback if phone pairing not triggered)
                 qr_info = await self.page.evaluate("""
                     () => {
-                        // Click reload button if present (QR code timed out)
-                        const refreshBtn = document.querySelector('span[data-icon="refresh"]')?.closest('button') || document.querySelector('button[aria-label="Reload QR code"]');
-                        if (refreshBtn) {
-                            refreshBtn.click();
-                            return { state: 'RELOADING' };
-                        }
+                        const refreshBtn = document.querySelector('span[data-icon="refresh"]')?.closest('button')
+                            || document.querySelector('button[aria-label="Reload QR code"]');
+                        if (refreshBtn) { refreshBtn.click(); return { state: 'RELOADING' }; }
                         
                         const qrDiv = document.querySelector('div[data-ref]');
                         const ref = qrDiv ? qrDiv.getAttribute('data-ref') : null;
-                        const canvas = document.querySelector('canvas[aria-label="Scan this QR code with WhatsApp to log in"]') || document.querySelector('canvas');
-                        
-                        if (canvas) {
-                            return { state: 'CANVAS_PRESENT', ref: ref || 'unknown_ref' };
-                        }
+                        const canvas = document.querySelector('canvas[aria-label="Scan this QR code with WhatsApp to log in"]')
+                            || document.querySelector('canvas');
+                        if (canvas) return { state: 'CANVAS_PRESENT', ref: ref || 'unknown_ref' };
                         return { state: null };
                     }
                 """)
-                
+
                 if not qr_info:
+                    if not self.is_ready:
+                        self.connection_state = "connecting"
+                    await asyncio.sleep(2.5)
                     continue
 
                 state = qr_info.get("state")
-                
+
                 if state == 'RELOADING':
-                    logger.info("🔄 QR code timed out, clicked reload button.")
+                    logger.info("🔄 QR timed out, clicked reload.")
                     await asyncio.sleep(2)
                     continue
 
                 if state == "CANVAS_PRESENT":
                     ref = qr_info.get("ref")
-                    # If the ref changed OR we don't have the image yet
                     if self.current_qr != ref or not self.qr_png_bytes:
                         self.current_qr = ref
                         self.last_qr_time = time.time()
                         self.connection_state = "qr_pending"
                         self.is_ready = False
-                        
-                        # Attempt 1: Screenshot the QR container div
                         screenshot_success = False
                         try:
                             qr_div = await self.page.query_selector("div[data-ref]")
                             if qr_div:
                                 self.qr_png_bytes = await qr_div.screenshot()
                                 screenshot_success = True
-                                logger.info("📱 Captured QR from div[data-ref]")
                         except Exception:
                             pass
-                            
-                        # Attempt 2: Screenshot the canvas
                         if not screenshot_success:
                             try:
                                 canvas_el = await self.page.query_selector("canvas")
                                 if canvas_el:
                                     self.qr_png_bytes = await canvas_el.screenshot()
                                     screenshot_success = True
-                                    logger.info("📱 Captured QR from canvas")
                             except Exception:
                                 pass
-                                
-                        # Attempt 3: Fallback to manual QR generation
                         if not screenshot_success and ref and ref != 'unknown_ref':
                             self._generate_qr_image(ref)
-                            logger.info("📱 Fallback: Generated manual QR from data-ref")
                 else:
                     if not self.is_ready:
                         self.connection_state = "connecting"
 
             except Exception as err:
-                logger.debug(f"Session monitor loop tick: {err}")
+                logger.debug(f"Monitor tick error: {err}")
 
             await asyncio.sleep(2.5)
+
+    async def request_phone_pairing(self, phone_number: str) -> Dict[str, Any]:
+        """Clicks 'Link with phone number instead' and enters the phone number to get a pairing code."""
+        if not self.page or self.page.is_closed():
+            return {"success": False, "error": "Browser not ready"}
+        try:
+            # Click 'Link with phone number instead' button
+            clicked = await self.page.evaluate("""
+                () => {
+                    const btns = Array.from(document.querySelectorAll('button, a, span'));
+                    const phoneBtn = btns.find(el => {
+                        const t = (el.innerText || el.textContent || '').toLowerCase();
+                        return t.includes('phone number') || t.includes('link with phone');
+                    });
+                    if (phoneBtn) { phoneBtn.click(); return true; }
+                    return false;
+                }
+            """)
+            if not clicked:
+                return {"success": False, "error": "Phone pairing button not found. QR page may not be loaded yet."}
+
+            await asyncio.sleep(1.5)
+
+            # Type phone number into the input
+            phone_input = await self.page.wait_for_selector(
+                'input[type="text"], input[type="tel"], input[placeholder*="phone"], input[data-testid="link-device-phone-number-input"]',
+                timeout=8000
+            )
+            if phone_input:
+                await phone_input.fill(phone_number)
+                await asyncio.sleep(0.5)
+                # Press Next/Submit
+                await self.page.evaluate("""
+                    () => {
+                        const btns = Array.from(document.querySelectorAll('button'));
+                        const nextBtn = btns.find(el => {
+                            const t = (el.innerText || '').toLowerCase();
+                            return t.includes('next') || t.includes('continue') || t.includes('ok');
+                        });
+                        if (nextBtn) nextBtn.click();
+                    }
+                """)
+                self.pairing_code = None
+                self.connection_state = "phone_pairing"
+                logger.info(f"📲 Phone pairing requested for: {phone_number}")
+                return {"success": True, "message": "Phone number submitted. Pairing code will appear shortly."}
+            return {"success": False, "error": "Could not find phone number input field"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def _generate_qr_image(self, qr_text: str):
         """Generates a PNG byte buffer from the QR string."""
@@ -246,6 +317,7 @@ class WhatsAppEngine:
             "state": self.connection_state,
             "isReady": self.is_ready,
             "hasQR": bool(self.current_qr or self.qr_png_bytes),
+            "pairingCode": self.pairing_code,
             "lastQRTime": self.last_qr_time,
             "userInfo": self.user_info,
             "lastError": getattr(self, "last_error", None),

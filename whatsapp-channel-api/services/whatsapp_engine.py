@@ -82,6 +82,14 @@ class WhatsAppEngine:
                 self.page = self.browser_context.pages[0]
             else:
                 self.page = await self.browser_context.new_page()
+                
+            # Stealth injections to bypass WhatsApp "couldn't link device" automation detection
+            await self.browser_context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.navigator.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            """)
 
             logger.info("Navigating to https://web.whatsapp.com...")
             await self.page.goto("https://web.whatsapp.com", wait_until="domcontentloaded", timeout=60000)
@@ -129,15 +137,27 @@ class WhatsAppEngine:
                     await asyncio.sleep(4)
                     continue
 
-                # 2. Check if QR code is visible
+                # 2. Check if QR code is visible or needs reload
                 qr_ref = await self.page.evaluate("""
                     () => {
+                        // Click reload button if present (QR code timed out)
+                        const refreshBtn = document.querySelector('span[data-icon="refresh"]')?.closest('button') || document.querySelector('button[aria-label="Reload QR code"]');
+                        if (refreshBtn) {
+                            refreshBtn.click();
+                            return 'RELOADING';
+                        }
+                        
                         const qrDiv = document.querySelector('div[data-ref]');
                         if (qrDiv) return qrDiv.getAttribute('data-ref');
                         const canvas = document.querySelector('canvas[aria-label="Scan this QR code with WhatsApp to log in"]') || document.querySelector('canvas');
                         return canvas ? 'CANVAS_PRESENT' : null;
                     }
                 """)
+                
+                if qr_ref == 'RELOADING':
+                    logger.info("🔄 QR code timed out, clicked reload button.")
+                    await asyncio.sleep(2)
+                    continue
 
                 if qr_ref and qr_ref != "CANVAS_PRESENT":
                     if self.current_qr != qr_ref:

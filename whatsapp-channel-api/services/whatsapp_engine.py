@@ -280,18 +280,59 @@ class WhatsAppEngine:
                     await asyncio.sleep(2)
                     continue
 
-                # ── 1. Check if Logged In ──
-                is_logged_in = await self.page.evaluate("""
+                # ── 1. Check if Logged In / Authenticated ──
+                login_check = await self.page.evaluate("""
                     () => {
-                        const side = document.querySelector('#side') || document.querySelector('div[data-testid="chat-list"]');
-                        const pane = document.querySelector('div[contenteditable="true"]');
-                        const header = document.querySelector('header');
-                        const main = document.querySelector('#main') || document.querySelector('div[data-testid="conversation-panel-wrapper"]');
-                        return Boolean(side || (pane && header) || main);
+                        // 1. Core navigation and chat list selectors
+                        if (document.querySelector('#side') || document.querySelector('#main') || document.querySelector('#pane-side')) return true;
+                        if (document.querySelector('div[data-testid="chat-list"]') || document.querySelector('div[data-testid="conversation-panel-wrapper"]')) return true;
+                        if (document.querySelector('div[data-testid="chatlist-header"]') || document.querySelector('div[role="navigation"]')) return true;
+                        if (document.querySelector('div[data-testid="intro-title"]') || document.querySelector('div[data-testid="intro-text"]')) return true;
+
+                        // 2. Navigation bar icons & buttons (Chats, Channels, Status, Communities, Settings)
+                        if (document.querySelector('button[aria-label="Chats"], button[aria-label="Channels"], button[aria-label="Status"], button[aria-label="Settings"], button[aria-label="Communities"]')) return true;
+                        if (document.querySelector('span[data-icon="chats-outline"], span[data-icon="newsletter-outline"], span[data-icon="community-outline"], span[data-icon="status-outline"], span[data-icon="menu"]')) return true;
+                        if (document.querySelector('span[data-icon="chat"], span[data-icon="newsletter"], span[data-icon="status-v3"]')) return true;
+
+                        // 3. Message composer / header
+                        if (document.querySelector('div[contenteditable="true"][data-tab]') || document.querySelector('footer div[contenteditable="true"]')) return true;
+
+                        // 4. Auto-dismiss any blocking promo/notification dialogs
+                        const dismissButtons = Array.from(document.querySelectorAll('button, div[role="button"]'));
+                        const notNow = dismissButtons.find(b => {
+                            const t = (b.innerText || '').toLowerCase();
+                            return t.includes('not now') || t.includes('continue') || t.includes('close') || t.includes('ok');
+                        });
+                        if (notNow && !document.querySelector('canvas') && !document.querySelector('div[data-ref]')) {
+                            try { notNow.click(); } catch(e) {}
+                        }
+
+                        // 5. Check if QR code is completely gone (consumed upon phone scan)
+                        const hasQR = Boolean(
+                            document.querySelector('canvas') || 
+                            document.querySelector('div[data-ref]') || 
+                            document.querySelector('[data-testid="qrcode"]') ||
+                            document.querySelector('button[aria-label="Reload QR code"]') ||
+                            document.querySelector('span[data-icon="refresh"]')
+                        );
+
+                        // If no QR elements exist and we have header/app container or sync elements -> logged in!
+                        const hasAppUI = Boolean(
+                            document.querySelector('header') || 
+                            document.querySelector('nav') || 
+                            document.querySelector('#app') ||
+                            document.querySelector('div[role="region"]')
+                        );
+
+                        if (!hasQR && hasAppUI) {
+                            return true;
+                        }
+
+                        return false;
                     }
                 """)
 
-                if is_logged_in:
+                if login_check:
                     if not self.is_ready:
                         logger.info("🎉 ✅ WhatsApp Web authenticated & linked successfully! Ready for Channel broadcasting.")
                         self.connection_state = "connected"
@@ -305,7 +346,7 @@ class WhatsAppEngine:
                             "channel_id": config.CHANNEL_ID,
                             "channel_link": config.CHANNEL_LINK,
                         }
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(2)
                     continue
                 else:
                     # If we were previously logged in and now we are not -> Session expired / Logged out
@@ -358,7 +399,7 @@ class WhatsAppEngine:
                         }
 
                         // Check for loading / authenticating spinner
-                        const spinner = document.querySelector('progress, span[data-icon="spinner"], div[data-testid="loading-screen"]');
+                        const spinner = document.querySelector('progress, span[data-icon="spinner"], div[data-testid="loading-screen"], div[role="progressbar"]');
                         if (spinner) {
                             return { state: 'AUTHENTICATING' };
                         }
@@ -394,8 +435,10 @@ class WhatsAppEngine:
 
                 if state == "AUTHENTICATING":
                     if self.connection_state != "authenticating":
-                        logger.info("⏳ QR code scanned! Authenticating session with WhatsApp servers...")
+                        logger.info("⏳ QR code scanned! Authenticating & synchronizing session with WhatsApp...")
                         self.connection_state = "authenticating"
+                        self.current_qr = None
+                        self.qr_png_bytes = None
                     await asyncio.sleep(1.5)
                     continue
 

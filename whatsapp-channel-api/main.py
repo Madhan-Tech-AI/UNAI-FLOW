@@ -82,7 +82,7 @@ async def get_status():
     status = await whatsapp_engine.get_status()
     is_ready = status["isReady"]
     return JSONResponse(
-        status_code=200 if is_ready else 503,
+        status_code=200,
         content={
             "success": is_ready,
             "whatsapp": status,

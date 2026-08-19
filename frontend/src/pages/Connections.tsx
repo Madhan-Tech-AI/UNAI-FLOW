@@ -681,14 +681,18 @@ export default function Connections() {
                           >
                             <Loader2 size={28} className="animate-spin" style={{ color: '#25D366' }} />
                             <span>
-                              {waStatus === 'checking' || waStatus === 'starting'
+                              {waStatus === 'authenticating'
+                                ? 'QR Code Scanned! Authenticating with WhatsApp...'
+                                : waStatus === 'checking' || waStatus === 'starting'
                                 ? 'Waking up WhatsApp gateway...'
                                 : waStatus === 'connecting'
                                 ? 'Connecting to WhatsApp Web...'
                                 : 'Loading QR code...'}
                               <br/>
                               <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-                                {waStatus === 'checking' || waStatus === 'starting'
+                                {waStatus === 'authenticating'
+                                  ? 'Synchronizing session, please wait a few seconds...'
+                                  : waStatus === 'checking' || waStatus === 'starting'
                                   ? 'Render free tier may take ~30s to start'
                                   : 'Please wait a moment'}
                               </span>
@@ -699,8 +703,12 @@ export default function Connections() {
 
                       <div className="flex items-center justify-between" style={{ width: '100%', fontSize: '0.75rem', color: '#64748b', fontWeight: 500, padding: '0 0.25rem' }}>
                         <div className="flex items-center gap-1.5">
-                          <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: qrImageUrl ? '#25D366' : '#f59e0b', display: 'inline-block' }}></span>
-                          <span>{qrImageUrl ? 'QR Ready — Scan now' : 'Gateway starting...'}</span>
+                          <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: waStatus === 'authenticating' ? '#3b82f6' : (qrImageUrl ? '#25D366' : '#f59e0b'), display: 'inline-block' }}></span>
+                          <span>
+                            {waStatus === 'authenticating'
+                              ? 'Logging in & syncing...'
+                              : (qrImageUrl ? 'QR Ready — Scan now' : 'Gateway starting...')}
+                          </span>
                         </div>
                         <a
                           href={WCA_DIRECT_URL}

@@ -12,7 +12,23 @@ router = APIRouter(prefix="/connections", tags=["Connections"])
 @router.get("")
 async def get_connections(user: Dict[str, Any] = Depends(verify_jwt)):
     res = supabase.table("platform_connections").select("id, platform, platform_account_name, status, connected_at").eq("user_id", user["user_id"]).execute()
-    return {"connections": res.data}
+    data = res.data or []
+    
+    # Verify live WhatsApp gateway readiness
+    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
+    for row in data:
+        if row.get("platform") == "whatsapp":
+            try:
+                async with httpx.AsyncClient(timeout=3.5) as client:
+                    wa_resp = await client.get(f"{wca_url}/api/status")
+                    if wa_resp.status_code == 200:
+                        wa_info = wa_resp.json().get("whatsapp", {})
+                        if not wa_info.get("isReady"):
+                            row["status"] = "needs_relink"
+            except Exception:
+                row["status"] = "service_offline"
+                
+    return {"connections": data}
 
 @router.post("/{platform}/start")
 async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt)):

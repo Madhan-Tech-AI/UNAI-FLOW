@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, X } from 'lucide-react';
+import { Camera, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, X, AlertCircle } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 import { supabase } from '../lib/supabaseClient';
 
@@ -405,13 +405,14 @@ export default function Connections() {
       <div className="flex flex-col gap-4">
         {platforms.map((platform) => {
           const account = connections.find((c: any) => c.platform === platform.id);
-          const connected = Boolean(account);
+          const isNeedsRelink = platform.id === 'whatsapp' && (account?.status === 'needs_relink' || account?.status === 'service_offline');
+          const connected = Boolean(account) && !isNeedsRelink;
           return (
             <div
               key={platform.id}
               className="card flex items-center justify-between p-5"
               style={{
-                borderLeft: `4px solid ${connected ? platform.color : '#e2e8f0'}`,
+                borderLeft: `4px solid ${connected ? platform.color : (isNeedsRelink ? '#f59e0b' : '#e2e8f0')}`,
                 transition: 'border-color 0.2s ease',
               }}
             >
@@ -439,6 +440,11 @@ export default function Connections() {
                         <CheckCircle2 size={12} /> Connected
                       </span>
                     )}
+                    {isNeedsRelink && (
+                      <span className="chip" style={{ backgroundColor: '#fef3c7', color: '#d97706', borderColor: '#fde68a' }}>
+                        <AlertCircle size={12} /> Device Link Needed
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-secondary mt-1">{platform.description}</p>
                   
@@ -448,6 +454,12 @@ export default function Connections() {
                         <span>Account: <strong className="text-main">{account.platform_account_name}</strong></span>
                       )}
                       <span>Token Status: <strong className="text-success">Valid Session</strong></span>
+                    </div>
+                  )}
+
+                  {isNeedsRelink && (
+                    <div className="flex items-center gap-2 mt-2 text-xs text-amber-700">
+                      <span>Server restarted — click <strong>Scan QR to Link</strong> to connect your phone.</span>
                     </div>
                   )}
                 </div>
@@ -470,6 +482,11 @@ export default function Connections() {
                       Disconnect
                     </button>
                   </>
+                ) : isNeedsRelink ? (
+                  <button className="btn-primary" style={{ backgroundColor: '#25D366' }} onClick={() => handleConnect(platform.id)}>
+                    <MessageCircle size={16} />
+                    <span>Scan QR to Link</span>
+                  </button>
                 ) : (
                   <button className="btn-primary" onClick={() => handleConnect(platform.id)}>
                     <Plus size={16} />

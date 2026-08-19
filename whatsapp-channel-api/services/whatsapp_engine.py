@@ -79,7 +79,8 @@ class WhatsAppEngine:
 
         except Exception as e:
             logger.error(f"Failed to initialize WhatsApp Engine: {e}")
-            self.connection_state = "disconnected"
+            self.last_error = str(e)
+            self.connection_state = "error"
             self.is_ready = False
 
     async def _monitor_session(self):
@@ -178,6 +179,7 @@ class WhatsAppEngine:
             "hasQR": bool(self.current_qr or self.qr_png_bytes),
             "lastQRTime": self.last_qr_time,
             "userInfo": self.user_info,
+            "lastError": getattr(self, "last_error", None),
         }
 
     async def get_qr_image(self) -> Optional[bytes]:

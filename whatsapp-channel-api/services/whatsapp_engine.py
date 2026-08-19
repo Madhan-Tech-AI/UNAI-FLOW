@@ -258,15 +258,30 @@ class WhatsAppEngine:
         if not self.page or self.page.is_closed():
             return {"success": False, "error": "Browser not ready"}
         try:
-            # Click 'Link with phone number instead' button
             clicked = await self.page.evaluate("""
                 () => {
-                    const btns = Array.from(document.querySelectorAll('button, a, span'));
-                    const phoneBtn = btns.find(el => {
-                        const t = (el.innerText || el.textContent || '').toLowerCase();
-                        return t.includes('phone number') || t.includes('link with phone');
-                    });
-                    if (phoneBtn) { phoneBtn.click(); return true; }
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                    let node;
+                    while (node = walker.nextNode()) {
+                        if (!node.nodeValue) continue;
+                        const t = node.nodeValue.toLowerCase();
+                        if (t.includes('phone number') || t.includes('link with phone')) {
+                            let el = node.parentElement;
+                            // Traverse up to find something clickable
+                            while (el && el !== document.body) {
+                                if (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button' || window.getComputedStyle(el).cursor === 'pointer') {
+                                    el.click();
+                                    return true;
+                                }
+                                el = el.parentElement;
+                            }
+                            // If no explicitly clickable parent, just click the parent element
+                            if (node.parentElement) {
+                                node.parentElement.click();
+                                return true;
+                            }
+                        }
+                    }
                     return false;
                 }
             """)

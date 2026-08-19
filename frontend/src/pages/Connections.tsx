@@ -493,7 +493,7 @@ export default function Connections() {
                     }}
                   >
                     <img
-                      src={`http://localhost:3001/api/qr?t=${Date.now()}`}
+                      src={`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/connections/whatsapp/qr-image?t=${Date.now()}`}
                       alt="WhatsApp QR Code"
                       style={{ width: '100%', height: '100%', borderRadius: '8px' }}
                       onError={(e: any) => {

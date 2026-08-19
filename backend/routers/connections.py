@@ -65,6 +65,18 @@ async def get_whatsapp_qr(user: Dict[str, Any] = Depends(verify_jwt)):
     except Exception as e:
         return {"success": False, "message": "WhatsApp service offline"}
 
+@router.get("/whatsapp/qr-image")
+async def get_whatsapp_qr_image():
+    from fastapi.responses import Response
+    wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{wca_url}/api/qr")
+            return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "no-cache, no-store"})
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="WhatsApp service offline")
+
 @router.post("/whatsapp/confirm")
 async def confirm_whatsapp_connection(user: Dict[str, Any] = Depends(verify_jwt)):
     user_id = user["user_id"]

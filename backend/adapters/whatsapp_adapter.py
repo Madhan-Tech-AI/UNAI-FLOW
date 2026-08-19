@@ -116,7 +116,7 @@ class WhatsAppAdapter(PlatformAdapter):
             payload["text"] = content
 
         # ── 5. Call the WhatsApp Channel API (single attempt, no retry) ──
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             try:
                 resp = await client.post(
                     f"{wca_url}/api/channel/publish",
@@ -133,7 +133,7 @@ class WhatsAppAdapter(PlatformAdapter):
                 )
             except httpx.TimeoutException:
                 raise Exception(
-                    "WhatsApp Channel API timed out during publish (60s limit)."
+                    "WhatsApp Channel API timed out during publish."
                 )
 
         # ── 6. Parse response ──

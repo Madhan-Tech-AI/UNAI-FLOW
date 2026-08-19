@@ -786,7 +786,7 @@ class WhatsAppEngine:
         channel_link: Optional[str] = None,
         channel_name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Publishes message or media to a WhatsApp Channel inside WhatsApp Web."""
+        """Publishes message or media to a WhatsApp Channel inside WhatsApp Web with high speed."""
         if not self.is_ready or not self.page:
             raise Exception("WhatsApp is not connected. Please scan the QR code to link your device first.")
 
@@ -799,76 +799,63 @@ class WhatsAppEngine:
 
         async with self._lock:
             try:
-                logger.info(f"📢 Publishing post to WhatsApp Channel: '{target_name}' (ID: {target_id})...")
+                logger.info(f"⚡ Fast-publishing post to WhatsApp Channel '{target_name}'...")
 
                 # Ensure page is on WhatsApp Web
                 current_url = self.page.url or ""
                 if "web.whatsapp.com" not in current_url:
-                    logger.info("Navigating to https://web.whatsapp.com/...")
-                    await self.page.goto("https://web.whatsapp.com/", wait_until="domcontentloaded", timeout=45000)
-                    await asyncio.sleep(3)
+                    await self.page.goto("https://web.whatsapp.com/", wait_until="domcontentloaded", timeout=30000)
+                    await asyncio.sleep(1.5)
 
-                # 1. Switch to Channels / Updates panel
-                await self.page.evaluate("""
-                    () => {
-                        const channelsBtn = document.querySelector('button[aria-label="Channels"], button[aria-label="Updates"], button[aria-label="Newsletters"]')
-                            || document.querySelector('span[data-icon="newsletter-outline"], span[data-icon="newsletter"], span[data-icon="status-outline"]')?.closest('button');
-                        if (channelsBtn) channelsBtn.click();
-                    }
-                """)
-                await asyncio.sleep(2)
-
-                # 2. Click the channel item matching target_name in the channels sidebar
-                opened = await self.page.evaluate("""
+                # 1. Fast find and click channel
+                clicked = await self.page.evaluate("""
                     (name) => {
-                        const lowerName = (name || '').toLowerCase().trim();
+                        const lower = (name || '').toLowerCase().trim();
                         const items = Array.from(document.querySelectorAll('div[data-testid="cell-frame-container"], div[role="listitem"], div[data-testid="list-item-newsletter"], div[data-testid="chat-list-item"]'));
-                        
                         for (const item of items) {
-                            const text = (item.innerText || '').toLowerCase();
-                            if (lowerName && text.includes(lowerName)) {
+                            if ((item.innerText || '').toLowerCase().includes(lower)) {
                                 item.click();
                                 return true;
                             }
                         }
-                        
-                        // Fallback: Click first channel item if available
-                        if (items.length > 0) {
-                            items[0].click();
-                            return true;
+                        const channelsBtn = document.querySelector('button[aria-label="Channels"], button[aria-label="Updates"], button[aria-label="Newsletters"]')
+                            || document.querySelector('span[data-icon="newsletter-outline"], span[data-icon="newsletter"]')?.closest('button');
+                        if (channelsBtn) {
+                            channelsBtn.click();
                         }
                         return false;
                     }
                 """, target_name)
 
-                # If not opened from Channels tab, switch to chats and search
-                if not opened:
-                    logger.info(f"Searching for channel '{target_name}' in search bar...")
-                    await self.page.evaluate("""
-                        () => {
-                            const chatsBtn = document.querySelector('button[aria-label="Chats"], span[data-icon="chats-outline"]')?.closest('button');
-                            if (chatsBtn) chatsBtn.click();
-                        }
-                    """)
+                if not clicked:
                     await asyncio.sleep(1)
+                    await self.page.evaluate("""
+                        (name) => {
+                            const lower = (name || '').toLowerCase().trim();
+                            const items = Array.from(document.querySelectorAll('div[data-testid="cell-frame-container"], div[role="listitem"], div[data-testid="list-item-newsletter"], div[data-testid="chat-list-item"]'));
+                            for (const item of items) {
+                                if ((item.innerText || '').toLowerCase().includes(lower)) {
+                                    item.click();
+                                    return true;
+                                }
+                            }
+                            if (items.length > 0) {
+                                items[0].click();
+                                return true;
+                            }
+                            return false;
+                        }
+                    """, target_name)
 
-                    search_box = await self.page.query_selector('div[contenteditable="true"][data-tab="3"], div[data-testid="chat-list-search"]')
-                    if search_box:
-                        await search_box.click()
-                        await search_box.fill(target_name)
-                        await asyncio.sleep(1.5)
-                        await self.page.keyboard.press("Enter")
-                        await asyncio.sleep(2)
-
-                # 3. Wait for the message composer in the active channel pane
+                # 2. Wait for message composer in the active channel pane
                 composer = await self.page.wait_for_selector(
                     'footer div[contenteditable="true"], div[data-testid="conversation-compose-box-input"], footer p.selectable-text, div[contenteditable="true"]',
-                    timeout=20000
+                    timeout=10000
                 )
 
                 if media_url:
-                    logger.info(f"Downloading media from: {media_url[:60]}...")
-                    async with httpx.AsyncClient(timeout=30.0) as client:
+                    logger.info(f"Downloading media: {media_url[:50]}...")
+                    async with httpx.AsyncClient(timeout=20.0) as client:
                         resp = await client.get(media_url)
                         if resp.status_code != 200:
                             raise Exception(f"Failed to download media (HTTP {resp.status_code})")
@@ -888,12 +875,12 @@ class WhatsAppEngine:
                             )
                             if attach_btn:
                                 await attach_btn.click()
-                                await asyncio.sleep(1)
+                                await asyncio.sleep(0.5)
                                 file_input = await self.page.query_selector('input[type="file"]')
 
                         if file_input:
                             await file_input.set_input_files(temp_path)
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(1)
 
                             if content:
                                 caption_box = await self.page.query_selector('div[contenteditable="true"]')
@@ -902,16 +889,16 @@ class WhatsAppEngine:
 
                             send_btn = await self.page.wait_for_selector(
                                 'span[data-icon="send"], span[data-icon="send-light"], div[aria-label="Send"], span[data-icon="send-alt"]',
-                                timeout=15000
+                                timeout=10000
                             )
                             if send_btn:
                                 await send_btn.click()
-                                await asyncio.sleep(3)
+                                await asyncio.sleep(1.5)
                         else:
                             await composer.click()
                             await composer.fill(f"{content}\n{media_url}".strip())
                             await self.page.keyboard.press("Enter")
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(1)
                     finally:
                         if os.path.exists(temp_path):
                             try:
@@ -921,11 +908,11 @@ class WhatsAppEngine:
                 else:
                     await composer.click()
                     await composer.fill(content)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.3)
                     await self.page.keyboard.press("Enter")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
 
-                logger.info(f"✅ Successfully published post to WhatsApp Channel '{target_name}'! Post ID: {post_id}")
+                logger.info(f"✅ Fast published post to WhatsApp Channel '{target_name}'! Post ID: {post_id}")
                 return {
                     "success": True,
                     "platform": "whatsapp_channel",

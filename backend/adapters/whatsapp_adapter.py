@@ -76,23 +76,39 @@ class WhatsAppAdapter(PlatformAdapter):
         except Exception:
             pass
 
-        # ── 4. Build publish payload ──
-        channel_link = os.getenv(
-            "WHATSAPP_CHANNEL_LINK",
-            "https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M"
-        )
+        # ── 4. Build publish payload dynamically for user's connected channel ──
+        channel_id = None
+        channel_link = None
+        try:
+            conn = supabase.table("platform_connections") \
+                .select("platform_account_id, platform_account_name") \
+                .eq("user_id", user_id) \
+                .eq("platform", "whatsapp") \
+                .single() \
+                .execute().data
+            if conn and conn.get("platform_account_id"):
+                channel_id = conn.get("platform_account_id")
+        except Exception:
+            pass
 
-        payload = {}
+        if not channel_id:
+            channel_id = os.getenv("WHATSAPP_CHANNEL_ID", "0029VbDxqHz6hENhNBcZM31M")
+
+        if channel_id and not channel_id.startswith("http"):
+            channel_link = f"https://whatsapp.com/channel/{channel_id}"
+        else:
+            channel_link = os.getenv("WHATSAPP_CHANNEL_LINK", "https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M")
+
+        payload = {
+            "channelId": channel_id,
+            "channelLink": channel_link,
+        }
         if raw_media:
             public_media_url = get_public_media_url(raw_media)
-            payload = {
-                "mediaUrl": public_media_url,
-                "caption": content,
-            }
+            payload["mediaUrl"] = public_media_url
+            payload["caption"] = content
         else:
-            payload = {
-                "text": content,
-            }
+            payload["text"] = content
 
         # ── 5. Call the WhatsApp Channel API (single attempt, no retry) ──
         async with httpx.AsyncClient(timeout=60.0) as client:

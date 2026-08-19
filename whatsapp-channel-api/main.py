@@ -53,15 +53,18 @@ class PublishRequest(BaseModel):
     caption: Optional[str] = None
     mediaUrl: Optional[str] = None
     channelId: Optional[str] = None
+    channelLink: Optional[str] = None
 
 class TextPublishRequest(BaseModel):
     text: str
     channelId: Optional[str] = None
+    channelLink: Optional[str] = None
 
 class MediaPublishRequest(BaseModel):
     mediaUrl: str
     caption: Optional[str] = None
     channelId: Optional[str] = None
+    channelLink: Optional[str] = None
 
 # ── Lifecycle Events ──
 
@@ -128,10 +131,23 @@ async def pair_phone(req: PhonePairRequest):
         raise HTTPException(status_code=400, detail=result.get("error", "Failed to start phone pairing"))
     return {"success": True, "message": result["message"]}
 
+@app.get("/api/channels")
+async def get_channels():
+    """Returns list of all WhatsApp Channels owned/administered by connected WhatsApp account."""
+    result = await whatsapp_engine.get_user_channels()
+    return result
+
 @app.post("/api/session/reset")
 async def reset_session():
     """Force clear stale session data and restart fresh pairing."""
     result = await whatsapp_engine.reset_session()
+    return result
+
+@app.post("/api/logout")
+@app.post("/api/disconnect")
+async def logout():
+    """Logs out of WhatsApp Web and purges session storage."""
+    result = await whatsapp_engine.logout_session()
     return result
 
 # ── Protected Publishing Endpoints ──
@@ -148,7 +164,9 @@ async def publish_unified(req: PublishRequest, _auth: str = Depends(check_api_ke
         result = await whatsapp_engine.publish_to_channel(
             text=req.text,
             media_url=req.mediaUrl,
-            caption=req.caption
+            caption=req.caption,
+            channel_id=req.channelId,
+            channel_link=req.channelLink
         )
         return result
     except Exception as e:
@@ -158,7 +176,11 @@ async def publish_unified(req: PublishRequest, _auth: str = Depends(check_api_ke
 async def publish_text(req: TextPublishRequest, _auth: str = Depends(check_api_key)):
     check_duplicate(req.text)
     try:
-        return await whatsapp_engine.publish_to_channel(text=req.text)
+        return await whatsapp_engine.publish_to_channel(
+            text=req.text,
+            channel_id=req.channelId,
+            channel_link=req.channelLink
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -166,22 +188,19 @@ async def publish_text(req: TextPublishRequest, _auth: str = Depends(check_api_k
 async def publish_image(req: MediaPublishRequest, _auth: str = Depends(check_api_key)):
     check_duplicate(req.caption or "", req.mediaUrl)
     try:
-        return await whatsapp_engine.publish_to_channel(media_url=req.mediaUrl, caption=req.caption)
+        return await whatsapp_engine.publish_to_channel(
+            media_url=req.mediaUrl,
+            caption=req.caption,
+            channel_id=req.channelId,
+            channel_link=req.channelLink
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/channel/list")
 async def list_channels(_auth: str = Depends(check_api_key)):
-    return {
-        "success": True,
-        "channels": [
-            {
-                "id": config.CHANNEL_ID,
-                "name": "Target WhatsApp Channel",
-                "link": config.CHANNEL_LINK,
-            }
-        ]
-    }
+    result = await whatsapp_engine.get_user_channels()
+    return result
 
 # ── Root Live Web Dashboard ──
 

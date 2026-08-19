@@ -107,15 +107,64 @@ async def reset_whatsapp_session(user: Dict[str, Any] = Depends(verify_jwt)):
     except Exception as e:
         raise HTTPException(status_code=503, detail="WhatsApp service offline")
 
-@router.post("/whatsapp/confirm")
-async def confirm_whatsapp_connection(user: Dict[str, Any] = Depends(verify_jwt)):
-    user_id = user["user_id"]
+@router.get("/whatsapp/channels")
+async def get_whatsapp_channels(user: Dict[str, Any] = Depends(verify_jwt)):
     wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f"{wca_url}/api/channels")
+            return resp.json()
+    except Exception as e:
+        return {
+            "success": True,
+            "channels": [
+                {
+                    "id": os.getenv("WHATSAPP_CHANNEL_ID", "0029VbDxqHz6hENhNBcZM31M"),
+                    "name": os.getenv("WHATSAPP_CHANNEL_NAME", "Madhan Tech AI"),
+                    "link": os.getenv("WHATSAPP_CHANNEL_LINK", "https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M"),
+                    "description": "Default Channel",
+                    "isDefault": True
+                }
+            ]
+        }
+
+@router.post("/whatsapp/select-channel")
+async def select_whatsapp_channel(body: dict, user: Dict[str, Any] = Depends(verify_jwt)):
+    user_id = user["user_id"]
     wca_key = os.getenv("WCA_API_KEY", "105eadef-beae-4e08-bcc0-85a06ff80727")
     
-    channel_link = os.getenv("WHATSAPP_CHANNEL_LINK", "https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M")
-    channel_id = os.getenv("WHATSAPP_CHANNEL_ID", "0029VbDxqHz6hENhNBcZM31M")
-    channel_name = os.getenv("WHATSAPP_CHANNEL_NAME", "Madhan Tech AI")
+    channel_id = body.get("channel_id") or os.getenv("WHATSAPP_CHANNEL_ID", "0029VbDxqHz6hENhNBcZM31M")
+    channel_name = body.get("channel_name") or os.getenv("WHATSAPP_CHANNEL_NAME", "Madhan Tech AI")
+    channel_link = body.get("channel_link") or os.getenv("WHATSAPP_CHANNEL_LINK", "https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M")
+    
+    encrypted_token = encrypt_token(wca_key)
+    
+    existing = supabase.table("platform_connections").select("id").eq("user_id", user_id).eq("platform", "whatsapp").execute()
+    db_data = {
+        "access_token": encrypted_token,
+        "platform_account_name": channel_name,
+        "platform_account_id": channel_id,
+        "status": "active"
+    }
+    
+    if existing.data:
+        supabase.table("platform_connections").update(db_data).eq("id", existing.data[0]["id"]).execute()
+    else:
+        db_data["user_id"] = user_id
+        db_data["platform"] = "whatsapp"
+        supabase.table("platform_connections").insert(db_data).execute()
+        
+    return {"success": True, "status": "active", "channel_id": channel_id, "channel_name": channel_name, "channel_link": channel_link}
+
+@router.post("/whatsapp/confirm")
+async def confirm_whatsapp_connection(body: dict = None, user: Dict[str, Any] = Depends(verify_jwt)):
+    user_id = user["user_id"]
+    wca_key = os.getenv("WCA_API_KEY", "105eadef-beae-4e08-bcc0-85a06ff80727")
+    
+    payload = body or {}
+    channel_id = payload.get("channel_id") or os.getenv("WHATSAPP_CHANNEL_ID", "0029VbDxqHz6hENhNBcZM31M")
+    channel_name = payload.get("channel_name") or os.getenv("WHATSAPP_CHANNEL_NAME", "Madhan Tech AI")
+    channel_link = payload.get("channel_link") or os.getenv("WHATSAPP_CHANNEL_LINK", "https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M")
     
     encrypted_token = encrypt_token(wca_key)
     
@@ -262,5 +311,13 @@ async def oauth_callback(platform: str, state: str, code: str = None):
 
 @router.delete("/{platform}")
 async def disconnect_platform(platform: str, user: Dict[str, Any] = Depends(verify_jwt)):
+    if platform == "whatsapp":
+        wca_url = os.getenv("WCA_API_URL", "http://localhost:3001").rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(f"{wca_url}/api/logout")
+        except Exception as e:
+            pass
+
     supabase.table("platform_connections").delete().eq("user_id", user["user_id"]).eq("platform", platform).execute()
     return {"status": "success"}

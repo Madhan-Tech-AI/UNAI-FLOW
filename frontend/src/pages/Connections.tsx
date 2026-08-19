@@ -29,7 +29,6 @@ export default function Connections() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isWaModalOpen, setIsWaModalOpen] = useState(false);
-  const [waPaired, setWaPaired] = useState(false);
   const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
   const [waStatus, setWaStatus] = useState<string>('checking');
   const [pairingCode, setPairingCode] = useState<string | null>(null);
@@ -106,6 +105,36 @@ export default function Connections() {
     return false;
   };
 
+  const [waModalStep, setWaModalStep] = useState<'qr' | 'channels' | 'success'>('qr');
+  const [discoveredChannels, setDiscoveredChannels] = useState<any[]>([]);
+  const [loadingChannels, setLoadingChannels] = useState(false);
+  const [selectedChannel, setSelectedChannel] = useState<any | null>(null);
+  const [savingChannel, setSavingChannel] = useState(false);
+  const [customChannelName, setCustomChannelName] = useState('');
+  const [customChannelLink, setCustomChannelLink] = useState('');
+  const [showCustomChannelInput, setShowCustomChannelInput] = useState(false);
+
+  // Fetch discovered WhatsApp Channels
+  const fetchDiscoveredChannels = async () => {
+    setLoadingChannels(true);
+    try {
+      const res = await fetchApi('/connections/whatsapp/channels');
+      if (res && res.channels && res.channels.length > 0) {
+        setDiscoveredChannels(res.channels);
+      } else {
+        setDiscoveredChannels([
+          { id: 'default', name: 'Madhan Tech AI', link: '', isDefault: true }
+        ]);
+      }
+    } catch {
+      setDiscoveredChannels([
+        { id: 'default', name: 'Madhan Tech AI', link: '', isDefault: true }
+      ]);
+    } finally {
+      setLoadingChannels(false);
+    }
+  };
+
   // WhatsApp status poller + QR/code fetcher when modal is open
   useEffect(() => {
     if (!isWaModalOpen) return;
@@ -133,12 +162,11 @@ export default function Connections() {
 
       if (wa.isReady) {
         setWaStatus('connected');
-        setWaPaired(true);
-        try {
-          await fetchApi('/connections/whatsapp/confirm', { method: 'POST' });
-          await loadConnections();
-        } catch { /* ignore */ }
-        setTimeout(() => { if (!cancelled) { setIsWaModalOpen(false); setWaPaired(false); } }, 2000);
+        // If we are on the QR step, transition to Channel selection step!
+        if (waModalStep === 'qr') {
+          setWaModalStep('channels');
+          fetchDiscoveredChannels();
+        }
         return;
       }
 
@@ -156,7 +184,7 @@ export default function Connections() {
     };
 
     checkWaStatus();
-    interval = setInterval(checkWaStatus, 4000);
+    interval = setInterval(checkWaStatus, 2500);
 
     return () => {
       cancelled = true;
@@ -166,7 +194,7 @@ export default function Connections() {
         qrBlobUrlRef.current = null;
       }
     };
-  }, [isWaModalOpen]);
+  }, [isWaModalOpen, waModalStep]);
 
   const handlePhoneSubmit = async () => {
     if (!phoneNumber.trim()) { setPhoneError('Please enter your phone number'); return; }
@@ -202,12 +230,50 @@ export default function Connections() {
     }
   };
 
+  const handleSelectChannel = async (channel: any) => {
+    setSavingChannel(true);
+    try {
+      await fetchApi('/connections/whatsapp/select-channel', {
+        method: 'POST',
+        body: JSON.stringify({
+          channel_id: channel.id,
+          channel_name: channel.name,
+          channel_link: channel.link || '',
+        }),
+      });
+      setSelectedChannel(channel);
+      setWaModalStep('success');
+      await loadConnections();
+      setTimeout(() => {
+        setIsWaModalOpen(false);
+        setWaModalStep('qr');
+      }, 1800);
+    } catch (err) {
+      alert("Failed to save channel selection. Please try again.");
+    } finally {
+      setSavingChannel(false);
+    }
+  };
+
+  const handleCustomChannelSubmit = async () => {
+    if (!customChannelName.trim()) {
+      alert("Please enter a Channel Name");
+      return;
+    }
+    await handleSelectChannel({
+      id: customChannelName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase(),
+      name: customChannelName.trim(),
+      link: customChannelLink.trim(),
+    });
+  };
+
   const handleConnect = async (platformId: string) => {
     if (platformId === 'whatsapp') {
       setIsWaModalOpen(true);
-      setWaPaired(false);
       setQrImageUrl(null);
       setWaStatus('checking');
+      setWaModalStep('qr');
+      setShowCustomChannelInput(false);
       return;
     }
     try {
@@ -220,8 +286,14 @@ export default function Connections() {
     }
   };
 
+  const handleSwitchChannel = () => {
+    setIsWaModalOpen(true);
+    setWaModalStep('channels');
+    fetchDiscoveredChannels();
+  };
+
   const handleDisconnect = async (platformId: string) => {
-    if (!confirm(`Are you sure you want to disconnect ${platformId}?`)) return;
+    if (!confirm(`Are you sure you want to disconnect ${platformId}? This will remove the connection and log out the session.`)) return;
     try {
       await fetchApi(`/connections/${platformId}`, { method: 'DELETE' });
       setConnections(prev => prev.filter(c => c.platform !== platformId));
@@ -384,6 +456,12 @@ export default function Connections() {
               <div className="flex items-center gap-3">
                 {connected ? (
                   <>
+                    {platform.id === 'whatsapp' && (
+                      <button className="btn-secondary" onClick={handleSwitchChannel}>
+                        <MessageCircle size={15} style={{ color: '#25D366' }} />
+                        <span>Switch Channel</span>
+                      </button>
+                    )}
                     <button className="btn-secondary" onClick={() => handleTestSync(platform.id)}>
                       <ExternalLink size={15} />
                       <span>Test Sync</span>
@@ -419,18 +497,18 @@ export default function Connections() {
               width: '44px',
               height: '44px',
               borderRadius: '12px',
-              backgroundColor: '#e2e8f0',
+              backgroundColor: '#f1f5f9',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#475569'
+              color: '#64748b'
             }}
           >
-            <Plus size={22} />
+            <Plus size={20} />
           </div>
           <div>
-            <h4 className="font-bold text-base text-main">Custom Webhook / REST API Connection</h4>
-            <p className="text-xs text-secondary mt-1">Connect LinkedIn, TikTok, or custom CRM webhooks to your UNAI Flow workflow engine.</p>
+            <h4 className="font-bold text-base text-main">Connect New Channel</h4>
+            <p className="text-sm text-secondary mt-0.5">Need a custom social connector or webhook integration?</p>
           </div>
         </div>
 
@@ -439,7 +517,7 @@ export default function Connections() {
         </button>
       </div>
 
-      {/* WhatsApp QR Pairing Modal */}
+      {/* WhatsApp Multi-Step Pairing & Channel Selection Modal */}
       {isWaModalOpen && (
         <div
           style={{
@@ -461,7 +539,7 @@ export default function Connections() {
             className="card"
             style={{
               width: '100%',
-              maxWidth: '460px',
+              maxWidth: waModalStep === 'channels' ? '540px' : '460px',
               backgroundColor: '#ffffff',
               borderRadius: '20px',
               padding: '2rem',
@@ -490,8 +568,14 @@ export default function Connections() {
                   <MessageCircle size={22} />
                 </div>
                 <div>
-                  <h3 className="font-bold text-lg text-main">Connect WhatsApp</h3>
-                  <p className="text-xs text-secondary">Pair channel: Madhan Tech AI</p>
+                  <h3 className="font-bold text-lg text-main">
+                    {waModalStep === 'channels' ? 'Select WhatsApp Channel' : 'Connect WhatsApp'}
+                  </h3>
+                  <p className="text-xs text-secondary">
+                    {waModalStep === 'channels'
+                      ? 'Choose which channel to connect to UNAI Flow'
+                      : 'Scan QR code from WhatsApp > Linked Devices'}
+                  </p>
                 </div>
               </div>
               <button
@@ -508,36 +592,8 @@ export default function Connections() {
               </button>
             </div>
 
-            {/* Modal Content */}
-            {waPaired ? (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  padding: '2rem 1rem',
-                  gap: '1rem',
-                  textAlign: 'center'
-                }}
-              >
-                <div
-                  style={{
-                    width: '64px',
-                    height: '64px',
-                    borderRadius: '50%',
-                    backgroundColor: '#dcfce7',
-                    color: '#25D366',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                >
-                  <CheckCircle2 size={36} />
-                </div>
-                <h4 className="font-bold text-lg text-main">Connected Successfully!</h4>
-                <p className="text-sm text-secondary">Your WhatsApp Channel is now linked to UNAI Flow.</p>
-              </div>
-            ) : (
+            {/* Modal Step 1: QR / Phone Code */}
+            {waModalStep === 'qr' && (
               <>
                 <div
                   style={{
@@ -584,7 +640,7 @@ export default function Connections() {
                         <>
                           <div style={{ textAlign: 'center', width: '100%' }}>
                             <p className="font-semibold text-main mb-2">Link with Phone Number</p>
-                            <p className="text-xs text-secondary mb-4">Enter the phone number of the WhatsApp account you want to link. Include country code (e.g. +1234567890).</p>
+                            <p className="text-xs text-secondary mb-4">Enter your WhatsApp phone number with country code (e.g. +1234567890).</p>
                             
                             <input
                               type="text"
@@ -635,7 +691,7 @@ export default function Connections() {
                             {phoneSubmitted && (
                               <p className="text-xs text-secondary mt-3 flex items-center justify-center gap-1.5">
                                 <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-                                Gateway is processing request (may take ~30s)...
+                                Gateway is processing request (may take ~20s)...
                               </p>
                             )}
                           </div>
@@ -763,6 +819,183 @@ export default function Connections() {
                   </div>
                 )}
               </>
+            )}
+
+            {/* Modal Step 2: Channel Selection */}
+            {waModalStep === 'channels' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-main">Your WhatsApp Channels</span>
+                  <button
+                    onClick={fetchDiscoveredChannels}
+                    disabled={loadingChannels}
+                    className="text-xs text-primary flex items-center gap-1 hover:underline"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                  >
+                    <RefreshCw size={12} className={loadingChannels ? 'animate-spin' : ''} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+
+                {loadingChannels ? (
+                  <div className="flex flex-col items-center justify-center p-8 gap-3">
+                    <Loader2 size={32} className="animate-spin" style={{ color: '#25D366' }} />
+                    <p className="text-sm text-secondary">Discovering channels on your account...</p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '320px', overflowY: 'auto' }}>
+                    {discoveredChannels.map((ch, idx) => (
+                      <div
+                        key={ch.id || idx}
+                        style={{
+                          padding: '1rem',
+                          borderRadius: '12px',
+                          border: '1px solid #e2e8f0',
+                          backgroundColor: '#f8fafc',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '1rem'
+                        }}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div
+                            style={{
+                              width: '38px',
+                              height: '38px',
+                              borderRadius: '10px',
+                              backgroundColor: '#dcfce7',
+                              color: '#25D366',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '1.1rem'
+                            }}
+                          >
+                            📢
+                          </div>
+                          <div>
+                            <p className="font-bold text-sm text-main">{ch.name}</p>
+                            <p className="text-xs text-secondary">{ch.description || 'WhatsApp Channel'}</p>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => handleSelectChannel(ch)}
+                          disabled={savingChannel}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            backgroundColor: '#25D366',
+                            color: '#ffffff',
+                            borderRadius: '8px',
+                            border: 'none',
+                            fontWeight: 600,
+                            fontSize: '0.85rem',
+                            cursor: savingChannel ? 'wait' : 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem'
+                          }}
+                        >
+                          {savingChannel && selectedChannel?.id === ch.id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <CheckCircle2 size={14} />
+                          )}
+                          <span>Select</span>
+                        </button>
+                      </div>
+                    ))}
+
+                    {/* Custom Channel Input Toggle */}
+                    <div style={{ marginTop: '0.5rem' }}>
+                      {!showCustomChannelInput ? (
+                        <button
+                          onClick={() => setShowCustomChannelInput(true)}
+                          className="text-xs text-primary hover:underline font-medium"
+                          style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                        >
+                          + Connect a different channel by Name / Link
+                        </button>
+                      ) : (
+                        <div style={{ padding: '1rem', borderRadius: '12px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                          <p className="text-xs font-semibold text-main">Connect by Custom Channel Info</p>
+                          <input
+                            type="text"
+                            placeholder="Channel Name (e.g. My Tech Community)"
+                            value={customChannelName}
+                            onChange={(e) => setCustomChannelName(e.target.value)}
+                            style={{ padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                          />
+                          <input
+                            type="text"
+                            placeholder="Channel Link (optional, e.g. https://whatsapp.com/channel/...)"
+                            value={customChannelLink}
+                            onChange={(e) => setCustomChannelLink(e.target.value)}
+                            style={{ padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                          />
+                          <div className="flex items-center gap-2 justify-end">
+                            <button
+                              onClick={() => setShowCustomChannelInput(false)}
+                              className="text-xs text-secondary hover:underline"
+                              style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={handleCustomChannelSubmit}
+                              disabled={savingChannel || !customChannelName.trim()}
+                              style={{
+                                padding: '0.4rem 0.85rem',
+                                backgroundColor: '#25D366',
+                                color: 'white',
+                                borderRadius: '6px',
+                                border: 'none',
+                                fontSize: '0.85rem',
+                                fontWeight: 600,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Connect
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Modal Step 3: Success Confirmation */}
+            {waModalStep === 'success' && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  padding: '2rem 1rem',
+                  gap: '1rem',
+                  textAlign: 'center'
+                }}
+              >
+                <div
+                  style={{
+                    width: '64px',
+                    height: '64px',
+                    borderRadius: '50%',
+                    backgroundColor: '#dcfce7',
+                    color: '#25D366',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <CheckCircle2 size={36} />
+                </div>
+                <h4 className="font-bold text-lg text-main">Connected to {selectedChannel?.name || 'Channel'}!</h4>
+                <p className="text-sm text-secondary">Posts created in UNAI Flow will now broadcast to this channel.</p>
+              </div>
             )}
           </div>
         </div>

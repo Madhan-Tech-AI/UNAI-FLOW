@@ -603,20 +603,206 @@ class WhatsAppEngine:
     async def get_qr_image(self) -> Optional[bytes]:
         return self.qr_png_bytes
 
-    async def publish_to_channel(self, text: Optional[str] = None, media_url: Optional[str] = None, caption: Optional[str] = None) -> Dict[str, Any]:
-        """Publishes message or media to configured WhatsApp Channel."""
+    async def get_user_channels(self) -> Dict[str, Any]:
+        """
+        Discovers all WhatsApp Channels owned or administered by the connected WhatsApp account.
+        Scrapes channels from WhatsApp Web's Channels/Newsletter panel.
+        """
+        if not self.is_ready or not self.page:
+            return {
+                "success": False,
+                "error": "WhatsApp is not connected. Scan QR code to connect.",
+                "channels": []
+            }
+
+        async with self._lock:
+            try:
+                logger.info("🔍 Discovering WhatsApp Channels from connected account...")
+
+                # 1. Click the Channels / Updates navigation button
+                await self.page.evaluate("""
+                    () => {
+                        const channelsBtn = document.querySelector('button[aria-label="Channels"], button[aria-label="Updates"], button[aria-label="Newsletters"]')
+                            || document.querySelector('span[data-icon="newsletter-outline"], span[data-icon="newsletter"], span[data-icon="status-outline"]')?.closest('button');
+                        if (channelsBtn) channelsBtn.click();
+                    }
+                """)
+                await asyncio.sleep(2)
+
+                # 2. Extract channels from the sidebar / list
+                channels_data = await self.page.evaluate("""
+                    () => {
+                        const list = [];
+                        // Query all channel / newsletter list items
+                        const channelItems = document.querySelectorAll(
+                            'div[data-testid="cell-frame-container"], div[role="listitem"], div[data-testid="list-item-newsletter"]'
+                        );
+
+                        channelItems.forEach((el, index) => {
+                            const titleEl = el.querySelector('span[title], div[title], span.x1rg5ohu, span[dir="auto"]');
+                            const name = titleEl ? (titleEl.getAttribute('title') || titleEl.innerText || '').trim() : '';
+                            if (!name) return;
+
+                            // Skip general status / non-channel items
+                            const lower = name.toLowerCase();
+                            if (lower === 'my status' || lower === 'status' || lower === 'channels' || lower === 'find channels') return;
+
+                            const descEl = el.querySelector('span[data-testid="last-msg-status"], p, span.selectable-text');
+                            const description = descEl ? descEl.innerText.trim() : '';
+
+                            // Generate clean ID from name or index
+                            const id = name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+
+                            list.push({
+                                id: id,
+                                name: name,
+                                description: description,
+                                link: ''
+                            });
+                        });
+
+                        return list;
+                    }
+                """)
+
+                # Return back to main chat list
+                await self.page.evaluate("""
+                    () => {
+                        const chatsBtn = document.querySelector('button[aria-label="Chats"], span[data-icon="chats-outline"]')?.closest('button');
+                        if (chatsBtn) chatsBtn.click();
+                    }
+                """)
+
+                # Build final channel list, including configured channel
+                discovered = []
+                seen_names = set()
+
+                # Always include the primary configured channel
+                default_name = getattr(config, "CHANNEL_NAME", "Madhan Tech AI")
+                default_id = config.CHANNEL_ID
+                default_link = config.CHANNEL_LINK
+
+                discovered.append({
+                    "id": default_id,
+                    "name": default_name,
+                    "link": default_link,
+                    "description": "Configured Target Channel",
+                    "isDefault": True,
+                })
+                seen_names.add(default_name.lower())
+                seen_names.add(default_id.lower())
+
+                for ch in channels_data:
+                    cname = ch.get("name", "").strip()
+                    if cname and cname.lower() not in seen_names:
+                        seen_names.add(cname.lower())
+                        discovered.append({
+                            "id": ch.get("id") or f"ch_{len(discovered) + 1}",
+                            "name": cname,
+                            "link": ch.get("link") or default_link,
+                            "description": ch.get("description", "WhatsApp Channel"),
+                            "isDefault": False,
+                        })
+
+                logger.info(f"✅ Discovered {len(discovered)} WhatsApp Channel(s).")
+                return {
+                    "success": True,
+                    "channels": discovered
+                }
+
+            except Exception as e:
+                logger.error(f"Error discovering channels: {e}")
+                return {
+                    "success": True,
+                    "channels": [
+                        {
+                            "id": config.CHANNEL_ID,
+                            "name": getattr(config, "CHANNEL_NAME", "Madhan Tech AI"),
+                            "link": config.CHANNEL_LINK,
+                            "description": "Target Channel",
+                            "isDefault": True,
+                        }
+                    ]
+                }
+
+    async def logout_session(self) -> Dict[str, Any]:
+        """Gracefully logs out of WhatsApp Web and purges session storage."""
+        logger.warning("🚪 Logging out WhatsApp Web session...")
+        async with self._lock:
+            try:
+                if self.page and not self.page.is_closed():
+                    try:
+                        # Attempt UI logout
+                        await self.page.evaluate("""
+                            () => {
+                                const menuBtn = document.querySelector('button[aria-label="Menu"], span[data-icon="menu"]')?.closest('button');
+                                if (menuBtn) {
+                                    menuBtn.click();
+                                    setTimeout(() => {
+                                        const items = Array.from(document.querySelectorAll('div[role="button"], li'));
+                                        const logout = items.find(i => (i.innerText || '').toLowerCase().includes('log out'));
+                                        if (logout) logout.click();
+                                    }, 500);
+                                }
+                            }
+                        """)
+                        await asyncio.sleep(2)
+                    except Exception:
+                        pass
+
+                if self._monitor_task:
+                    self._monitor_task.cancel()
+                if self.browser_context:
+                    await self.browser_context.close()
+                if self.playwright:
+                    await self.playwright.stop()
+                    self.playwright = None
+
+                # Purge session directory
+                if os.path.exists(config.SESSION_DIR):
+                    shutil.rmtree(config.SESSION_DIR, ignore_errors=True)
+
+                self.connection_state = "disconnected"
+                self.is_ready = False
+                self.current_qr = None
+                self.qr_png_bytes = None
+                self.pairing_code = None
+                self.user_info = None
+
+                # Re-initialize clean engine
+                asyncio.create_task(self.initialize())
+                logger.info("✅ Session successfully logged out. Ready for new account pairing.")
+                return {"success": True, "message": "WhatsApp session disconnected successfully."}
+            except Exception as e:
+                logger.error(f"Error during logout: {e}")
+                return {"success": False, "error": str(e)}
+
+    async def publish_to_channel(
+        self,
+        text: Optional[str] = None,
+        media_url: Optional[str] = None,
+        caption: Optional[str] = None,
+        channel_id: Optional[str] = None,
+        channel_link: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Publishes message or media to a dynamic WhatsApp Channel."""
         if not self.is_ready:
             raise Exception("WhatsApp is not connected. Please link your device first.")
+
+        target_link = channel_link or config.CHANNEL_LINK
+        target_id = channel_id or config.CHANNEL_ID
+        if not target_link and target_id:
+            target_link = f"https://whatsapp.com/channel/{target_id}"
 
         content = caption or text or ""
         post_id = f"wa_channel_{int(time.time() * 1000)}"
 
         async with self._lock:
             try:
-                logger.info(f"📢 Publishing post to Channel ({config.CHANNEL_LINK})...")
+                logger.info(f"📢 Publishing post to Channel ({target_link})...")
                 
-                # Navigate to the Channel URL
-                await self.page.goto(config.CHANNEL_LINK, wait_until="domcontentloaded", timeout=45000)
+                # Navigate to the target Channel URL
+                await self.page.goto(target_link, wait_until="domcontentloaded", timeout=45000)
                 await asyncio.sleep(3)
 
                 # Look for the message composer
@@ -682,13 +868,13 @@ class WhatsAppEngine:
                     await self.page.keyboard.press("Enter")
                     await asyncio.sleep(2)
 
-                logger.info(f"✅ Successfully published post to WhatsApp Channel! Post ID: {post_id}")
+                logger.info(f"✅ Successfully published post to WhatsApp Channel ({target_id})! Post ID: {post_id}")
                 return {
                     "success": True,
                     "platform": "whatsapp_channel",
                     "messageId": post_id,
-                    "channelId": config.CHANNEL_ID,
-                    "channelLink": config.CHANNEL_LINK,
+                    "channelId": target_id,
+                    "channelLink": target_link,
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 }
 
@@ -707,3 +893,4 @@ class WhatsAppEngine:
 
 # Global singleton
 whatsapp_engine = WhatsAppEngine()
+

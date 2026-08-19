@@ -471,7 +471,7 @@ export default function Connections() {
                     alignItems: 'center',
                     gap: '1rem',
                     backgroundColor: '#f8fafc',
-                    padding: '1.5rem',
+                    padding: '1.25rem',
                     borderRadius: '16px',
                     border: '1px solid #e2e8f0'
                   }}
@@ -495,33 +495,51 @@ export default function Connections() {
                     <img
                       src={`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/connections/whatsapp/qr-image?t=${Date.now()}`}
                       alt="WhatsApp QR Code"
-                      style={{ width: '100%', height: '100%', borderRadius: '8px' }}
+                      style={{ width: '100%', height: '100%', borderRadius: '8px', objectFit: 'contain' }}
                       onError={(e: any) => {
                         e.target.style.display = 'none';
-                        if (e.target.nextSibling) e.target.nextSibling.style.display = 'flex';
+                        const loader = document.getElementById('qrLoadingState');
+                        if (loader) loader.style.display = 'flex';
+                      }}
+                      onLoad={(e: any) => {
+                        e.target.style.display = 'block';
+                        const loader = document.getElementById('qrLoadingState');
+                        if (loader) loader.style.display = 'none';
                       }}
                     />
                     <div
+                      id="qrLoadingState"
                       style={{
-                        display: 'none',
+                        display: 'flex',
                         flexDirection: 'column',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: '0.5rem',
+                        gap: '0.75rem',
                         color: '#64748b',
                         fontSize: '0.85rem',
                         textAlign: 'center',
                         padding: '1rem'
                       }}
                     >
-                      <Loader2 size={24} className="animate-spin text-primary" />
-                      <span>Generating live QR code...</span>
+                      <Loader2 size={28} className="animate-spin text-primary" />
+                      <span>Loading live QR code...<br/><span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Starting gateway on Render</span></span>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs text-secondary font-medium">
-                    <span className="dot" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#25D366' }}></span>
-                    <span>QR updates automatically</span>
+                  <div className="flex items-center justify-between w-full text-xs text-secondary font-medium px-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="dot" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#25D366' }}></span>
+                      <span>Live Gateway</span>
+                    </div>
+                    <a
+                      href="https://unai-whatsapp-channelapi.onrender.com"
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: '#25D366', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px' }}
+                    >
+                      <span>Open Direct Gateway</span>
+                      <ExternalLink size={12} />
+                    </a>
                   </div>
                 </div>
 
@@ -531,7 +549,7 @@ export default function Connections() {
                   <ol style={{ paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                     <li>Open <strong>WhatsApp</strong> on your phone</li>
                     <li>Go to <strong>Settings</strong> or <strong>⋮ (3 dots)</strong> &gt; <strong>Linked Devices</strong></li>
-                    <li>Tap <strong>Link a Device</strong> and point camera here</li>
+                    <li>Tap <strong>Link a Device</strong> and point camera at the QR code</li>
                   </ol>
                 </div>
               </>

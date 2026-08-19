@@ -56,14 +56,27 @@ class WhatsAppEngine:
                 "--disable-blink-features=AutomationControlled",
             ]
 
-            self.browser_context = await self.playwright.chromium.launch_persistent_context(
-                user_data_dir=config.SESSION_DIR,
-                headless=True,
-                user_agent=user_agent,
-                args=launch_args,
-                viewport={"width": 1280, "height": 800},
-                ignore_default_args=["--enable-automation"],
-            )
+            try:
+                self.browser_context = await self.playwright.chromium.launch_persistent_context(
+                    user_data_dir=config.SESSION_DIR,
+                    headless=True,
+                    user_agent=user_agent,
+                    args=launch_args,
+                    viewport={"width": 1280, "height": 800},
+                    ignore_default_args=["--enable-automation"],
+                )
+            except Exception as launch_err:
+                logger.warning(f"Initial launch failed ({launch_err}), attempting to install Playwright chromium...")
+                import subprocess
+                subprocess.run(["playwright", "install", "chromium"], check=False)
+                self.browser_context = await self.playwright.chromium.launch_persistent_context(
+                    user_data_dir=config.SESSION_DIR,
+                    headless=True,
+                    user_agent=user_agent,
+                    args=launch_args,
+                    viewport={"width": 1280, "height": 800},
+                    ignore_default_args=["--enable-automation"],
+                )
 
             if len(self.browser_context.pages) > 0:
                 self.page = self.browser_context.pages[0]

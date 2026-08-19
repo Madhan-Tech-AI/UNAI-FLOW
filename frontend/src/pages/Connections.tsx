@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, AtSign, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, Zap, X } from 'lucide-react';
+import { Camera, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, X } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 import { supabase } from '../lib/supabaseClient';
 
@@ -29,7 +29,6 @@ export default function Connections() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isWaModalOpen, setIsWaModalOpen] = useState(false);
-  const [waQr, setWaQr] = useState<string | null>(null);
   const [waPaired, setWaPaired] = useState(false);
   const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
   const [waStatus, setWaStatus] = useState<string>('checking');
@@ -173,7 +172,6 @@ export default function Connections() {
     if (platformId === 'whatsapp') {
       setIsWaModalOpen(true);
       setWaPaired(false);
-      setWaQr(null);
       setQrImageUrl(null);
       setWaStatus('checking');
       return;

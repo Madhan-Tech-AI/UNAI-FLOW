@@ -131,7 +131,7 @@ class WhatsAppAdapter(PlatformAdapter):
         last_error = None
         for wca_url in candidate_urls:
             # Try publishing with automatic wake-up retry for Render cold starts
-            max_retries = 3 if "onrender.com" in wca_url else 1
+            max_retries = 6 if "onrender.com" in wca_url else 1
             for attempt in range(max_retries):
                 try:
                     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -160,7 +160,7 @@ class WhatsAppAdapter(PlatformAdapter):
                             last_error = f"Gateway at {wca_url} is waking up (HTTP {resp.status_code})."
                             if attempt < max_retries - 1:
                                 import asyncio
-                                await asyncio.sleep(6)  # Give Render time to spin up
+                                await asyncio.sleep(8)  # Render free tier cold starts take ~25-45s
                                 continue
                         elif resp.status_code in (400, 500):
                             try:
@@ -172,7 +172,7 @@ class WhatsAppAdapter(PlatformAdapter):
                 except (httpx.ConnectError, httpx.ConnectTimeout):
                     if attempt < max_retries - 1:
                         import asyncio
-                        await asyncio.sleep(5)
+                        await asyncio.sleep(8)
                         continue
                     break
                 except httpx.TimeoutException:

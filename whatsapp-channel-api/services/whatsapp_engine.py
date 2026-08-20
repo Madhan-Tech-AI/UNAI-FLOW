@@ -287,31 +287,44 @@ class WhatsAppEngine:
                 # DO NOT match generic elements like 'header', 'nav', '#app' — those exist on the QR login page too.
                 login_check = await self.page.evaluate("""
                     () => {
-                        // STRICT: These elements ONLY exist after successful WhatsApp authentication
-                        // #pane-side = the left sidebar with chat list
-                        // #side = the side panel container
-                        // chat-list = the actual chat list
-                        // chatlist-header = header above chat list (with search box)
-                        const strictSelectors = [
+                        // 1. Core container selectors (recent UI updates might have changed these)
+                        const coreSelectors = [
                             '#pane-side',
                             '#side',
                             'div[data-testid="chat-list"]',
                             'div[data-testid="chatlist-header"]',
-                            'div[data-testid="conversation-panel-wrapper"]',
+                            'div[data-testid="conversation-panel-wrapper"]'
                         ];
-                        
-                        for (const sel of strictSelectors) {
+                        for (const sel of coreSelectors) {
                             if (document.querySelector(sel)) return true;
                         }
 
-                        // Check for the actual chat message composer (only exists when in a chat)
+                        // 2. Navigation bar icons & buttons (these are highly specific to the logged-in app)
+                        const navSelectors = [
+                            'button[aria-label="Chats"]', 
+                            'button[aria-label="Channels"]', 
+                            'button[aria-label="Status"]', 
+                            'button[aria-label="Settings"]', 
+                            'button[aria-label="Communities"]',
+                            'span[data-icon="chats-outline"]', 
+                            'span[data-icon="newsletter-outline"]', 
+                            'span[data-icon="community-outline"]', 
+                            'span[data-icon="status-outline"]', 
+                            'span[data-icon="menu"]'
+                        ];
+                        for (const sel of navSelectors) {
+                            if (document.querySelector(sel)) return true;
+                        }
+
+                        // 3. Message composer (exists when a chat is open)
                         if (document.querySelector('footer div[contenteditable="true"]')) return true;
                         if (document.querySelector('div[contenteditable="true"][data-tab="10"]')) return true;
 
-                        // Check for intro screen (shown when logged in but no chat selected)
+                        // 4. Intro screen (shown when logged in but no chat is selected)
                         if (document.querySelector('div[data-testid="intro-title"]')) return true;
+                        if (document.querySelector('div[data-testid="intro-text"]')) return true;
 
-                        // Auto-dismiss blocking promo/notification dialogs
+                        // 5. Auto-dismiss blocking promo/notification dialogs
                         const dismissButtons = Array.from(document.querySelectorAll('button, div[role="button"]'));
                         const notNow = dismissButtons.find(b => {
                             const t = (b.innerText || '').toLowerCase();

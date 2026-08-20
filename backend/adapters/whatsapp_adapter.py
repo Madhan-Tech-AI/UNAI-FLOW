@@ -130,40 +130,54 @@ class WhatsAppAdapter(PlatformAdapter):
 
         last_error = None
         for wca_url in candidate_urls:
-            try:
-                async with httpx.AsyncClient(timeout=45.0) as client:
-                    resp = await client.post(
-                        f"{wca_url}/api/channel/publish",
-                        headers={
-                            "X-API-Key": wca_key,
-                            "Content-Type": "application/json",
-                        },
-                        json=payload,
-                    )
-                    
-                    if resp.status_code == 200:
-                        try:
-                            data = resp.json()
-                            if data.get("success"):
-                                return {
-                                    "post_id": data.get("messageId", f"wa_{automation_id}"),
-                                    "post_url": channel_link,
-                                }
-                            last_error = data.get("detail") or data.get("error") or data.get("message")
-                        except Exception:
-                            pass
-                    elif resp.status_code == 400 or resp.status_code == 500:
-                        try:
-                            data = resp.json()
-                            last_error = data.get("detail") or data.get("error") or data.get("message")
-                        except Exception:
-                            last_error = f"Gateway returned status {resp.status_code}"
-                    elif resp.status_code == 502 or resp.status_code == 503:
-                        last_error = f"Gateway at {wca_url} is restarting or sleeping (HTTP {resp.status_code})."
-            except (httpx.ConnectError, httpx.ConnectTimeout):
-                continue
-            except httpx.TimeoutException:
-                last_error = f"WhatsApp Gateway request timed out."
+            # Try publishing with automatic wake-up retry for Render cold starts
+            max_retries = 3 if "onrender.com" in wca_url else 1
+            for attempt in range(max_retries):
+                try:
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        resp = await client.post(
+                            f"{wca_url}/api/channel/publish",
+                            headers={
+                                "X-API-Key": wca_key,
+                                "Content-Type": "application/json",
+                            },
+                            json=payload,
+                        )
+                        
+                        if resp.status_code == 200:
+                            try:
+                                data = resp.json()
+                                if data.get("success"):
+                                    return {
+                                        "post_id": data.get("messageId", f"wa_{automation_id}"),
+                                        "post_url": channel_link,
+                                    }
+                                last_error = data.get("detail") or data.get("error") or data.get("message")
+                            except Exception:
+                                pass
+                            break
+                        elif resp.status_code in (502, 503):
+                            last_error = f"Gateway at {wca_url} is waking up (HTTP {resp.status_code})."
+                            if attempt < max_retries - 1:
+                                import asyncio
+                                await asyncio.sleep(6)  # Give Render time to spin up
+                                continue
+                        elif resp.status_code in (400, 500):
+                            try:
+                                data = resp.json()
+                                last_error = data.get("detail") or data.get("error") or data.get("message")
+                            except Exception:
+                                last_error = f"Gateway returned status {resp.status_code}"
+                            break
+                except (httpx.ConnectError, httpx.ConnectTimeout):
+                    if attempt < max_retries - 1:
+                        import asyncio
+                        await asyncio.sleep(5)
+                        continue
+                    break
+                except httpx.TimeoutException:
+                    last_error = f"WhatsApp Gateway request timed out."
+                    break
 
         if last_error:
             if "not connected" in str(last_error).lower() or "qr code" in str(last_error).lower():

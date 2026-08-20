@@ -101,16 +101,21 @@ class WhatsAppAdapter(PlatformAdapter):
                         }
                     else:
                         err_detail = data.get("error", {}).get("message", resp.text)
-                        print(f"Meta Cloud API WhatsApp warning/error: {err_detail}")
+                        print(f"Meta Cloud API WhatsApp warning: {err_detail}")
                 except Exception as meta_err:
                     print(f"Meta Cloud API direct call failed: {meta_err}")
 
-        # ── 4. Path B: WhatsApp Channel Gateway ──
-        wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
+        # ── 4. Path B: WhatsApp Channel Gateway (Local or Cloud) ──
         wca_key = os.getenv("WCA_API_KEY", "105eadef-beae-4e08-bcc0-85a06ff80727")
-
-        if not wca_url:
-            raise Exception("WhatsApp service endpoint not configured.")
+        candidate_urls = []
+        
+        # 1. Local gateway (fastest, zero cold starts)
+        candidate_urls.append("http://127.0.0.1:3001")
+        
+        # 2. Deployed cloud gateway
+        cloud_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
+        if cloud_url and cloud_url not in candidate_urls:
+            candidate_urls.append(cloud_url)
 
         payload = {
             "channelId": channel_id,
@@ -123,34 +128,51 @@ class WhatsAppAdapter(PlatformAdapter):
         else:
             payload["text"] = content
 
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        last_error = None
+        for wca_url in candidate_urls:
             try:
-                resp = await client.post(
-                    f"{wca_url}/api/channel/publish",
-                    headers={
-                        "X-API-Key": wca_key,
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-            except httpx.ConnectError:
-                raise Exception(
-                    f"WhatsApp service connection failed. Gateway at {wca_url} is currently offline."
-                )
+                async with httpx.AsyncClient(timeout=45.0) as client:
+                    resp = await client.post(
+                        f"{wca_url}/api/channel/publish",
+                        headers={
+                            "X-API-Key": wca_key,
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    
+                    if resp.status_code == 200:
+                        try:
+                            data = resp.json()
+                            if data.get("success"):
+                                return {
+                                    "post_id": data.get("messageId", f"wa_{automation_id}"),
+                                    "post_url": channel_link,
+                                }
+                            last_error = data.get("detail") or data.get("error") or data.get("message")
+                        except Exception:
+                            pass
+                    elif resp.status_code == 400 or resp.status_code == 500:
+                        try:
+                            data = resp.json()
+                            last_error = data.get("detail") or data.get("error") or data.get("message")
+                        except Exception:
+                            last_error = f"Gateway returned status {resp.status_code}"
+                    elif resp.status_code == 502 or resp.status_code == 503:
+                        last_error = f"Gateway at {wca_url} is restarting or sleeping (HTTP {resp.status_code})."
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                continue
             except httpx.TimeoutException:
-                raise Exception("WhatsApp publish request timed out.")
+                last_error = f"WhatsApp Gateway request timed out."
 
-        try:
-            data = resp.json()
-        except Exception:
-            raise Exception(f"WhatsApp service returned unexpected response (HTTP {resp.status_code}).")
+        if last_error:
+            if "not connected" in str(last_error).lower() or "qr code" in str(last_error).lower():
+                raise Exception(
+                    "WhatsApp is not linked to your device yet. Please open Connections and scan the QR code under WhatsApp > Linked Devices to link your phone."
+                )
+            raise Exception(f"WhatsApp publish error: {last_error}")
 
-        if resp.status_code == 200 and data.get("success"):
-            return {
-                "post_id": data.get("messageId", f"wa_{automation_id}"),
-                "post_url": channel_link,
-            }
-
-        error = data.get("error") if isinstance(data.get("error"), dict) else {}
-        error_msg = error.get("message") or data.get("detail") or data.get("message") or f"HTTP {resp.status_code}"
-        raise Exception(f"WhatsApp publish failed: {error_msg}")
+        raise Exception(
+            "WhatsApp service is not running or device is not linked. "
+            "Please open Connections, scan the QR code to link your phone, and make sure the gateway is online."
+        )

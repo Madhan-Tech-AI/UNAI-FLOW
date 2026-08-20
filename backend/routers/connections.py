@@ -9,6 +9,13 @@ import httpx
 
 router = APIRouter(prefix="/connections", tags=["Connections"])
 
+def get_candidate_wca_urls() -> List[str]:
+    urls = ["http://127.0.0.1:3001"]
+    cloud_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
+    if cloud_url and cloud_url not in urls:
+        urls.append(cloud_url)
+    return urls
+
 @router.get("")
 async def get_connections(user: Dict[str, Any] = Depends(verify_jwt)):
     res = supabase.table("platform_connections").select("id, platform, platform_account_name, platform_account_id, status, connected_at").eq("user_id", user["user_id"]).execute()
@@ -32,11 +39,9 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
         return {"authorization_url": url}
         
     elif platform == "whatsapp":
-        wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
         return {
             "type": "whatsapp_connect",
             "platform": "whatsapp",
-            "whatsapp_endpoint": f"{wca_url}",
             "official_url": "https://web.whatsapp.com"
         }
         
@@ -50,55 +55,63 @@ async def start_oauth(platform: str, user: Dict[str, Any] = Depends(verify_jwt))
 
 @router.get("/whatsapp/status")
 async def get_whatsapp_status(user: Dict[str, Any] = Depends(verify_jwt)):
-    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{wca_url}/api/status")
-            return resp.json()
-    except Exception as e:
-        return {
-            "success": False,
-            "whatsapp": {"state": "disconnected", "isReady": False},
-            "error": f"Cannot connect to WhatsApp service at {wca_url}"
-        }
+    for wca_url in get_candidate_wca_urls():
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                resp = await client.get(f"{wca_url}/api/status")
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            continue
+            
+    return {
+        "success": False,
+        "whatsapp": {"state": "disconnected", "isReady": False},
+        "error": "WhatsApp service offline. Please start local engine or check Render deployment."
+    }
 
 @router.get("/whatsapp/qr-image")
 async def get_whatsapp_qr_image():
-    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{wca_url}/api/qr")
-            if resp.status_code == 200:
-                return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "no-cache, no-store"})
-            return Response(status_code=204, headers={"Cache-Control": "no-cache, no-store"})
-    except Exception:
-        return Response(status_code=204, headers={"Cache-Control": "no-cache, no-store"})
+    for wca_url in get_candidate_wca_urls():
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                resp = await client.get(f"{wca_url}/api/qr")
+                if resp.status_code == 200 and len(resp.content) > 0:
+                    return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "no-cache, no-store"})
+        except Exception:
+            continue
+    return Response(status_code=204, headers={"Cache-Control": "no-cache, no-store"})
 
 @router.post("/whatsapp/pair-phone")
 async def pair_whatsapp_phone(body: dict, user: Dict[str, Any] = Depends(verify_jwt)):
-    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
     phone = body.get("phone", "")
     if not phone:
         raise HTTPException(status_code=400, detail="Phone number required")
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(f"{wca_url}/api/pair-phone", json={"phone": phone})
-            if resp.status_code != 200:
-                return Response(status_code=resp.status_code, content=resp.content, media_type="application/json")
-            return resp.json()
-    except Exception as e:
-        print(f"Proxy pair-phone error: {e}")
-        raise HTTPException(status_code=503, detail="WhatsApp service offline or timed out")
+        
+    for wca_url in get_candidate_wca_urls():
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(f"{wca_url}/api/pair-phone", json={"phone": phone})
+                if resp.status_code == 200:
+                    return resp.json()
+                elif resp.status_code != 502 and resp.status_code != 503:
+                    return Response(status_code=resp.status_code, content=resp.content, media_type="application/json")
+        except Exception:
+            continue
+            
+    raise HTTPException(status_code=503, detail="WhatsApp service offline or timed out")
 
 @router.post("/whatsapp/reset")
 async def reset_whatsapp_session(user: Dict[str, Any] = Depends(verify_jwt)):
-    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(f"{wca_url}/api/session/reset")
-            return resp.json()
-    except Exception:
-        raise HTTPException(status_code=503, detail="WhatsApp service offline")
+    for wca_url in get_candidate_wca_urls():
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(f"{wca_url}/api/session/reset")
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            continue
+    raise HTTPException(status_code=503, detail="WhatsApp service offline")
 
 @router.get("/whatsapp/channels")
 async def get_whatsapp_channels(user: Dict[str, Any] = Depends(verify_jwt)):
@@ -109,25 +122,27 @@ async def get_whatsapp_channels(user: Dict[str, Any] = Depends(verify_jwt)):
     user_id = user["user_id"]
     discovered_channels: List[Dict[str, Any]] = []
     
-    # 1. Query live WhatsApp Gateway
-    wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            gw_resp = await client.get(f"{wca_url}/api/channels")
-            if gw_resp.status_code == 200:
-                gw_channels = gw_resp.json().get("channels", [])
-                for ch in gw_channels:
-                    ch_id = ch.get("id")
-                    if ch_id and not any(d["id"] == ch_id for d in discovered_channels):
-                        discovered_channels.append({
-                            "id": ch_id,
-                            "name": ch.get("name") or "WhatsApp Channel",
-                            "link": ch.get("link", ""),
-                            "type": "whatsapp_channel",
-                            "description": ch.get("description", "WhatsApp Broadcast Channel")
-                        })
-    except Exception:
-        pass
+    # 1. Query candidate WhatsApp Gateways (local or cloud)
+    for wca_url in get_candidate_wca_urls():
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                gw_resp = await client.get(f"{wca_url}/api/channels")
+                if gw_resp.status_code == 200:
+                    gw_channels = gw_resp.json().get("channels", [])
+                    for ch in gw_channels:
+                        ch_id = ch.get("id")
+                        if ch_id and not any(d["id"] == ch_id for d in discovered_channels):
+                            discovered_channels.append({
+                                "id": ch_id,
+                                "name": ch.get("name") or "WhatsApp Channel",
+                                "link": ch.get("link", ""),
+                                "type": "whatsapp_channel",
+                                "description": ch.get("description", "WhatsApp Broadcast Channel")
+                            })
+                    if len(discovered_channels) > 0:
+                        break
+        except Exception:
+            continue
 
     # 2. Fetch user's WhatsApp connection record from Supabase if already linked
     conn_res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "whatsapp").execute()
@@ -226,17 +241,17 @@ async def test_platform_connection(platform: str, user: Dict[str, Any] = Depends
     raw_token = decrypt_token(conn.get("access_token", ""))
     
     if platform == "whatsapp":
-        wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                gw_resp = await client.get(f"{wca_url}/api/status")
-                if gw_resp.status_code == 200:
-                    status_info = gw_resp.json().get("whatsapp", {})
-                    if status_info.get("isReady"):
-                        return {"success": True, "message": f"WhatsApp Channel Gateway online & linked! Account: {conn.get('platform_account_name', 'Active')}"}
-                    return {"success": False, "message": f"WhatsApp session state: {status_info.get('state', 'offline')}. Click 'Switch Channel' or reconnect."}
-        except Exception:
-            pass
+        for wca_url in get_candidate_wca_urls():
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    gw_resp = await client.get(f"{wca_url}/api/status")
+                    if gw_resp.status_code == 200:
+                        status_info = gw_resp.json().get("whatsapp", {})
+                        if status_info.get("isReady"):
+                            return {"success": True, "message": f"WhatsApp Channel Gateway online & linked! Account: {conn.get('platform_account_name', 'Active')}"}
+                        return {"success": False, "message": f"WhatsApp session state: {status_info.get('state', 'offline')}. Click 'Switch Channel' or scan QR to link phone."}
+            except Exception:
+                continue
         return {"success": True, "message": f"WhatsApp connection active for {conn.get('platform_account_name')}"}
 
     elif platform in ["instagram", "facebook"]:
@@ -379,10 +394,9 @@ async def oauth_callback(platform: str, state: str, code: str = None):
 
 @router.delete("/{platform}")
 async def disconnect_platform(platform: str, user: Dict[str, Any] = Depends(verify_jwt)):
-    if platform == "whatsapp":
-        wca_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
+    for wca_url in get_candidate_wca_urls():
         try:
-            async with httpx.AsyncClient(timeout=6.0) as client:
+            async with httpx.AsyncClient(timeout=4.0) as client:
                 await client.post(f"{wca_url}/api/logout")
         except Exception:
             pass

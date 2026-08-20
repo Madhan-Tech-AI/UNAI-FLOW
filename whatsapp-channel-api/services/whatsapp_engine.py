@@ -260,6 +260,8 @@ class WhatsAppEngine:
         logger.info("👀 WhatsApp session monitor started.")
         prev_ref: Optional[str] = None
         was_logged_in: bool = False
+        login_confirm_count: int = 0  # Debounce: require N consecutive positive checks
+        logout_confirm_count: int = 0  # Debounce: require N consecutive negative checks
 
         while True:
             try:
@@ -281,51 +283,42 @@ class WhatsAppEngine:
                     continue
 
                 # ── 1. Check if Logged In / Authenticated ──
+                # Use STRICT selectors that ONLY exist when the user is fully authenticated.
+                # DO NOT match generic elements like 'header', 'nav', '#app' — those exist on the QR login page too.
                 login_check = await self.page.evaluate("""
                     () => {
-                        // 1. Core navigation and chat list selectors
-                        if (document.querySelector('#side') || document.querySelector('#main') || document.querySelector('#pane-side')) return true;
-                        if (document.querySelector('div[data-testid="chat-list"]') || document.querySelector('div[data-testid="conversation-panel-wrapper"]')) return true;
-                        if (document.querySelector('div[data-testid="chatlist-header"]') || document.querySelector('div[role="navigation"]')) return true;
-                        if (document.querySelector('div[data-testid="intro-title"]') || document.querySelector('div[data-testid="intro-text"]')) return true;
+                        // STRICT: These elements ONLY exist after successful WhatsApp authentication
+                        // #pane-side = the left sidebar with chat list
+                        // #side = the side panel container
+                        // chat-list = the actual chat list
+                        // chatlist-header = header above chat list (with search box)
+                        const strictSelectors = [
+                            '#pane-side',
+                            '#side',
+                            'div[data-testid="chat-list"]',
+                            'div[data-testid="chatlist-header"]',
+                            'div[data-testid="conversation-panel-wrapper"]',
+                        ];
+                        
+                        for (const sel of strictSelectors) {
+                            if (document.querySelector(sel)) return true;
+                        }
 
-                        // 2. Navigation bar icons & buttons (Chats, Channels, Status, Communities, Settings)
-                        if (document.querySelector('button[aria-label="Chats"], button[aria-label="Channels"], button[aria-label="Status"], button[aria-label="Settings"], button[aria-label="Communities"]')) return true;
-                        if (document.querySelector('span[data-icon="chats-outline"], span[data-icon="newsletter-outline"], span[data-icon="community-outline"], span[data-icon="status-outline"], span[data-icon="menu"]')) return true;
-                        if (document.querySelector('span[data-icon="chat"], span[data-icon="newsletter"], span[data-icon="status-v3"]')) return true;
+                        // Check for the actual chat message composer (only exists when in a chat)
+                        if (document.querySelector('footer div[contenteditable="true"]')) return true;
+                        if (document.querySelector('div[contenteditable="true"][data-tab="10"]')) return true;
 
-                        // 3. Message composer / header
-                        if (document.querySelector('div[contenteditable="true"][data-tab]') || document.querySelector('footer div[contenteditable="true"]')) return true;
+                        // Check for intro screen (shown when logged in but no chat selected)
+                        if (document.querySelector('div[data-testid="intro-title"]')) return true;
 
-                        // 4. Auto-dismiss any blocking promo/notification dialogs
+                        // Auto-dismiss blocking promo/notification dialogs
                         const dismissButtons = Array.from(document.querySelectorAll('button, div[role="button"]'));
                         const notNow = dismissButtons.find(b => {
                             const t = (b.innerText || '').toLowerCase();
-                            return t.includes('not now') || t.includes('continue') || t.includes('close') || t.includes('ok');
+                            return t.includes('not now') || t.includes('continue');
                         });
                         if (notNow && !document.querySelector('canvas') && !document.querySelector('div[data-ref]')) {
                             try { notNow.click(); } catch(e) {}
-                        }
-
-                        // 5. Check if QR code is completely gone (consumed upon phone scan)
-                        const hasQR = Boolean(
-                            document.querySelector('canvas') || 
-                            document.querySelector('div[data-ref]') || 
-                            document.querySelector('[data-testid="qrcode"]') ||
-                            document.querySelector('button[aria-label="Reload QR code"]') ||
-                            document.querySelector('span[data-icon="refresh"]')
-                        );
-
-                        // If no QR elements exist and we have header/app container or sync elements -> logged in!
-                        const hasAppUI = Boolean(
-                            document.querySelector('header') || 
-                            document.querySelector('nav') || 
-                            document.querySelector('#app') ||
-                            document.querySelector('div[role="region"]')
-                        );
-
-                        if (!hasQR && hasAppUI) {
-                            return true;
                         }
 
                         return false;
@@ -333,7 +326,10 @@ class WhatsAppEngine:
                 """)
 
                 if login_check:
-                    if not self.is_ready:
+                    logout_confirm_count = 0
+                    login_confirm_count += 1
+                    # Require 3 consecutive positive checks to confirm login (debounce)
+                    if login_confirm_count >= 3 and not self.is_ready:
                         logger.info("🎉 ✅ WhatsApp Web authenticated & linked successfully! Ready for Channel broadcasting.")
                         self.connection_state = "connected"
                         self.is_ready = True
@@ -349,12 +345,20 @@ class WhatsAppEngine:
                     await asyncio.sleep(2)
                     continue
                 else:
-                    # If we were previously logged in and now we are not -> Session expired / Logged out
+                    login_confirm_count = 0
+                    # If we were previously logged in, require 5 consecutive negative checks to confirm logout
                     if was_logged_in and self.is_ready:
-                        logger.warning("⚠️ WhatsApp session was disconnected or logged out. Re-initializing pairing...")
-                        self.is_ready = False
-                        self.connection_state = "disconnected"
-                        was_logged_in = False
+                        logout_confirm_count += 1
+                        if logout_confirm_count >= 5:
+                            logger.warning("⚠️ WhatsApp session was disconnected or logged out. Re-initializing pairing...")
+                            self.is_ready = False
+                            self.connection_state = "disconnected"
+                            was_logged_in = False
+                            logout_confirm_count = 0
+                        else:
+                            # Not yet confirmed — keep waiting
+                            await asyncio.sleep(1.5)
+                            continue
 
                 # ── 2. Check for Phone Pairing Code ──
                 pairing_info = await self.page.evaluate("""
@@ -404,19 +408,18 @@ class WhatsAppEngine:
                             return { state: 'AUTHENTICATING' };
                         }
 
-                        // Look for raw QR ref in div[data-ref]
-                        const qrDiv = document.querySelector('div[data-ref]');
-                        const ref = qrDiv ? qrDiv.getAttribute('data-ref') : null;
-
-                        // Look for canvas
+                        // PRIORITY: Try canvas screenshot first (most reliable QR capture)
                         const canvas = document.querySelector('canvas[aria-label="Scan this QR code with WhatsApp to log in"]')
                             || document.querySelector('canvas');
+                        if (canvas) {
+                            return { state: 'CANVAS_FOUND' };
+                        }
 
+                        // Fallback: Look for raw QR ref in div[data-ref]
+                        const qrDiv = document.querySelector('div[data-ref]');
+                        const ref = qrDiv ? qrDiv.getAttribute('data-ref') : null;
                         if (ref) {
                             return { state: 'REF_FOUND', ref: ref };
-                        }
-                        if (canvas) {
-                            return { state: 'CANVAS_ONLY' };
                         }
 
                         return { state: 'WAITING_PAGE_LOAD' };
@@ -442,30 +445,42 @@ class WhatsAppEngine:
                     await asyncio.sleep(1.5)
                     continue
 
-                if state == "REF_FOUND":
-                    ref = qr_page_state.get("ref")
-                    if ref and (ref != prev_ref or not self.qr_png_bytes):
-                        prev_ref = ref
-                        self.current_qr = ref
-                        self.last_qr_time = time.time()
-                        self.connection_state = "qr_pending"
-                        self.is_ready = False
-                        # Generate clean, high-precision QR image from data-ref
-                        self._generate_qr_image(ref)
-                        logger.info(f"📱 Fresh QR code generated (ref: {ref[:20]}...). Ready for scanning.")
-
-                elif state == "CANVAS_ONLY":
-                    if not self.qr_png_bytes:
-                        try:
-                            canvas_el = await self.page.query_selector("canvas")
-                            if canvas_el:
-                                self.qr_png_bytes = await canvas_el.screenshot()
+                if state == "CANVAS_FOUND":
+                    # Canvas screenshot is the most reliable QR capture method
+                    try:
+                        canvas_el = await self.page.query_selector("canvas")
+                        if canvas_el:
+                            screenshot_bytes = await canvas_el.screenshot()
+                            if screenshot_bytes and len(screenshot_bytes) > 100:
+                                self.qr_png_bytes = screenshot_bytes
                                 self.current_qr = f"canvas_{int(time.time())}"
                                 self.last_qr_time = time.time()
                                 self.connection_state = "qr_pending"
-                                logger.info("📱 QR code canvas captured. Ready for scanning.")
-                        except Exception as e:
-                            logger.debug(f"Canvas screenshot error: {e}")
+                                self.is_ready = False
+                                if not prev_ref or not prev_ref.startswith("canvas_"):
+                                    logger.info("📱 QR code canvas captured. Ready for scanning.")
+                                prev_ref = self.current_qr
+                    except Exception as e:
+                        logger.debug(f"Canvas screenshot error: {e}")
+
+                elif state == "REF_FOUND":
+                    ref = qr_page_state.get("ref")
+                    # VALIDATE: Real WhatsApp QR data-ref values are long alphanumeric strings.
+                    # They are NOT URLs like "https://wa.me/settings" or short strings.
+                    # A valid QR ref is typically 100+ characters of base64-like data.
+                    if ref and len(ref) > 50 and not ref.startswith("http"):
+                        if ref != prev_ref or not self.qr_png_bytes:
+                            prev_ref = ref
+                            self.current_qr = ref
+                            self.last_qr_time = time.time()
+                            self.connection_state = "qr_pending"
+                            self.is_ready = False
+                            # Generate clean QR image from data-ref
+                            self._generate_qr_image(ref)
+                            logger.info(f"📱 Fresh QR code generated from data-ref (len={len(ref)}). Ready for scanning.")
+                    elif ref:
+                        logger.debug(f"Ignoring invalid data-ref (not a QR code): {ref[:40]}...")
+
                 else:
                     if not self.is_ready:
                         self.connection_state = "connecting"

@@ -26,3 +26,30 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
 
   return response.json();
 }
+
+/**
+ * Same as fetchApi but returns the raw Response object.
+ * Use for binary endpoints (images, blobs) that don't return JSON.
+ */
+export async function fetchApiRaw(endpoint: string, options: RequestInit = {}): Promise<Response> {
+  const { data: { session } } = await supabase.auth.getSession();
+  
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string> || {}),
+  };
+
+  if (session?.access_token) {
+    headers['Authorization'] = `Bearer ${session.access_token}`;
+  }
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    ...options,
+    headers,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`);
+  }
+
+  return response;
+}

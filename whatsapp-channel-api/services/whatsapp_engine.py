@@ -260,8 +260,11 @@ class WhatsAppEngine:
         logger.info("👀 WhatsApp session monitor started.")
         prev_ref: Optional[str] = None
         was_logged_in: bool = False
-        login_confirm_count: int = 0  # Debounce: require N consecutive positive checks
-        logout_confirm_count: int = 0  # Debounce: require N consecutive negative checks
+        login_confirm_count: int = 0
+        logout_confirm_count: int = 0
+        authenticating_since: Optional[float] = None  # Timestamp when authenticating started
+        no_qr_count: int = 0  # Consecutive ticks with no QR elements after auth started
+        last_diagnostic_time: float = 0  # Throttle diagnostic logs
 
         while True:
             try:
@@ -283,67 +286,95 @@ class WhatsAppEngine:
                     continue
 
                 # ── 1. Check if Logged In / Authenticated ──
-                # Use STRICT selectors that ONLY exist when the user is fully authenticated.
-                # DO NOT match generic elements like 'header', 'nav', '#app' — those exist on the QR login page too.
                 login_check = await self.page.evaluate("""
                     () => {
-                        // 1. Core container selectors (recent UI updates might have changed these)
+                        // 1. Core container selectors
                         const coreSelectors = [
-                            '#pane-side',
-                            '#side',
+                            '#pane-side', '#side', '#main',
                             'div[data-testid="chat-list"]',
                             'div[data-testid="chatlist-header"]',
                             'div[data-testid="conversation-panel-wrapper"]'
                         ];
                         for (const sel of coreSelectors) {
-                            if (document.querySelector(sel)) return true;
+                            if (document.querySelector(sel)) return { logged_in: true, matched: sel };
                         }
 
-                        // 2. Navigation bar icons & buttons (these are highly specific to the logged-in app)
+                        // 2. Navigation bar icons & buttons
                         const navSelectors = [
-                            'button[aria-label="Chats"]', 
-                            'button[aria-label="Channels"]', 
-                            'button[aria-label="Status"]', 
-                            'button[aria-label="Settings"]', 
+                            'button[aria-label="Chats"]', 'button[aria-label="Channels"]',
+                            'button[aria-label="Status"]', 'button[aria-label="Settings"]',
                             'button[aria-label="Communities"]',
-                            'span[data-icon="chats-outline"]', 
-                            'span[data-icon="newsletter-outline"]', 
-                            'span[data-icon="community-outline"]', 
-                            'span[data-icon="status-outline"]', 
-                            'span[data-icon="menu"]'
+                            'span[data-icon="chats-outline"]', 'span[data-icon="newsletter-outline"]',
+                            'span[data-icon="community-outline"]', 'span[data-icon="status-outline"]',
+                            'span[data-icon="menu"]', 'span[data-icon="chat"]',
+                            'span[data-icon="newsletter"]', 'span[data-icon="status-v3"]',
+                            'div[role="navigation"]'
                         ];
                         for (const sel of navSelectors) {
-                            if (document.querySelector(sel)) return true;
+                            if (document.querySelector(sel)) return { logged_in: true, matched: sel };
                         }
 
-                        // 3. Message composer (exists when a chat is open)
-                        if (document.querySelector('footer div[contenteditable="true"]')) return true;
-                        if (document.querySelector('div[contenteditable="true"][data-tab="10"]')) return true;
+                        // 3. Message composer
+                        if (document.querySelector('footer div[contenteditable="true"]')) return { logged_in: true, matched: 'footer composer' };
+                        if (document.querySelector('div[contenteditable="true"][data-tab]')) return { logged_in: true, matched: 'data-tab composer' };
 
-                        // 4. Intro screen (shown when logged in but no chat is selected)
-                        if (document.querySelector('div[data-testid="intro-title"]')) return true;
-                        if (document.querySelector('div[data-testid="intro-text"]')) return true;
+                        // 4. Intro screen
+                        if (document.querySelector('div[data-testid="intro-title"]')) return { logged_in: true, matched: 'intro-title' };
+                        if (document.querySelector('div[data-testid="intro-text"]')) return { logged_in: true, matched: 'intro-text' };
 
-                        // 5. Auto-dismiss blocking promo/notification dialogs
-                        const dismissButtons = Array.from(document.querySelectorAll('button, div[role="button"]'));
-                        const notNow = dismissButtons.find(b => {
-                            const t = (b.innerText || '').toLowerCase();
-                            return t.includes('not now') || t.includes('continue');
-                        });
-                        if (notNow && !document.querySelector('canvas') && !document.querySelector('div[data-ref]')) {
-                            try { notNow.click(); } catch(e) {}
+                        // 5. Check QR-related elements (used for negative signal)
+                        const hasQR = Boolean(
+                            document.querySelector('canvas') ||
+                            document.querySelector('div[data-ref]') ||
+                            document.querySelector('[data-testid="qrcode"]') ||
+                            document.querySelector('button[aria-label="Reload QR code"]')
+                        );
+                        const hasSpinner = Boolean(
+                            document.querySelector('progress') ||
+                            document.querySelector('span[data-icon="spinner"]') ||
+                            document.querySelector('div[data-testid="loading-screen"]') ||
+                            document.querySelector('div[role="progressbar"]')
+                        );
+
+                        // 6. Auto-dismiss dialogs
+                        if (!hasQR) {
+                            const btns = Array.from(document.querySelectorAll('button, div[role="button"]'));
+                            const notNow = btns.find(b => {
+                                const t = (b.innerText || '').toLowerCase();
+                                return t.includes('not now') || t.includes('continue') || t.includes('ok, got it');
+                            });
+                            if (notNow) { try { notNow.click(); } catch(e) {} }
                         }
 
-                        return false;
+                        // 7. Diagnostic info for debugging
+                        const appEl = document.querySelector('#app');
+                        const bodyText = (document.body?.innerText || '').substring(0, 200);
+                        const childCount = appEl ? appEl.children.length : 0;
+                        const allDataTestIds = Array.from(document.querySelectorAll('[data-testid]'))
+                            .slice(0, 10)
+                            .map(el => el.getAttribute('data-testid'));
+
+                        return {
+                            logged_in: false,
+                            hasQR: hasQR,
+                            hasSpinner: hasSpinner,
+                            appChildCount: childCount,
+                            dataTestIds: allDataTestIds,
+                            bodySnippet: bodyText.substring(0, 100)
+                        };
                     }
                 """)
 
-                if login_check:
+                is_logged_in = login_check.get("logged_in", False) if login_check else False
+
+                if is_logged_in:
                     logout_confirm_count = 0
+                    no_qr_count = 0
+                    authenticating_since = None
                     login_confirm_count += 1
-                    # Require 3 consecutive positive checks to confirm login (debounce)
-                    if login_confirm_count >= 3 and not self.is_ready:
-                        logger.info("🎉 ✅ WhatsApp Web authenticated & linked successfully! Ready for Channel broadcasting.")
+                    if login_confirm_count >= 2 and not self.is_ready:
+                        matched = login_check.get("matched", "unknown")
+                        logger.info(f"🎉 ✅ WhatsApp Web authenticated & linked! (matched: {matched}) Ready for Channel broadcasting.")
                         self.connection_state = "connected"
                         self.is_ready = True
                         self.current_qr = None
@@ -359,7 +390,52 @@ class WhatsAppEngine:
                     continue
                 else:
                     login_confirm_count = 0
-                    # If we were previously logged in, require 5 consecutive negative checks to confirm logout
+
+                    # ── TIMEOUT FALLBACK: If we were authenticating and QR is gone for 30s, assume connected ──
+                    has_qr = login_check.get("hasQR", False) if login_check else False
+                    has_spinner = login_check.get("hasSpinner", False) if login_check else False
+
+                    if authenticating_since and not has_qr:
+                        no_qr_count += 1
+                        elapsed = time.time() - authenticating_since
+
+                        # Log diagnostics periodically (every 15s)
+                        now = time.time()
+                        if now - last_diagnostic_time > 15:
+                            last_diagnostic_time = now
+                            test_ids = login_check.get("dataTestIds", []) if login_check else []
+                            child_count = login_check.get("appChildCount", 0) if login_check else 0
+                            body_snippet = login_check.get("bodySnippet", "") if login_check else ""
+                            logger.info(
+                                f"🔍 Diagnostic: elapsed={elapsed:.0f}s, no_qr_count={no_qr_count}, "
+                                f"hasSpinner={has_spinner}, appChildren={child_count}, "
+                                f"testIds={test_ids[:5]}, body='{body_snippet[:60]}...'"
+                            )
+
+                        # After 30 seconds with no QR and at least 10 consecutive no-QR ticks
+                        if elapsed > 30 and no_qr_count >= 10 and not has_spinner:
+                            logger.info(
+                                f"🎉 ✅ WhatsApp connected via timeout fallback! "
+                                f"(QR gone for {elapsed:.0f}s, {no_qr_count} ticks with no QR elements). "
+                                f"Headless DOM may not match standard selectors."
+                            )
+                            self.connection_state = "connected"
+                            self.is_ready = True
+                            self.current_qr = None
+                            self.qr_png_bytes = None
+                            self.pairing_code = None
+                            was_logged_in = True
+                            authenticating_since = None
+                            no_qr_count = 0
+                            self.user_info = {
+                                "status": "active",
+                                "channel_id": config.CHANNEL_ID,
+                                "channel_link": config.CHANNEL_LINK,
+                            }
+                            await asyncio.sleep(2)
+                            continue
+
+                    # Handle logout detection
                     if was_logged_in and self.is_ready:
                         logout_confirm_count += 1
                         if logout_confirm_count >= 5:
@@ -368,8 +444,9 @@ class WhatsAppEngine:
                             self.connection_state = "disconnected"
                             was_logged_in = False
                             logout_confirm_count = 0
+                            authenticating_since = None
+                            no_qr_count = 0
                         else:
-                            # Not yet confirmed — keep waiting
                             await asyncio.sleep(1.5)
                             continue
 
@@ -421,7 +498,7 @@ class WhatsAppEngine:
                             return { state: 'AUTHENTICATING' };
                         }
 
-                        // PRIORITY: Try canvas screenshot first (most reliable QR capture)
+                        // PRIORITY: Try canvas first (most reliable QR capture)
                         const canvas = document.querySelector('canvas[aria-label="Scan this QR code with WhatsApp to log in"]')
                             || document.querySelector('canvas');
                         if (canvas) {
@@ -446,6 +523,8 @@ class WhatsAppEngine:
                     self.current_qr = None
                     self.qr_png_bytes = None
                     self.connection_state = "connecting"
+                    authenticating_since = None
+                    no_qr_count = 0
                     await asyncio.sleep(2)
                     continue
 
@@ -455,11 +534,17 @@ class WhatsAppEngine:
                         self.connection_state = "authenticating"
                         self.current_qr = None
                         self.qr_png_bytes = None
+                    # Start the timeout clock
+                    if authenticating_since is None:
+                        authenticating_since = time.time()
+                        no_qr_count = 0
                     await asyncio.sleep(1.5)
                     continue
 
                 if state == "CANVAS_FOUND":
-                    # Canvas screenshot is the most reliable QR capture method
+                    # QR canvas is visible — reset auth timeout since QR is back
+                    authenticating_since = None
+                    no_qr_count = 0
                     try:
                         canvas_el = await self.page.query_selector("canvas")
                         if canvas_el:
@@ -477,10 +562,9 @@ class WhatsAppEngine:
                         logger.debug(f"Canvas screenshot error: {e}")
 
                 elif state == "REF_FOUND":
+                    authenticating_since = None
+                    no_qr_count = 0
                     ref = qr_page_state.get("ref")
-                    # VALIDATE: Real WhatsApp QR data-ref values are long alphanumeric strings.
-                    # They are NOT URLs like "https://wa.me/settings" or short strings.
-                    # A valid QR ref is typically 100+ characters of base64-like data.
                     if ref and len(ref) > 50 and not ref.startswith("http"):
                         if ref != prev_ref or not self.qr_png_bytes:
                             prev_ref = ref
@@ -488,15 +572,20 @@ class WhatsAppEngine:
                             self.last_qr_time = time.time()
                             self.connection_state = "qr_pending"
                             self.is_ready = False
-                            # Generate clean QR image from data-ref
                             self._generate_qr_image(ref)
                             logger.info(f"📱 Fresh QR code generated from data-ref (len={len(ref)}). Ready for scanning.")
                     elif ref:
                         logger.debug(f"Ignoring invalid data-ref (not a QR code): {ref[:40]}...")
 
                 else:
+                    # WAITING_PAGE_LOAD — no QR, no spinner, no login selectors
+                    # If we were previously in authenticating state, keep the timeout clock running
+                    if self.connection_state == "authenticating" and authenticating_since is None:
+                        authenticating_since = time.time()
+                        no_qr_count = 0
                     if not self.is_ready:
-                        self.connection_state = "connecting"
+                        if not authenticating_since:
+                            self.connection_state = "connecting"
 
             except Exception as err:
                 logger.debug(f"Monitor tick exception: {err}")

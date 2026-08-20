@@ -908,60 +908,132 @@ class WhatsAppEngine:
 
         async with self._lock:
             try:
-                logger.info(f"⚡ Fast-publishing post to WhatsApp Channel '{target_name}'...")
+                logger.info(f"⚡ Publishing to WhatsApp Channel '{target_name}'...")
 
                 # Ensure page is on WhatsApp Web
                 current_url = self.page.url or ""
                 if "web.whatsapp.com" not in current_url:
                     await self.page.goto("https://web.whatsapp.com/", wait_until="domcontentloaded", timeout=30000)
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(2)
 
-                # 1. Fast find and click channel
+                # ── Strategy 1: Navigate to channel via its link URL ──
+                if target_link and "whatsapp.com/channel" in target_link:
+                    logger.info(f"📍 Navigating to channel via link: {target_link}")
+                    try:
+                        await self.page.goto(target_link, wait_until="domcontentloaded", timeout=20000)
+                        await asyncio.sleep(3)
+                    except Exception as e:
+                        logger.debug(f"Direct channel link navigation failed: {e}")
+
+                # ── Strategy 2: Click on channel in sidebar list ──
                 clicked = await self.page.evaluate("""
                     (name) => {
                         const lower = (name || '').toLowerCase().trim();
-                        const items = Array.from(document.querySelectorAll('div[data-testid="cell-frame-container"], div[role="listitem"], div[data-testid="list-item-newsletter"], div[data-testid="chat-list-item"]'));
+                        
+                        // First try to click on the Channels/Updates/Newsletters tab
+                        const channelsBtn = document.querySelector('button[aria-label="Channels"], button[aria-label="Updates"], button[aria-label="Newsletters"]')
+                            || document.querySelector('span[data-icon="newsletter-outline"], span[data-icon="newsletter"]')?.closest('button');
+                        if (channelsBtn) {
+                            channelsBtn.click();
+                        }
+
+                        // Wait a bit for list to render, then search
+                        const items = Array.from(document.querySelectorAll(
+                            'div[data-testid="cell-frame-container"], div[role="listitem"], ' +
+                            'div[data-testid="list-item-newsletter"], div[data-testid="chat-list-item"], ' +
+                            'div[role="row"], div[role="gridcell"], a[role="listitem"]'
+                        ));
                         for (const item of items) {
                             if ((item.innerText || '').toLowerCase().includes(lower)) {
                                 item.click();
                                 return true;
                             }
                         }
-                        const channelsBtn = document.querySelector('button[aria-label="Channels"], button[aria-label="Updates"], button[aria-label="Newsletters"]')
-                            || document.querySelector('span[data-icon="newsletter-outline"], span[data-icon="newsletter"]')?.closest('button');
-                        if (channelsBtn) {
-                            channelsBtn.click();
-                        }
                         return false;
                     }
                 """, target_name)
 
                 if not clicked:
-                    await asyncio.sleep(1)
-                    await self.page.evaluate("""
+                    await asyncio.sleep(1.5)
+                    # Retry after Channels tab loads
+                    clicked = await self.page.evaluate("""
                         (name) => {
                             const lower = (name || '').toLowerCase().trim();
-                            const items = Array.from(document.querySelectorAll('div[data-testid="cell-frame-container"], div[role="listitem"], div[data-testid="list-item-newsletter"], div[data-testid="chat-list-item"]'));
+                            const items = Array.from(document.querySelectorAll(
+                                'div[data-testid="cell-frame-container"], div[role="listitem"], ' +
+                                'div[data-testid="list-item-newsletter"], div[data-testid="chat-list-item"], ' +
+                                'div[role="row"], div[role="gridcell"], span, a'
+                            ));
                             for (const item of items) {
-                                if ((item.innerText || '').toLowerCase().includes(lower)) {
+                                const txt = (item.innerText || '').toLowerCase();
+                                if (txt.includes(lower) && txt.length < 200) {
                                     item.click();
                                     return true;
                                 }
                             }
-                            if (items.length > 0) {
-                                items[0].click();
+                            // Click first item as fallback
+                            const firstItems = Array.from(document.querySelectorAll(
+                                'div[data-testid="cell-frame-container"], div[role="listitem"]'
+                            ));
+                            if (firstItems.length > 0) {
+                                firstItems[0].click();
                                 return true;
                             }
                             return false;
                         }
                     """, target_name)
 
-                # 2. Wait for message composer in the active channel pane
-                composer = await self.page.wait_for_selector(
-                    'footer div[contenteditable="true"], div[data-testid="conversation-compose-box-input"], footer p.selectable-text, div[contenteditable="true"]',
-                    timeout=10000
-                )
+                await asyncio.sleep(2)
 
+                # ── 2. Find composer — try multiple selectors for Channel compose box ──
+                # WhatsApp Channel composer selectors differ from regular chat
+                composer_selectors = [
+                    'div[data-testid="conversation-compose-box-input"]',
+                    'div[contenteditable="true"][data-tab="10"]',
+                    'div[contenteditable="true"][data-tab="6"]',
+                    'div[contenteditable="true"][data-tab]',
+                    'footer div[contenteditable="true"]',
+                    'footer p.selectable-text',
+                    'div[role="textbox"]',
+                    'div[contenteditable="true"]',
+                ]
+
+                composer = None
+                for sel in composer_selectors:
+                    try:
+                        composer = await self.page.wait_for_selector(sel, timeout=3000)
+                        if composer:
+                            logger.info(f"✅ Found composer with selector: {sel}")
+                            break
+                    except Exception:
+                        continue
+
+                if not composer:
+                    # Diagnostic: dump what's on the page
+                    diag = await self.page.evaluate("""
+                        () => {
+                            const editables = Array.from(document.querySelectorAll('[contenteditable]'))
+                                .map(e => ({
+                                    tag: e.tagName, 
+                                    role: e.getAttribute('role'),
+                                    dataTab: e.getAttribute('data-tab'),
+                                    testId: e.getAttribute('data-testid'),
+                                    parent: e.parentElement?.tagName
+                                }));
+                            const testIds = Array.from(document.querySelectorAll('[data-testid]'))
+                                .slice(0, 15)
+                                .map(e => e.getAttribute('data-testid'));
+                            return { editables, testIds, url: window.location.href };
+                        }
+                    """)
+                    logger.error(f"❌ No composer found! Diagnostics: {diag}")
+                    raise Exception(
+                        f"Could not find message composer for channel '{target_name}'. "
+                        f"The channel may not be open or the page is not rendering correctly. "
+                        f"Page elements: {diag.get('testIds', [])[:5]}"
+                    )
+
+                # ── 3. Publish content ──
                 if media_url:
                     logger.info(f"Downloading media: {media_url[:50]}...")
                     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -980,7 +1052,9 @@ class WhatsAppEngine:
                         file_input = await self.page.query_selector('input[type="file"]')
                         if not file_input:
                             attach_btn = await self.page.query_selector(
-                                'span[data-icon="plus"], span[data-icon="attach-menu-plus"], div[title="Attach"], button[aria-label="Attach"]'
+                                'span[data-icon="plus"], span[data-icon="attach-menu-plus"], '
+                                'div[title="Attach"], button[aria-label="Attach"], '
+                                'span[data-icon="clip"]'
                             )
                             if attach_btn:
                                 await attach_btn.click()
@@ -989,7 +1063,7 @@ class WhatsAppEngine:
 
                         if file_input:
                             await file_input.set_input_files(temp_path)
-                            await asyncio.sleep(1)
+                            await asyncio.sleep(1.5)
 
                             if content:
                                 caption_box = await self.page.query_selector('div[contenteditable="true"]')
@@ -997,7 +1071,9 @@ class WhatsAppEngine:
                                     await caption_box.fill(content)
 
                             send_btn = await self.page.wait_for_selector(
-                                'span[data-icon="send"], span[data-icon="send-light"], div[aria-label="Send"], span[data-icon="send-alt"]',
+                                'span[data-icon="send"], span[data-icon="send-light"], '
+                                'div[aria-label="Send"], span[data-icon="send-alt"], '
+                                'button[aria-label="Send"]',
                                 timeout=10000
                             )
                             if send_btn:
@@ -1016,12 +1092,13 @@ class WhatsAppEngine:
                                 pass
                 else:
                     await composer.click()
+                    await asyncio.sleep(0.2)
                     await composer.fill(content)
                     await asyncio.sleep(0.3)
                     await self.page.keyboard.press("Enter")
                     await asyncio.sleep(1)
 
-                logger.info(f"✅ Fast published post to WhatsApp Channel '{target_name}'! Post ID: {post_id}")
+                logger.info(f"✅ Published post to WhatsApp Channel '{target_name}'! Post ID: {post_id}")
                 return {
                     "success": True,
                     "platform": "whatsapp_channel",

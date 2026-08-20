@@ -673,24 +673,24 @@ class WhatsAppEngine:
                     }
                 """)
 
-                # Build final channel list, including configured channel
+                # Build final channel list
                 discovered = []
                 seen_names = set()
 
-                # Always include the primary configured channel
-                default_name = getattr(config, "CHANNEL_NAME", "Madhan Tech AI")
-                default_id = config.CHANNEL_ID
-                default_link = config.CHANNEL_LINK
+                if config.CHANNEL_ID:
+                    default_name = getattr(config, "CHANNEL_NAME", "") or "WhatsApp Channel"
+                    default_id = config.CHANNEL_ID
+                    default_link = config.CHANNEL_LINK
 
-                discovered.append({
-                    "id": default_id,
-                    "name": default_name,
-                    "link": default_link,
-                    "description": "Configured Target Channel",
-                    "isDefault": True,
-                })
-                seen_names.add(default_name.lower())
-                seen_names.add(default_id.lower())
+                    discovered.append({
+                        "id": default_id,
+                        "name": default_name,
+                        "link": default_link,
+                        "description": "Configured Target Channel",
+                        "isDefault": True,
+                    })
+                    seen_names.add(default_name.lower())
+                    seen_names.add(default_id.lower())
 
                 for ch in channels_data:
                     cname = ch.get("name", "").strip()
@@ -699,9 +699,9 @@ class WhatsAppEngine:
                         discovered.append({
                             "id": ch.get("id") or f"ch_{len(discovered) + 1}",
                             "name": cname,
-                            "link": ch.get("link") or default_link,
+                            "link": ch.get("link") or "",
                             "description": ch.get("description", "WhatsApp Channel"),
-                            "isDefault": False,
+                            "isDefault": len(discovered) == 0,
                         })
 
                 logger.info(f"✅ Discovered {len(discovered)} WhatsApp Channel(s).")
@@ -714,15 +714,7 @@ class WhatsAppEngine:
                 logger.error(f"Error discovering channels: {e}")
                 return {
                     "success": True,
-                    "channels": [
-                        {
-                            "id": config.CHANNEL_ID,
-                            "name": getattr(config, "CHANNEL_NAME", "Madhan Tech AI"),
-                            "link": config.CHANNEL_LINK,
-                            "description": "Target Channel",
-                            "isDefault": True,
-                        }
-                    ]
+                    "channels": []
                 }
 
     async def logout_session(self) -> Dict[str, Any]:
@@ -790,7 +782,7 @@ class WhatsAppEngine:
         if not self.is_ready or not self.page:
             raise Exception("WhatsApp is not connected. Please scan the QR code to link your device first.")
 
-        target_name = channel_name or getattr(config, "CHANNEL_NAME", "Madhan Tech AI")
+        target_name = channel_name or getattr(config, "CHANNEL_NAME", "") or "WhatsApp Channel"
         target_id = channel_id or config.CHANNEL_ID
         target_link = channel_link or config.CHANNEL_LINK
 

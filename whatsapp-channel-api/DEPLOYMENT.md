@@ -28,8 +28,8 @@ This service is built in **Python (FastAPI + Playwright)**. You can deploy it to
    | Key | Value |
    | :--- | :--- |
    | `WCA_API_KEY` | `105eadef-beae-4e08-bcc0-85a06ff80727` |
-   | `WCA_CHANNEL_LINK` | `https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M` |
-   | `WCA_CHANNEL_ID` | `0029VbDxqHz6hENhNBcZM31M` |
+   | `WCA_CHANNEL_LINK` | `https://whatsapp.com/channel/<your-channel-id>` |
+   | `WCA_CHANNEL_ID` | `<your-channel-id>` |
 
 6. Click **Create Web Service**.
 

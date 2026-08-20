@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
-import { Camera, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, X, AlertCircle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Camera, MessageCircle, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, X, AlertCircle, Building2, Radio } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
-import { supabase } from '../lib/supabaseClient';
 
 function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
   return (
@@ -21,23 +20,33 @@ function Facebook({ size = 18, className = "" }: { size?: number; className?: st
   );
 }
 
-const WCA_DIRECT_URL = import.meta.env.VITE_WCA_API_URL || 'https://unai-whatsapp-channelapi.onrender.com';
-const API_BASE = import.meta.env.VITE_API_URL || 'https://unai-flow-backend.onrender.com';
+function Twitter({ size = 18, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+    >
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  );
+}
 
 export default function Connections() {
   const [connections, setConnections] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isWaModalOpen, setIsWaModalOpen] = useState(false);
-  const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
-  const [waStatus, setWaStatus] = useState<string>('checking');
-  const [pairingCode, setPairingCode] = useState<string | null>(null);
-  const [phoneNumber, setPhoneNumber] = useState<string>('');
-  const [phoneSubmitted, setPhoneSubmitted] = useState(false);
-  const [phoneError, setPhoneError] = useState<string>('');
-  const [usePhoneMode, setUsePhoneMode] = useState(false); // default to fresh QR code mode
-  const [isResetting, setIsResetting] = useState(false);
-  const qrBlobUrlRef = useRef<string | null>(null);
+  const [discoveredChannels, setDiscoveredChannels] = useState<any[]>([]);
+  const [loadingChannels, setLoadingChannels] = useState(false);
+  const [selectedChannel, setSelectedChannel] = useState<any | null>(null);
+  const [savingChannel, setSavingChannel] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [customChannelName, setCustomChannelName] = useState('');
+  const [customChannelLink, setCustomChannelLink] = useState('');
+  const [showCustomChannelInput, setShowCustomChannelInput] = useState(false);
 
   const loadConnections = async () => {
     try {
@@ -52,181 +61,48 @@ export default function Connections() {
     }
   };
 
-  useEffect(() => {
-    loadConnections();
-  }, []);
-
-  // Fetch QR image as blob — tries backend proxy first, falls back to direct gateway
-  const fetchQrImage = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const headers: Record<string, string> = {};
-      if (session?.access_token) {
-        headers['Authorization'] = `Bearer ${session.access_token}`;
-      }
-
-      const response = await fetch(`${API_BASE}/connections/whatsapp/qr-image?t=${Date.now()}`, {
-        headers,
-      });
-
-      if (response.ok) {
-        const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('image')) {
-          const blob = await response.blob();
-          if (qrBlobUrlRef.current) URL.revokeObjectURL(qrBlobUrlRef.current);
-          const url = URL.createObjectURL(blob);
-          qrBlobUrlRef.current = url;
-          setQrImageUrl(url);
-          return true;
-        }
-      }
-    } catch {
-      // Backend proxy unreachable
-    }
-
-    // Fallback: fetch QR directly from WhatsApp gateway
-    try {
-      const directResp = await fetch(`${WCA_DIRECT_URL}/api/qr?t=${Date.now()}`);
-      if (directResp.ok) {
-        const contentType = directResp.headers.get('content-type') || '';
-        if (contentType.includes('image')) {
-          const blob = await directResp.blob();
-          if (qrBlobUrlRef.current) URL.revokeObjectURL(qrBlobUrlRef.current);
-          const url = URL.createObjectURL(blob);
-          qrBlobUrlRef.current = url;
-          setQrImageUrl(url);
-          return true;
-        }
-      }
-    } catch {
-      // Gateway also down or starting
-    }
-
-    return false;
-  };
-
-  const [waModalStep, setWaModalStep] = useState<'qr' | 'channels' | 'success'>('qr');
-  const [discoveredChannels, setDiscoveredChannels] = useState<any[]>([]);
-  const [loadingChannels, setLoadingChannels] = useState(false);
-  const [selectedChannel, setSelectedChannel] = useState<any | null>(null);
-  const [savingChannel, setSavingChannel] = useState(false);
-  const [customChannelName, setCustomChannelName] = useState('');
-  const [customChannelLink, setCustomChannelLink] = useState('');
-  const [showCustomChannelInput, setShowCustomChannelInput] = useState(false);
-
-  // Fetch discovered WhatsApp Channels
+  // Fetch real-time discovered WhatsApp Channels & Accounts
   const fetchDiscoveredChannels = async () => {
     setLoadingChannels(true);
     try {
       const res = await fetchApi('/connections/whatsapp/channels');
-      if (res && res.channels && res.channels.length > 0) {
+      if (res && res.channels && Array.isArray(res.channels)) {
         setDiscoveredChannels(res.channels);
       } else {
-        setDiscoveredChannels([
-          { id: 'default', name: 'Madhan Tech AI', link: '', isDefault: true }
-        ]);
+        setDiscoveredChannels([]);
       }
-    } catch {
-      setDiscoveredChannels([
-        { id: 'default', name: 'Madhan Tech AI', link: '', isDefault: true }
-      ]);
+    } catch (err) {
+      console.error("Failed to load WhatsApp channels:", err);
+      setDiscoveredChannels([]);
     } finally {
       setLoadingChannels(false);
     }
   };
 
-  // WhatsApp status poller + QR/code fetcher when modal is open
   useEffect(() => {
-    if (!isWaModalOpen) return;
+    loadConnections();
 
-    let interval: any;
-    let cancelled = false;
-
-    const checkWaStatus = async () => {
-      if (cancelled) return;
-
-      let statusData: any = null;
-      try {
-        statusData = await fetchApi('/connections/whatsapp/status');
-      } catch {
-        try {
-          const directResp = await fetch(`${WCA_DIRECT_URL}/api/status`);
-          if (directResp.ok) statusData = await directResp.json();
-        } catch { /* gateway down */ }
-      }
-
-      if (cancelled) return;
-
-      const wa = statusData?.whatsapp;
-      if (!wa) { setWaStatus('starting'); await fetchQrImage(); return; }
-
-      if (wa.isReady) {
-        setWaStatus('connected');
-        // If we are on the QR step, transition to Channel selection step!
-        if (waModalStep === 'qr') {
-          setWaModalStep('channels');
-          fetchDiscoveredChannels();
-        }
-        return;
-      }
-
-      // Phone pairing code available
-      if (wa.pairingCode) {
-        setPairingCode(wa.pairingCode);
-        setWaStatus('phone_pairing');
-        return;
-      }
-
-      setWaStatus(wa.state || 'connecting');
-      if (wa.state === 'qr_pending' || wa.state === 'connecting') {
-        await fetchQrImage();
-      }
-    };
-
-    checkWaStatus();
-    interval = setInterval(checkWaStatus, 2500);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-      if (qrBlobUrlRef.current) {
-        URL.revokeObjectURL(qrBlobUrlRef.current);
-        qrBlobUrlRef.current = null;
-      }
-    };
-  }, [isWaModalOpen, waModalStep]);
-
-  const handlePhoneSubmit = async () => {
-    if (!phoneNumber.trim()) { setPhoneError('Please enter your phone number'); return; }
-    setPhoneError('');
-    setPhoneSubmitted(true);
-    setPairingCode(null);
-    try {
-      await fetchApi('/connections/whatsapp/pair-phone', {
-        method: 'POST',
-        body: JSON.stringify({ phone: phoneNumber.trim() }),
-      });
-    } catch (err) {
-      setPhoneError('Failed to request pairing. Make sure gateway is running.');
-      setPhoneSubmitted(false);
+    // Check if returning from official WhatsApp/Meta OAuth callback
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('whatsapp_connected') === 'true' || params.get('select_channel') === 'true') {
+      setIsWaModalOpen(true);
+      fetchDiscoveredChannels();
+      window.history.replaceState({}, document.title, window.location.pathname);
     }
-  };
+  }, []);
 
-  const handleResetSession = async () => {
-    setIsResetting(true);
-    setQrImageUrl(null);
-    setWaStatus('starting');
+  const handleConnect = async (platformId: string) => {
     try {
-      await fetchApi('/connections/whatsapp/reset', { method: 'POST' });
-    } catch {
-      try {
-        await fetch(`${WCA_DIRECT_URL}/api/session/reset`, { method: 'POST' });
-      } catch {}
-    } finally {
-      setTimeout(() => {
-        setIsResetting(false);
-        fetchQrImage();
-      }, 3000);
+      const res = await fetchApi(`/connections/${platformId}/start`, { method: 'POST' });
+      if (res.authorization_url) {
+        // Redirect directly to the official platform OAuth login endpoint
+        window.location.href = res.authorization_url;
+      } else {
+        alert("Unable to generate authorization URL. Please try again.");
+      }
+    } catch (err) {
+      console.error(`Error connecting to ${platformId}:`, err);
+      alert(`Failed to start connection flow for ${platformId}.`);
     }
   };
 
@@ -242,12 +118,12 @@ export default function Connections() {
         }),
       });
       setSelectedChannel(channel);
-      setWaModalStep('success');
+      setIsSuccess(true);
       await loadConnections();
       setTimeout(() => {
         setIsWaModalOpen(false);
-        setWaModalStep('qr');
-      }, 1800);
+        setIsSuccess(false);
+      }, 1500);
     } catch (err) {
       alert("Failed to save channel selection. Please try again.");
     } finally {
@@ -260,77 +136,39 @@ export default function Connections() {
       alert("Please enter a Channel Name");
       return;
     }
+    const cleanId = customChannelName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
     await handleSelectChannel({
-      id: customChannelName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase(),
+      id: cleanId,
       name: customChannelName.trim(),
       link: customChannelLink.trim(),
     });
   };
 
-  const handleConnect = async (platformId: string) => {
-    if (platformId === 'whatsapp') {
-      setIsWaModalOpen(true);
-      setQrImageUrl(null);
-      setWaStatus('checking');
-      setWaModalStep('qr');
-      setShowCustomChannelInput(false);
-      return;
-    }
-    try {
-      const res = await fetchApi(`/connections/${platformId}/start`, { method: 'POST' });
-      if (res.authorization_url) {
-        window.location.href = res.authorization_url;
-      }
-    } catch (err) {
-      alert("Failed to start connection flow.");
-    }
-  };
-
   const handleSwitchChannel = () => {
     setIsWaModalOpen(true);
-    setWaModalStep('channels');
+    setShowCustomChannelInput(false);
     fetchDiscoveredChannels();
   };
 
   const handleDisconnect = async (platformId: string) => {
-    if (!confirm(`Are you sure you want to disconnect ${platformId}? This will remove the connection and log out the session.`)) return;
+    if (!confirm(`Are you sure you want to disconnect ${platformId}? This will remove the connection and revoke access.`)) return;
     try {
       await fetchApi(`/connections/${platformId}`, { method: 'DELETE' });
       setConnections(prev => prev.filter(c => c.platform !== platformId));
     } catch (err) {
-      alert("Failed to disconnect.");
+      alert("Failed to disconnect platform.");
     }
   };
 
   const handleTestSync = async (platformId: string) => {
-    if (platformId === 'whatsapp') {
-      try {
-        let res: any = null;
-        try {
-          res = await fetchApi('/connections/whatsapp/status');
-        } catch {
-          const directResp = await fetch(`${WCA_DIRECT_URL}/api/status`);
-          if (directResp.ok) res = await directResp.json();
-        }
-        if (res && res.whatsapp && res.whatsapp.isReady) {
-          alert(`✅ WhatsApp Channel Status: Connected & Live!\nTarget Channel: Madhan Tech AI`);
-        } else {
-          alert(`⚠️ WhatsApp Channel status: ${res?.whatsapp?.state || 'Not ready'}. Please click Reconnect.`);
-        }
-      } catch (err) {
-        alert("Failed to test sync with WhatsApp gateway.");
-      }
-      return;
-    }
-
     try {
       const res = await fetchApi(`/connections/${platformId}/test`);
       if (res.success) {
-        alert(`✅ Test sync succeeded for ${platformId}!`);
+        alert(`✅ ${res.message || `Test sync succeeded for ${platformId}!`}`);
       } else {
-        alert(`⚠️ Test sync issue: ${res.message || 'Unknown error'}`);
+        alert(`⚠️ ${res.message || 'Test sync issue. Please reconnect.'}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       alert(`Failed to test sync for ${platformId}.`);
     }
   };
@@ -342,28 +180,40 @@ export default function Connections() {
 
   const platforms = [
     {
+      id: 'whatsapp',
+      name: 'WhatsApp',
+      subtitle: 'Official WhatsApp Business & Channels',
+      icon: <MessageCircle size={22} />,
+      description: 'Broadcast updates directly to your WhatsApp Channels and WhatsApp Business audiences.',
+      color: '#25D366',
+      bgColor: '#dcfce7',
+    },
+    {
       id: 'instagram',
       name: 'Instagram',
+      subtitle: 'Instagram Graph API',
       icon: <Camera size={22} />,
-      description: 'Post photos, carousels, and stories to your Instagram Business account.',
+      description: 'Post photos, carousels, and captions to your Instagram Business account.',
       color: '#E1306C',
       bgColor: '#fce7f3',
     },
     {
       id: 'facebook',
       name: 'Facebook Page',
+      subtitle: 'Facebook Graph API',
       icon: <Facebook size={22} />,
-      description: 'Publish posts and media directly to your Facebook Page.',
+      description: 'Publish posts and media directly to your Facebook Pages.',
       color: '#1877F2',
       bgColor: '#dbeafe',
     },
     {
-      id: 'whatsapp',
-      name: 'WhatsApp Channel Broadcast',
-      icon: <MessageCircle size={22} />,
-      description: 'Broadcast updates to your WhatsApp Channel subscribers.',
-      color: '#25D366',
-      bgColor: '#dcfce7',
+      id: 'twitter',
+      name: 'Twitter / X',
+      subtitle: 'Twitter API v2',
+      icon: <Twitter size={20} />,
+      description: 'Share tweets and threads with real-time media attachments.',
+      color: '#0f172a',
+      bgColor: '#f1f5f9',
     },
   ];
 
@@ -381,7 +231,7 @@ export default function Connections() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-main">Connections</h1>
-          <p className="text-sm text-secondary mt-1">Manage your social media platform connections.</p>
+          <p className="text-sm text-secondary mt-1">Manage your official social media and messaging channels.</p>
         </div>
         <button className="btn-secondary" onClick={handleRefresh} disabled={refreshing}>
           <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
@@ -396,23 +246,23 @@ export default function Connections() {
       >
         <ShieldCheck size={20} style={{ color: '#16a34a', flexShrink: 0 }} />
         <div>
-          <p className="text-sm font-semibold text-main">End-to-End Encrypted Connections</p>
-          <p className="text-xs text-secondary">All OAuth tokens are encrypted at rest using AES-256. Tokens are never stored in plain text.</p>
+          <p className="text-sm font-semibold text-main">Official End-to-End OAuth Authentication</p>
+          <p className="text-xs text-secondary">All connection tokens are encrypted at rest with AES-256. Permissions are managed directly through official Meta and X APIs.</p>
         </div>
       </div>
 
-      {/* Platform Cards */}
+      {/* Platform Cards List */}
       <div className="flex flex-col gap-4">
         {platforms.map((platform) => {
           const account = connections.find((c: any) => c.platform === platform.id);
-          const isNeedsRelink = platform.id === 'whatsapp' && (account?.status === 'needs_relink' || account?.status === 'service_offline');
-          const connected = Boolean(account) && !isNeedsRelink;
+          const connected = Boolean(account) && account?.status !== 'revoked';
+
           return (
             <div
               key={platform.id}
               className="card flex items-center justify-between p-5"
               style={{
-                borderLeft: `4px solid ${connected ? platform.color : (isNeedsRelink ? '#f59e0b' : '#e2e8f0')}`,
+                borderLeft: `4px solid ${connected ? platform.color : '#e2e8f0'}`,
                 transition: 'border-color 0.2s ease',
               }}
             >
@@ -440,26 +290,15 @@ export default function Connections() {
                         <CheckCircle2 size={12} /> Connected
                       </span>
                     )}
-                    {isNeedsRelink && (
-                      <span className="chip" style={{ backgroundColor: '#fef3c7', color: '#d97706', borderColor: '#fde68a' }}>
-                        <AlertCircle size={12} /> Device Link Needed
-                      </span>
-                    )}
                   </div>
                   <p className="text-sm text-secondary mt-1">{platform.description}</p>
                   
                   {connected && (
                     <div className="flex items-center gap-4 mt-3 text-xs text-muted">
                       {account?.platform_account_name && (
-                        <span>Account: <strong className="text-main">{account.platform_account_name}</strong></span>
+                        <span>Account / Channel: <strong className="text-main">{account.platform_account_name}</strong></span>
                       )}
-                      <span>Token Status: <strong className="text-success">Valid Session</strong></span>
-                    </div>
-                  )}
-
-                  {isNeedsRelink && (
-                    <div className="flex items-center gap-2 mt-2 text-xs text-amber-700">
-                      <span>Server restarted — click <strong>Scan QR to Link</strong> to connect your phone.</span>
+                      <span>Token Status: <strong className="text-success">Active Session</strong></span>
                     </div>
                   )}
                 </div>
@@ -482,13 +321,12 @@ export default function Connections() {
                       Disconnect
                     </button>
                   </>
-                ) : isNeedsRelink ? (
-                  <button className="btn-primary" style={{ backgroundColor: '#25D366' }} onClick={() => handleConnect(platform.id)}>
-                    <MessageCircle size={16} />
-                    <span>Scan QR to Link</span>
-                  </button>
                 ) : (
-                  <button className="btn-primary" onClick={() => handleConnect(platform.id)}>
+                  <button 
+                    className="btn-primary" 
+                    style={{ backgroundColor: platform.id === 'whatsapp' ? '#25D366' : undefined }}
+                    onClick={() => handleConnect(platform.id)}
+                  >
                     <Plus size={16} />
                     <span>Connect Channel</span>
                   </button>
@@ -524,8 +362,8 @@ export default function Connections() {
             <Plus size={20} />
           </div>
           <div>
-            <h4 className="font-bold text-base text-main">Connect New Channel</h4>
-            <p className="text-sm text-secondary mt-0.5">Need a custom social connector or webhook integration?</p>
+            <h4 className="font-bold text-base text-main">Custom Webhook / Connector</h4>
+            <p className="text-sm text-secondary mt-0.5">Need a custom social connector or enterprise webhook integration?</p>
           </div>
         </div>
 
@@ -534,7 +372,7 @@ export default function Connections() {
         </button>
       </div>
 
-      {/* WhatsApp Multi-Step Pairing & Channel Selection Modal */}
+      {/* Real-Time WhatsApp Channel Discovery & Selection Modal */}
       {isWaModalOpen && (
         <div
           style={{
@@ -556,7 +394,7 @@ export default function Connections() {
             className="card"
             style={{
               width: '100%',
-              maxWidth: waModalStep === 'channels' ? '540px' : '460px',
+              maxWidth: '540px',
               backgroundColor: '#ffffff',
               borderRadius: '20px',
               padding: '2rem',
@@ -567,425 +405,7 @@ export default function Connections() {
               animation: 'fadeIn 0.2s ease-out'
             }}
           >
-            {/* Modal Header */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div
-                  style={{
-                    backgroundColor: '#dcfce7',
-                    color: '#25D366',
-                    width: '40px',
-                    height: '40px',
-                    borderRadius: '12px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                >
-                  <MessageCircle size={22} />
-                </div>
-                <div>
-                  <h3 className="font-bold text-lg text-main">
-                    {waModalStep === 'channels' ? 'Select WhatsApp Channel' : 'Connect WhatsApp'}
-                  </h3>
-                  <p className="text-xs text-secondary">
-                    {waModalStep === 'channels'
-                      ? 'Choose which channel to connect to UNAI Flow'
-                      : 'Scan QR code from WhatsApp > Linked Devices'}
-                  </p>
-                </div>
-              </div>
-              <button
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: '4px',
-                  color: '#64748b'
-                }}
-                onClick={() => setIsWaModalOpen(false)}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Modal Step 1: QR / Phone Code */}
-            {waModalStep === 'qr' && (
-              <>
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: '1rem',
-                    backgroundColor: '#f8fafc',
-                    padding: '1.25rem',
-                    borderRadius: '16px',
-                    border: '1px solid #e2e8f0'
-                  }}
-                >
-                  {usePhoneMode ? (
-                    /* Phone Pairing UI */
-                    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
-                      {pairingCode ? (
-                        <>
-                          <div style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
-                            <p className="font-semibold text-main mb-1">Enter this code on your phone</p>
-                            <p className="text-sm text-secondary">WhatsApp &gt; Linked Devices &gt; Link with phone number</p>
-                          </div>
-                          <div style={{
-                            display: 'flex',
-                            gap: '0.5rem',
-                            fontSize: '2rem',
-                            fontWeight: 'bold',
-                            letterSpacing: '4px',
-                            color: '#0f172a',
-                            backgroundColor: '#fff',
-                            padding: '1rem 2rem',
-                            borderRadius: '12px',
-                            border: '1px solid #e2e8f0',
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
-                          }}>
-                            {pairingCode.slice(0, 4)} - {pairingCode.slice(4, 8)}
-                          </div>
-                          <p className="text-xs text-amber-600 mt-2 flex items-center gap-1 font-medium">
-                            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-                            Waiting for you to enter code...
-                          </p>
-                        </>
-                      ) : (
-                        <>
-                          <div style={{ textAlign: 'center', width: '100%' }}>
-                            <p className="font-semibold text-main mb-2">Link with Phone Number</p>
-                            <p className="text-xs text-secondary mb-4">Enter your WhatsApp phone number with country code (e.g. +1234567890).</p>
-                            
-                            <input
-                              type="text"
-                              placeholder="+1 234 567 8900"
-                              value={phoneNumber}
-                              onChange={(e) => setPhoneNumber(e.target.value)}
-                              disabled={phoneSubmitted}
-                              style={{
-                                width: '100%',
-                                padding: '0.75rem 1rem',
-                                borderRadius: '8px',
-                                border: '1px solid #cbd5e1',
-                                outline: 'none',
-                                fontSize: '0.95rem',
-                                marginBottom: '0.5rem'
-                              }}
-                            />
-                            {phoneError && <p className="text-xs text-red-500 text-left mb-2">{phoneError}</p>}
-                            
-                            <button
-                              onClick={handlePhoneSubmit}
-                              disabled={phoneSubmitted || !phoneNumber.trim()}
-                              style={{
-                                width: '100%',
-                                padding: '0.75rem',
-                                backgroundColor: phoneSubmitted ? '#94a3b8' : '#25D366',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '8px',
-                                fontWeight: 600,
-                                cursor: phoneSubmitted ? 'not-allowed' : 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.5rem'
-                              }}
-                            >
-                              {phoneSubmitted ? (
-                                <>
-                                  <Loader2 size={16} className="animate-spin" />
-                                  Requesting Code...
-                                </>
-                              ) : (
-                                'Get Pairing Code'
-                              )}
-                            </button>
-                            
-                            {phoneSubmitted && (
-                              <p className="text-xs text-secondary mt-3 flex items-center justify-center gap-1.5">
-                                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-                                Gateway is processing request (may take ~20s)...
-                              </p>
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  ) : (
-                    /* QR Code UI */
-                    <>
-                      <div
-                        style={{
-                          width: '240px',
-                          height: '240px',
-                          backgroundColor: '#ffffff',
-                          borderRadius: '12px',
-                          padding: '8px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-                          border: '1px solid #e2e8f0',
-                        }}
-                      >
-                        {qrImageUrl ? (
-                          <img
-                            src={qrImageUrl}
-                            alt="WhatsApp QR Code"
-                            style={{ width: '100%', height: '100%', borderRadius: '8px', objectFit: 'contain' }}
-                          />
-                        ) : (
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: '0.75rem',
-                              color: '#64748b',
-                              fontSize: '0.85rem',
-                              textAlign: 'center',
-                              padding: '1rem'
-                            }}
-                          >
-                            <Loader2 size={28} className="animate-spin" style={{ color: '#25D366' }} />
-                            <span>
-                              {waStatus === 'authenticating'
-                                ? 'QR Code Scanned! Authenticating with WhatsApp...'
-                                : waStatus === 'checking' || waStatus === 'starting'
-                                ? 'Waking up WhatsApp gateway...'
-                                : waStatus === 'connecting'
-                                ? 'Connecting to WhatsApp Web...'
-                                : 'Loading QR code...'}
-                              <br/>
-                              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-                                {waStatus === 'authenticating'
-                                  ? 'Synchronizing session, please wait a few seconds...'
-                                  : waStatus === 'checking' || waStatus === 'starting'
-                                  ? 'Render free tier may take ~30s to start'
-                                  : 'Please wait a moment'}
-                              </span>
-                            </span>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex items-center justify-between" style={{ width: '100%', fontSize: '0.75rem', color: '#64748b', fontWeight: 500, padding: '0 0.25rem' }}>
-                        <div className="flex items-center gap-1.5">
-                          <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: waStatus === 'authenticating' ? '#3b82f6' : (qrImageUrl ? '#25D366' : '#f59e0b'), display: 'inline-block' }}></span>
-                          <span>
-                            {waStatus === 'authenticating'
-                              ? 'Logging in & syncing...'
-                              : (qrImageUrl ? 'QR Ready — Scan now' : 'Gateway starting...')}
-                          </span>
-                        </div>
-                        <a
-                          href={WCA_DIRECT_URL}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: '#25D366', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px' }}
-                        >
-                          <span>Open Direct</span>
-                          <ExternalLink size={11} />
-                        </a>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                {/* Instructions / Toggle */}
-                {usePhoneMode ? (
-                  <div className="text-center mt-2 flex flex-col gap-2">
-                    <button 
-                      onClick={() => setUsePhoneMode(false)}
-                      className="text-sm font-medium hover:underline"
-                      style={{ color: '#25D366', background: 'none', border: 'none', cursor: 'pointer' }}
-                    >
-                      Scan QR code instead
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: '0.85rem', color: '#475569', lineHeight: '1.6' }}>
-                    <p className="font-semibold text-main" style={{ marginBottom: '0.25rem' }}>How to scan:</p>
-                    <ol style={{ paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                      <li>Open <strong>WhatsApp</strong> on your phone</li>
-                      <li>Go to <strong>Settings</strong> or <strong>⋮ (3 dots)</strong> &gt; <strong>Linked Devices</strong></li>
-                      <li>Tap <strong>Link a Device</strong> and scan the QR code above</li>
-                    </ol>
-                    <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-200">
-                      <button 
-                        onClick={handleResetSession}
-                        disabled={isResetting}
-                        className="text-xs text-slate-500 hover:text-slate-700 underline"
-                        style={{ background: 'none', border: 'none', cursor: isResetting ? 'wait' : 'pointer' }}
-                      >
-                        {isResetting ? 'Resetting session...' : '🔄 Reset Session / Force Fresh QR'}
-                      </button>
-                      <button 
-                        onClick={() => setUsePhoneMode(true)}
-                        className="text-xs font-semibold hover:underline"
-                        style={{ color: '#25D366', background: 'none', border: 'none', cursor: 'pointer' }}
-                      >
-                        Link with phone number instead &rarr;
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* Modal Step 2: Channel Selection */}
-            {waModalStep === 'channels' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-main">Your WhatsApp Channels</span>
-                  <button
-                    onClick={fetchDiscoveredChannels}
-                    disabled={loadingChannels}
-                    className="text-xs text-primary flex items-center gap-1 hover:underline"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer' }}
-                  >
-                    <RefreshCw size={12} className={loadingChannels ? 'animate-spin' : ''} />
-                    <span>Refresh</span>
-                  </button>
-                </div>
-
-                {loadingChannels ? (
-                  <div className="flex flex-col items-center justify-center p-8 gap-3">
-                    <Loader2 size={32} className="animate-spin" style={{ color: '#25D366' }} />
-                    <p className="text-sm text-secondary">Discovering channels on your account...</p>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '320px', overflowY: 'auto' }}>
-                    {discoveredChannels.map((ch, idx) => (
-                      <div
-                        key={ch.id || idx}
-                        style={{
-                          padding: '1rem',
-                          borderRadius: '12px',
-                          border: '1px solid #e2e8f0',
-                          backgroundColor: '#f8fafc',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: '1rem'
-                        }}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div
-                            style={{
-                              width: '38px',
-                              height: '38px',
-                              borderRadius: '10px',
-                              backgroundColor: '#dcfce7',
-                              color: '#25D366',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontSize: '1.1rem'
-                            }}
-                          >
-                            📢
-                          </div>
-                          <div>
-                            <p className="font-bold text-sm text-main">{ch.name}</p>
-                            <p className="text-xs text-secondary">{ch.description || 'WhatsApp Channel'}</p>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={() => handleSelectChannel(ch)}
-                          disabled={savingChannel}
-                          style={{
-                            padding: '0.5rem 1rem',
-                            backgroundColor: '#25D366',
-                            color: '#ffffff',
-                            borderRadius: '8px',
-                            border: 'none',
-                            fontWeight: 600,
-                            fontSize: '0.85rem',
-                            cursor: savingChannel ? 'wait' : 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.35rem'
-                          }}
-                        >
-                          {savingChannel && selectedChannel?.id === ch.id ? (
-                            <Loader2 size={14} className="animate-spin" />
-                          ) : (
-                            <CheckCircle2 size={14} />
-                          )}
-                          <span>Select</span>
-                        </button>
-                      </div>
-                    ))}
-
-                    {/* Custom Channel Input Toggle */}
-                    <div style={{ marginTop: '0.5rem' }}>
-                      {!showCustomChannelInput ? (
-                        <button
-                          onClick={() => setShowCustomChannelInput(true)}
-                          className="text-xs text-primary hover:underline font-medium"
-                          style={{ background: 'none', border: 'none', cursor: 'pointer' }}
-                        >
-                          + Connect a different channel by Name / Link
-                        </button>
-                      ) : (
-                        <div style={{ padding: '1rem', borderRadius: '12px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                          <p className="text-xs font-semibold text-main">Connect by Custom Channel Info</p>
-                          <input
-                            type="text"
-                            placeholder="Channel Name (e.g. My Tech Community)"
-                            value={customChannelName}
-                            onChange={(e) => setCustomChannelName(e.target.value)}
-                            style={{ padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
-                          />
-                          <input
-                            type="text"
-                            placeholder="Channel Link (optional, e.g. https://whatsapp.com/channel/...)"
-                            value={customChannelLink}
-                            onChange={(e) => setCustomChannelLink(e.target.value)}
-                            style={{ padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
-                          />
-                          <div className="flex items-center gap-2 justify-end">
-                            <button
-                              onClick={() => setShowCustomChannelInput(false)}
-                              className="text-xs text-secondary hover:underline"
-                              style={{ background: 'none', border: 'none', cursor: 'pointer' }}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              onClick={handleCustomChannelSubmit}
-                              disabled={savingChannel || !customChannelName.trim()}
-                              style={{
-                                padding: '0.4rem 0.85rem',
-                                backgroundColor: '#25D366',
-                                color: 'white',
-                                borderRadius: '6px',
-                                border: 'none',
-                                fontSize: '0.85rem',
-                                fontWeight: 600,
-                                cursor: 'pointer'
-                              }}
-                            >
-                              Connect
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Modal Step 3: Success Confirmation */}
-            {waModalStep === 'success' && (
+            {isSuccess ? (
               <div
                 style={{
                   display: 'flex',
@@ -1010,9 +430,215 @@ export default function Connections() {
                 >
                   <CheckCircle2 size={36} />
                 </div>
-                <h4 className="font-bold text-lg text-main">Connected to {selectedChannel?.name || 'Channel'}!</h4>
-                <p className="text-sm text-secondary">Posts created in UNAI Flow will now broadcast to this channel.</p>
+                <h4 className="font-bold text-lg text-main">Connected to {selectedChannel?.name || 'WhatsApp Channel'}!</h4>
+                <p className="text-sm text-secondary">Your WhatsApp broadcasts will now publish automatically to this channel.</p>
               </div>
+            ) : (
+              <>
+                {/* Modal Header */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div
+                      style={{
+                        backgroundColor: '#dcfce7',
+                        color: '#25D366',
+                        width: '40px',
+                        height: '40px',
+                        borderRadius: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      <MessageCircle size={22} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg text-main">Select WhatsApp Channel</h3>
+                      <p className="text-xs text-secondary">
+                        Choose which WhatsApp account or channel to connect
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '4px',
+                      color: '#64748b'
+                    }}
+                    onClick={() => setIsWaModalOpen(false)}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                {/* Modal Content */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-main">Available WhatsApp Accounts &amp; Channels</span>
+                    <button
+                      onClick={fetchDiscoveredChannels}
+                      disabled={loadingChannels}
+                      className="text-xs text-primary flex items-center gap-1 hover:underline"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                      <RefreshCw size={12} className={loadingChannels ? 'animate-spin' : ''} />
+                      <span>Refresh</span>
+                    </button>
+                  </div>
+
+                  {loadingChannels ? (
+                    <div className="flex flex-col items-center justify-center p-8 gap-3">
+                      <Loader2 size={32} className="animate-spin" style={{ color: '#25D366' }} />
+                      <p className="text-sm text-secondary">Discovering real-time channels from your WhatsApp account...</p>
+                    </div>
+                  ) : discoveredChannels.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '320px', overflowY: 'auto' }}>
+                      {discoveredChannels.map((ch, idx) => (
+                        <div
+                          key={ch.id || idx}
+                          style={{
+                            padding: '1rem',
+                            borderRadius: '12px',
+                            border: '1px solid #e2e8f0',
+                            backgroundColor: '#f8fafc',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '1rem'
+                          }}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              style={{
+                                width: '38px',
+                                height: '38px',
+                                borderRadius: '10px',
+                                backgroundColor: ch.type === 'whatsapp_business' ? '#e0f2fe' : '#dcfce7',
+                                color: ch.type === 'whatsapp_business' ? '#0284c7' : '#25D366',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              }}
+                            >
+                              {ch.type === 'whatsapp_business' ? <Building2 size={18} /> : <Radio size={18} />}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <p className="font-bold text-sm text-main">{ch.name}</p>
+                                {ch.display_number && (
+                                  <span className="chip" style={{ fontSize: '0.65rem', padding: '1px 5px', backgroundColor: '#f1f5f9' }}>
+                                    {ch.display_number}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-secondary mt-0.5">{ch.description || 'WhatsApp Channel'}</p>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => handleSelectChannel(ch)}
+                            disabled={savingChannel}
+                            style={{
+                              padding: '0.5rem 1rem',
+                              backgroundColor: '#25D366',
+                              color: '#ffffff',
+                              borderRadius: '8px',
+                              border: 'none',
+                              fontWeight: 600,
+                              fontSize: '0.85rem',
+                              cursor: savingChannel ? 'wait' : 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem'
+                            }}
+                          >
+                            {savingChannel && selectedChannel?.id === ch.id ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <CheckCircle2 size={14} />
+                            )}
+                            <span>Connect</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        padding: '1.25rem',
+                        borderRadius: '12px',
+                        backgroundColor: '#f8fafc',
+                        border: '1px dashed #cbd5e1',
+                        textAlign: 'center'
+                      }}
+                    >
+                      <AlertCircle size={24} style={{ margin: '0 auto 0.5rem', color: '#64748b' }} />
+                      <p className="text-sm font-semibold text-main">No Channels Detected Automatically</p>
+                      <p className="text-xs text-secondary mt-1">
+                        We authenticated your WhatsApp account, but no public channels or business numbers were detected yet. You can create a channel in WhatsApp or enter your channel details below.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Connect by Custom Channel Name/Link Input Toggle */}
+                  <div style={{ marginTop: '0.5rem' }}>
+                    {!showCustomChannelInput ? (
+                      <button
+                        onClick={() => setShowCustomChannelInput(true)}
+                        className="text-xs text-primary hover:underline font-medium"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                      >
+                        + Connect a WhatsApp Channel by Name / Link
+                      </button>
+                    ) : (
+                      <div style={{ padding: '1rem', borderRadius: '12px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <p className="text-xs font-semibold text-main">Enter WhatsApp Channel Details</p>
+                        <input
+                          type="text"
+                          placeholder="Channel Name (e.g. My Tech Community)"
+                          value={customChannelName}
+                          onChange={(e) => setCustomChannelName(e.target.value)}
+                          style={{ padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                        />
+                        <input
+                          type="text"
+                          placeholder="Channel Link (optional, e.g. https://whatsapp.com/channel/...)"
+                          value={customChannelLink}
+                          onChange={(e) => setCustomChannelLink(e.target.value)}
+                          style={{ padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                        />
+                        <div className="flex items-center gap-2 justify-end">
+                          <button
+                            onClick={() => setShowCustomChannelInput(false)}
+                            className="text-xs text-secondary hover:underline"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleCustomChannelSubmit}
+                            disabled={savingChannel || !customChannelName.trim()}
+                            style={{
+                              padding: '0.4rem 0.85rem',
+                              backgroundColor: '#25D366',
+                              color: 'white',
+                              borderRadius: '6px',
+                              border: 'none',
+                              fontSize: '0.85rem',
+                              fontWeight: 600,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Connect
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
             )}
           </div>
         </div>

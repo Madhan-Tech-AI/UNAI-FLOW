@@ -57,6 +57,24 @@ export default function AutomationHistory() {
 
   useEffect(() => {
     fetchAutomations();
+
+    // Supabase Realtime subscription for instant live post updates
+    const channel = supabase
+      .channel('realtime_automation_history')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'automation_logs' }, () => {
+        fetchAutomations();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_publish_jobs' }, () => {
+        fetchAutomations();
+      })
+      .on('broadcast', { event: 'post_published' }, () => {
+        fetchAutomations();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const filteredAutomations = automations.filter(auto => {

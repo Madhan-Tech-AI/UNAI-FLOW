@@ -81,7 +81,64 @@ async def on_startup():
 async def on_shutdown():
     await whatsapp_engine.close()
 
-# ── Public Endpoints ──
+# ── V1 REST API Compatibility Endpoints ──
+
+@app.post("/v1/whatsapp/connect")
+async def v1_connect():
+    status = await whatsapp_engine.get_status()
+    return {
+        "success": True,
+        "status": "CONNECTED" if status.get("isReady") else "INITIALIZING",
+        "isReady": status.get("isReady", False)
+    }
+
+@app.get("/v1/whatsapp/{connection_id}/status")
+@app.get("/v1/whatsapp/status")
+async def v1_get_status(connection_id: Optional[str] = None):
+    status = await whatsapp_engine.get_status()
+    is_ready = status["isReady"]
+    state_str = "CONNECTED" if is_ready else ("QR_READY" if status.get("hasQR") else ("AUTHENTICATING" if status.get("state") == "authenticating" else "INITIALIZING"))
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": is_ready,
+            "connectionId": connection_id or "default_session",
+            "status": state_str,
+            "isReady": is_ready,
+            "hasQR": status.get("hasQR", False),
+            "pairingCode": status.get("pairingCode"),
+            "userInfo": status.get("userInfo"),
+            "whatsapp": status,
+            "service": "whatsapp-channel-api-python",
+        }
+    )
+
+@app.get("/v1/whatsapp/{connection_id}/qr")
+@app.get("/v1/whatsapp/qr")
+async def v1_get_qr(connection_id: Optional[str] = None, format: Optional[str] = None):
+    return await get_qr(format=format)
+
+@app.post("/v1/whatsapp/{connection_id}/pair")
+@app.post("/v1/whatsapp/pair")
+async def v1_pair_phone(req: PhonePairRequest, connection_id: Optional[str] = None):
+    return await pair_phone(req)
+
+@app.get("/v1/whatsapp/{connection_id}/channels")
+@app.get("/v1/whatsapp/channels")
+async def v1_get_channels(connection_id: Optional[str] = None):
+    return await get_channels()
+
+@app.post("/v1/whatsapp/connections/{connection_id}/channels/{channel_id}/publish")
+async def v1_publish(connection_id: str, channel_id: str, req: PublishRequest, _auth: str = Depends(check_api_key)):
+    req.channelId = channel_id
+    return await publish_unified(req, _auth=_auth)
+
+@app.post("/v1/whatsapp/{connection_id}/disconnect")
+@app.post("/v1/whatsapp/disconnect")
+async def v1_disconnect(connection_id: Optional[str] = None):
+    return await logout()
+
+# ── Legacy Endpoints ──
 
 @app.get("/api/status")
 async def get_status():

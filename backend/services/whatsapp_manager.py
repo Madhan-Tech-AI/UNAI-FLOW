@@ -57,6 +57,7 @@ class WhatsAppManager:
         for base_url in WhatsAppManager.get_gateway_urls():
             try:
                 async with httpx.AsyncClient(timeout=4.0) as client:
+                    # 1. Try v1 route
                     resp = await client.get(
                         f"{base_url}/v1/whatsapp/{connection_id}/status",
                         headers={"X-API-Key": api_key}
@@ -72,6 +73,24 @@ class WhatsAppManager:
                             account_name=user_info.get("name")
                         )
                         return data
+                    elif resp.status_code == 404:
+                        # 2. Fallback to /api/status
+                        legacy_resp = await client.get(f"{base_url}/api/status")
+                        if legacy_resp.status_code == 200:
+                            data = legacy_resp.json()
+                            wa = data.get("whatsapp", {})
+                            is_ready = wa.get("isReady", False)
+                            state_str = "CONNECTED" if is_ready else ("QR_READY" if wa.get("hasQR") else "INITIALIZING")
+                            SessionManager.update_connection_status(connection_id=connection_id, status=state_str)
+                            return {
+                                "success": is_ready,
+                                "connectionId": connection_id,
+                                "status": state_str,
+                                "isReady": is_ready,
+                                "hasQR": wa.get("hasQR", False),
+                                "pairingCode": wa.get("pairingCode"),
+                                "whatsapp": wa
+                            }
             except Exception:
                 continue
 
@@ -100,6 +119,11 @@ class WhatsAppManager:
                     )
                     if resp.status_code == 200 and len(resp.content) > 50:
                         return resp.content
+                    elif resp.status_code == 404:
+                        # Fallback to /api/qr
+                        resp_legacy = await client.get(f"{base_url}/api/qr")
+                        if resp_legacy.status_code == 200 and len(resp_legacy.content) > 50:
+                            return resp_legacy.content
             except Exception:
                 continue
         return None

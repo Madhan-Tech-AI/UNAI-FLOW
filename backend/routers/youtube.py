@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, Any, Optional
 from middleware.auth import verify_jwt
 from services.youtube_service import YouTubeService
-from services.publish_queue import PublishQueue
 from lib.supabase_client import supabase
 
 router = APIRouter(prefix="/v1/youtube", tags=["YouTube Automation"])

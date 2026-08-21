@@ -245,8 +245,9 @@ export default function Connections() {
       }
 
       // ── PAIRING CODE ──
-      if (wa.pairingCode) {
-        setPairingCode(wa.pairingCode);
+      const pairCode = wa.pairingCode || statusData.pairingCode || wa.pairing_code || statusData.pairing_code;
+      if (pairCode) {
+        setPairingCode(pairCode);
         setWaState('WAITING_FOR_SCAN');
         return;
       }
@@ -336,25 +337,42 @@ export default function Connections() {
     setPhoneSubmitted(true);
     setPairingCode(null);
     try {
-      await fetchApi('/v1/whatsapp/pair', {
+      const res = await fetchApi('/v1/whatsapp/pair', {
         method: 'POST',
         body: JSON.stringify({ phone: phoneNumber.trim() }),
       });
-      return;
+      if (res?.pairingCode || res?.pairing_code) {
+        setPairingCode(res.pairingCode || res.pairing_code);
+        setWaState('WAITING_FOR_SCAN');
+        return;
+      }
     } catch {}
 
     try {
-      await fetchApi('/connections/whatsapp/pair-phone', {
+      const res2 = await fetchApi('/connections/whatsapp/pair-phone', {
         method: 'POST',
         body: JSON.stringify({ phone: phoneNumber.trim() }),
       });
+      if (res2?.pairingCode || res2?.pairing_code) {
+        setPairingCode(res2.pairingCode || res2.pairing_code);
+        setWaState('WAITING_FOR_SCAN');
+        return;
+      }
     } catch {
       try {
-        await fetch(`${WCA_URL}/api/pair-phone`, {
+        const resp3 = await fetch(`${WCA_URL}/api/pair-phone`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ phone: phoneNumber.trim() }),
         });
+        if (resp3.ok) {
+          const data3 = await resp3.json();
+          if (data3?.pairingCode || data3?.pairing_code) {
+            setPairingCode(data3.pairingCode || data3.pairing_code);
+            setWaState('WAITING_FOR_SCAN');
+            return;
+          }
+        }
       } catch {
         setPhoneError('Failed to request pairing. Gateway may be starting up.');
         setPhoneSubmitted(false);

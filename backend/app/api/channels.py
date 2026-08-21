@@ -3,13 +3,13 @@ from pydantic import BaseModel
 from typing import Dict, Any, List
 from app.api.auth import get_current_user_id
 from app.whatsapp.channel_manager import ChannelManager
-from app.whatsapp.authorized_provider import MetaCloudAPIProvider
+from app.whatsapp.baileys_provider import BaileysProvider
 from app.core.config import settings
 
 router = APIRouter(prefix="/channels", tags=["Channels"])
 
 # Initialize provider and manager
-provider = MetaCloudAPIProvider(token=settings.whatsapp_provider_config)
+provider = BaileysProvider()
 channel_manager = ChannelManager(provider=provider)
 
 class SyncRequest(BaseModel):

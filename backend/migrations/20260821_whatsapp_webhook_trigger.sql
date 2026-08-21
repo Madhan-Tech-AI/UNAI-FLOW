@@ -9,12 +9,15 @@ create extension if not exists "pg_net" with schema "extensions";
 create or replace function public.trigger_whatsapp_publish()
 returns trigger as $$
 declare
-  edge_function_url text := 'https://your-project-ref.supabase.co/functions/v1/whatsapp-publish-trigger';
-  service_role_key text := 'YOUR_SUPABASE_SERVICE_ROLE_KEY';
+  -- Your Supabase Edge Function URL
+  edge_function_url text := 'https://geifdxvvfobvbmmsqhry.supabase.co/rest/v1/whatsapp-publish-trigger';
+  
+  -- Replace with your Supabase Service Role Key (from Supabase Dashboard -> Project Settings -> API)
+  service_role_key text := 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdlaWZkeHZ2Zm9idmJtbXNxaHJ5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NjI2ODc3NSwiZXhwIjoyMTAxODQ0Nzc1fQ.irJx0TxRnrfeqh156m8RRxncYo7QVdwvI1tBgaST74g';
 begin
   -- Only trigger for newly queued jobs
   if (new.status = 'queued') then
-    -- If pg_net is available, invoke edge function asynchronously in realtime
+    -- Invoke edge function asynchronously in realtime
     perform net.http_post(
       url := edge_function_url,
       headers := jsonb_build_object(

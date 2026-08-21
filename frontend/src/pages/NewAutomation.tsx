@@ -31,6 +31,11 @@ export default function NewAutomation() {
   const [error, setError] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
+  // YouTube Ingestion State
+  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [loadingYoutube, setLoadingYoutube] = useState(false);
+  const [youtubeMeta, setYoutubeMeta] = useState<any>(null);
+
   const [platforms, setPlatforms] = useState({
     instagram: true,
     twitter: true,
@@ -52,6 +57,43 @@ export default function NewAutomation() {
       reader.onload = () => resolve(reader.result as string);
       reader.onerror = error => reject(error);
     });
+  };
+
+  const handleImportYoutube = async () => {
+    if (!youtubeUrl.trim()) return;
+    setLoadingYoutube(true);
+    setError('');
+    try {
+      const res = await fetchApi('/v1/youtube/extract', {
+        method: 'POST',
+        body: JSON.stringify({ url: youtubeUrl.trim() })
+      });
+
+      if (res?.metadata) {
+        const meta = res.metadata;
+        setYoutubeMeta(meta);
+        setCampaignName(`YouTube: ${meta.title?.slice(0, 45)}`);
+        setCtaLink(meta.url || youtubeUrl.trim());
+        setContent(`🚀 *New Video Alert!*\n\n*${meta.title}*\n\n${meta.author ? `By ${meta.author}` : ''}\n\nWatch the complete breakdown now 👇\n${meta.url || youtubeUrl.trim()}`);
+        setPlatforms(prev => ({ ...prev, whatsapp: true }));
+
+        // Try downloading thumbnail as File
+        if (meta.thumbnail_url) {
+          try {
+            const imgResp = await fetch(meta.thumbnail_url);
+            const blob = await imgResp.blob();
+            const file = new File([blob], `yt_thumb_${Date.now()}.jpg`, { type: 'image/jpeg' });
+            setSelectedFile(file);
+          } catch (imgErr) {
+            console.log('Direct thumbnail download skipped, will use URL', imgErr);
+          }
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to import YouTube video metadata.');
+    } finally {
+      setLoadingYoutube(false);
+    }
   };
 
   const handleGenerate = async (e: React.FormEvent) => {
@@ -157,6 +199,49 @@ export default function NewAutomation() {
         
         {/* Left Column: Form Controls */}
         <div className="card flex-col gap-6" style={{ width: '100%' }}>
+          {/* YouTube Quick Importer Banner */}
+          <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fee2e2', borderRadius: '12px', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color: '#dc2626', fontSize: '0.9rem' }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                </svg>
+                <span>Import & Format from YouTube</span>
+              </div>
+              <span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 600 }}>Auto-Generates WhatsApp Broadcast</span>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input
+                type="url"
+                className="input"
+                placeholder="Paste YouTube Video URL (e.g. https://youtu.be/... or https://youtube.com/watch?v=...)"
+                value={youtubeUrl}
+                onChange={(e) => setYoutubeUrl(e.target.value)}
+                style={{ backgroundColor: '#ffffff', height: '40px', fontSize: '0.85rem' }}
+              />
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleImportYoutube}
+                disabled={loadingYoutube || !youtubeUrl.trim()}
+                style={{ backgroundColor: '#dc2626', borderColor: '#dc2626', minWidth: '130px', height: '40px', fontSize: '0.85rem' }}
+              >
+                {loadingYoutube ? <Loader2 size={16} className="animate-spin" /> : '⚡ Import & Format'}
+              </button>
+            </div>
+            {youtubeMeta && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem', padding: '0.5rem', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #fecaca' }}>
+                {youtubeMeta.thumbnail_url && (
+                  <img src={youtubeMeta.thumbnail_url} alt="Thumbnail" style={{ width: '60px', height: '36px', objectFit: 'cover', borderRadius: '4px' }} />
+                )}
+                <div style={{ overflow: 'hidden' }}>
+                  <p style={{ fontSize: '0.8rem', fontWeight: 700, color: '#111827', margin: 0 }} className="truncate">{youtubeMeta.title}</p>
+                  <p style={{ fontSize: '0.7rem', color: '#6b7280', margin: 0 }}>{youtubeMeta.author} • Thumbnail attached</p>
+                </div>
+              </div>
+            )}
+          </div>
+
           <form onSubmit={handleGenerate} className="flex-col gap-6">
             {/* Campaign Name */}
             <div>

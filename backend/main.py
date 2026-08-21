@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import auth, automations, connections
+from routers import auth, automations, connections, whatsapp, youtube
 import os
 
 app = FastAPI(title="UNAI Flow API")
@@ -17,6 +17,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(automations.router)
 app.include_router(connections.router)
+app.include_router(whatsapp.router)
+app.include_router(youtube.router)
 
 @app.get("/health")
 def health_check():

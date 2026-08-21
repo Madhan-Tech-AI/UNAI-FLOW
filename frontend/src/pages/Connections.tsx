@@ -104,8 +104,22 @@ export default function Connections() {
 
   // ── Fetch QR image from gateway (binary PNG) ──
   const fetchQrImage = useCallback(async (): Promise<boolean> => {
-    // Strategy: try backend proxy first, then direct gateway
-    // Backend proxy goes through auth and tries local + cloud gateways
+    // Strategy: try /v1/whatsapp/qr first, then /connections/whatsapp/qr-image, then direct gateway
+    try {
+      const resp = await fetchApiRaw('/v1/whatsapp/qr');
+      const ct = resp.headers.get('content-type') || '';
+      if (ct.includes('image') && resp.status === 200) {
+        const blob = await resp.blob();
+        if (blob.size > 100) {
+          if (qrBlobUrlRef.current) URL.revokeObjectURL(qrBlobUrlRef.current);
+          const url = URL.createObjectURL(blob);
+          qrBlobUrlRef.current = url;
+          if (mountedRef.current) setQrImageUrl(url);
+          return true;
+        }
+      }
+    } catch {}
+
     try {
       const resp = await fetchApiRaw('/connections/whatsapp/qr-image');
       const ct = resp.headers.get('content-type') || '';
@@ -119,9 +133,7 @@ export default function Connections() {
           return true;
         }
       }
-    } catch {
-      // Backend proxy failed, try direct gateway
-    }
+    } catch {}
 
     // Direct gateway call (no auth needed for QR)
     try {
@@ -138,28 +150,28 @@ export default function Connections() {
             return true;
           }
         }
-        // Gateway returned JSON (e.g. "already connected")
         if (ct.includes('json')) {
           const data = await resp.json();
-          if (data.state === 'connected') return false; // no QR needed
+          if (data.state === 'connected') return false;
         }
       }
-    } catch {
-      // Gateway offline or cold-starting
-    }
+    } catch {}
 
     return false;
   }, []);
 
   // ── Fetch status from gateway ──
   const fetchWaStatus = useCallback(async (): Promise<any> => {
-    // Try backend proxy first
+    try {
+      const res = await fetchApi('/v1/whatsapp/status');
+      if (res?.whatsapp || res?.status) return res;
+    } catch {}
+
     try {
       const res = await fetchApi('/connections/whatsapp/status');
       if (res?.whatsapp) return res;
     } catch {}
 
-    // Direct gateway
     try {
       const resp = await fetch(`${WCA_URL}/api/status`, { signal: AbortSignal.timeout(6000) });
       if (resp.ok) return await resp.json();
@@ -171,6 +183,14 @@ export default function Connections() {
   // ── Fetch discovered channels ──
   const fetchDiscoveredChannels = async () => {
     setLoadingChannels(true);
+    try {
+      const res = await fetchApi('/v1/whatsapp/channels');
+      if (mountedRef.current && res?.channels && Array.isArray(res.channels)) {
+        setDiscoveredChannels(res.channels);
+        return;
+      }
+    } catch {}
+
     try {
       const res = await fetchApi('/connections/whatsapp/channels');
       if (mountedRef.current && res?.channels && Array.isArray(res.channels)) {
@@ -316,6 +336,14 @@ export default function Connections() {
     setPhoneSubmitted(true);
     setPairingCode(null);
     try {
+      await fetchApi('/v1/whatsapp/pair', {
+        method: 'POST',
+        body: JSON.stringify({ phone: phoneNumber.trim() }),
+      });
+      return;
+    } catch {}
+
+    try {
       await fetchApi('/connections/whatsapp/pair-phone', {
         method: 'POST',
         body: JSON.stringify({ phone: phoneNumber.trim() }),
@@ -355,14 +383,26 @@ export default function Connections() {
   const handleSelectChannel = async (channel: any) => {
     setSavingChannel(true);
     try {
-      await fetchApi('/connections/whatsapp/select-channel', {
-        method: 'POST',
-        body: JSON.stringify({
-          channel_id: channel.id,
-          channel_name: channel.name,
-          channel_link: channel.link || '',
-        }),
-      });
+      try {
+        await fetchApi('/v1/whatsapp/select-channel', {
+          method: 'POST',
+          body: JSON.stringify({
+            channel_id: channel.id,
+            channel_name: channel.name,
+            channel_link: channel.link || '',
+            role: channel.role || 'admin',
+          }),
+        });
+      } catch {
+        await fetchApi('/connections/whatsapp/select-channel', {
+          method: 'POST',
+          body: JSON.stringify({
+            channel_id: channel.id,
+            channel_name: channel.name,
+            channel_link: channel.link || '',
+          }),
+        });
+      }
       setSelectedChannel(channel);
       setWaModalStep('success');
       await loadConnections();

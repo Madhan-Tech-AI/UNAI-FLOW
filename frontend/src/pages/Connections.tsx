@@ -47,7 +47,7 @@ export default function Connections() {
     
     const interval = setInterval(async () => {
       try {
-        const res = await fetchApi(`/whatsapp/status?session_identifier=${sessionRef.current}`);
+        const res = await fetchApi(`/api/whatsapp/status?session_identifier=${sessionRef.current}`);
         if (res.data?.status) {
           setWaState(res.data.status);
           if (res.data.status === 'CONNECTED') {
@@ -66,7 +66,7 @@ export default function Connections() {
 
   const loadWaChannels = async () => {
     try {
-      const res = await fetchApi('/channels');
+      const res = await fetchApi('/api/channels');
       if (res.data) setChannels(res.data);
     } catch (e) {
       console.error(e);
@@ -79,7 +79,7 @@ export default function Connections() {
     setWaState('INITIALIZING');
     setQrCode(null);
     try {
-      const res = await fetchApi('/whatsapp/connect', {
+      const res = await fetchApi('/api/whatsapp/connect', {
         method: 'POST',
         body: JSON.stringify({ session_identifier: sessionRef.current })
       });
@@ -100,7 +100,7 @@ export default function Connections() {
   const handleSyncChannels = async () => {
     try {
       setWaState('SYNCING');
-      const res = await fetchApi('/channels/sync', {
+      const res = await fetchApi('/api/channels/sync', {
         method: 'POST',
         body: JSON.stringify({ session_identifier: sessionRef.current })
       });
@@ -113,7 +113,10 @@ export default function Connections() {
 
   const handleSelectChannel = async (id: string) => {
     try {
-      await fetchApi(`/channels/${id}/select`, { method: 'POST' });
+      await fetchApi(`/api/channels/${id}/select`, { 
+        method: 'POST',
+        body: JSON.stringify({ session_identifier: sessionRef.current })
+      });
       const ch = channels.find(c => c.id === id);
       setSelectedChannel(ch);
       setWaModalStep('success');

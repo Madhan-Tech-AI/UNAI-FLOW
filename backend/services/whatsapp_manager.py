@@ -32,7 +32,7 @@ class WhatsAppManager:
 
         for base_url in WhatsAppManager.get_gateway_urls():
             try:
-                async with httpx.AsyncClient(timeout=8.0) as client:
+                async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(
                         f"{base_url}/v1/whatsapp/connect",
                         headers={"X-API-Key": api_key},
@@ -56,7 +56,7 @@ class WhatsAppManager:
 
         for base_url in WhatsAppManager.get_gateway_urls():
             try:
-                async with httpx.AsyncClient(timeout=4.0) as client:
+                async with httpx.AsyncClient(timeout=10.0) as client:
                     # 1. Try v1 route
                     resp = await client.get(
                         f"{base_url}/v1/whatsapp/{connection_id}/status",
@@ -112,7 +112,7 @@ class WhatsAppManager:
 
         for base_url in WhatsAppManager.get_gateway_urls():
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
+                async with httpx.AsyncClient(timeout=15.0) as client:
                     resp = await client.get(
                         f"{base_url}/v1/whatsapp/{connection_id}/qr",
                         headers={"X-API-Key": api_key}
@@ -135,7 +135,7 @@ class WhatsAppManager:
 
         for base_url in WhatsAppManager.get_gateway_urls():
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
+                async with httpx.AsyncClient(timeout=30.0) as client:
                     resp = await client.post(
                         f"{base_url}/v1/whatsapp/{connection_id}/pair",
                         headers={"X-API-Key": api_key},

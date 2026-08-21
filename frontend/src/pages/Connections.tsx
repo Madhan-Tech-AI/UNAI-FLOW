@@ -292,8 +292,8 @@ export default function Connections() {
 
     // Initial poll immediately
     poll();
-    // Poll every 3s (give Render gateway time to respond)
-    pollerRef.current = window.setInterval(poll, 3000);
+    // Poll every 5s (give Render gateway time to respond and match 10s backend timeout)
+    pollerRef.current = window.setInterval(poll, 5000);
 
     return () => {
       cancelled = true;

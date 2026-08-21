@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, AtSign, MessageCircle, Sparkles, Loader2, Link2, UploadCloud, Layers, Zap, Info } from 'lucide-react';
+import { Sparkles, Layers, Zap, Loader2, Link2, UploadCloud, Camera, AtSign, Info } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
 function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
@@ -39,8 +39,8 @@ export default function NewAutomation() {
   const [platforms, setPlatforms] = useState({
     instagram: true,
     twitter: true,
-    whatsapp: true,
-    facebook: true
+    facebook: true,
+    whatsapp: false
   });
 
   const tones = [
@@ -407,27 +407,58 @@ export default function NewAutomation() {
                 onChange={(e) => {
                   const val = e.target.value;
                   if (val === 'all') {
-                    setPlatforms({ instagram: true, facebook: true, whatsapp: true, twitter: true });
+                    setPlatforms({ instagram: true, facebook: true, twitter: true, whatsapp: true });
                   } else if (val === 'meta') {
-                    setPlatforms({ instagram: true, facebook: true, whatsapp: false, twitter: false });
-                  } else if (val === 'meta_wa') {
-                    setPlatforms({ instagram: true, facebook: true, whatsapp: true, twitter: false });
+                    setPlatforms({ instagram: true, facebook: true, twitter: false, whatsapp: true });
                   } else if (val === 'insta_only') {
-                    setPlatforms({ instagram: true, facebook: false, whatsapp: false, twitter: false });
+                    setPlatforms({ instagram: true, facebook: false, twitter: false, whatsapp: false });
                   } else if (val === 'fb_only') {
-                    setPlatforms({ instagram: false, facebook: true, whatsapp: false, twitter: false });
+                    setPlatforms({ instagram: false, facebook: true, twitter: false, whatsapp: false });
+                  } else if (val === 'wa_only') {
+                    setPlatforms({ instagram: false, facebook: false, twitter: false, whatsapp: true });
                   }
                 }}
               >
-                <option value="all">🌐 All Channels (Instagram + Facebook + WhatsApp + Twitter)</option>
-                <option value="meta">📸 Meta Suite Only (Instagram + Facebook)</option>
-                <option value="meta_wa">💬 Meta & WhatsApp (Instagram + Facebook + WhatsApp)</option>
+                <option value="all">🌐 All Channels (Instagram + Facebook + Twitter + WhatsApp)</option>
+                <option value="meta">📸 Meta Suite (Instagram + Facebook + WhatsApp)</option>
                 <option value="insta_only">📷 Instagram Only</option>
                 <option value="fb_only">👍 Facebook Only</option>
+                <option value="wa_only">💬 WhatsApp Only</option>
               </select>
             </div>
 
             <div className="flex-col gap-3">
+              {/* WhatsApp Card */}
+              <div
+                onClick={() => togglePlatform('whatsapp')}
+                className="flex items-center justify-between p-3.5 cursor-pointer"
+                style={{
+                  borderRadius: '12px',
+                  border: platforms.whatsapp ? '2px solid #25D366' : '1px solid var(--border)',
+                  backgroundColor: platforms.whatsapp ? '#f0fdf4' : '#ffffff',
+                  transition: 'all 0.2s',
+                  marginBottom: '12px'
+                }}
+              >
+                <div className="flex items-center gap-3">
+                  <span style={{ color: '#25D366', backgroundColor: '#dcfce7', padding: '8px', borderRadius: '10px' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <h4 className="font-bold text-sm text-main">WhatsApp Channels</h4>
+                    <p className="text-xs text-secondary">Broadcast directly to followers</p>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={platforms.whatsapp}
+                  onChange={() => togglePlatform('whatsapp')}
+                  className="w-4 h-4 text-primary bg-gray-100 border-gray-300 rounded focus:ring-primary"
+                  onClick={e => e.stopPropagation()}
+                />
+              </div>
               {/* Instagram Card */}
               <div
                 onClick={() => togglePlatform('instagram')}
@@ -483,35 +514,6 @@ export default function NewAutomation() {
                   onChange={() => togglePlatform('twitter')}
                   onClick={(e) => e.stopPropagation()}
                   style={{ width: '1.2rem', height: '1.2rem', accentColor: '#0f172a', cursor: 'pointer' }}
-                />
-              </div>
-
-              {/* WhatsApp Card */}
-              <div
-                onClick={() => togglePlatform('whatsapp')}
-                className="flex items-center justify-between p-3.5 cursor-pointer"
-                style={{
-                  borderRadius: '12px',
-                  border: platforms.whatsapp ? '2px solid #25D366' : '1px solid var(--border)',
-                  backgroundColor: platforms.whatsapp ? '#f0fdf4' : '#ffffff',
-                  transition: 'all 0.2s'
-                }}
-              >
-                <div className="flex items-center gap-3">
-                  <span style={{ color: '#25D366', backgroundColor: '#dcfce7', padding: '8px', borderRadius: '10px' }}>
-                    <MessageCircle size={18} />
-                  </span>
-                  <div>
-                    <h4 className="font-bold text-sm text-main">WhatsApp</h4>
-                    <p className="text-xs text-secondary">Community Format & Markdown</p>
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={platforms.whatsapp}
-                  onChange={() => togglePlatform('whatsapp')}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ width: '1.2rem', height: '1.2rem', accentColor: '#25D366', cursor: 'pointer' }}
                 />
               </div>
 

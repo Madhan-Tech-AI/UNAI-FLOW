@@ -212,9 +212,6 @@ export default function Settings() {
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" defaultChecked /> Twitter / X Enterprise
                   </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" defaultChecked /> WhatsApp Cloud API
-                  </label>
                 </div>
               </div>
             </>
@@ -243,7 +240,7 @@ export default function Settings() {
                   <Sparkles size={16} className="text-primary" /> Gemini AI Auto-Formatting
                 </div>
                 <p className="text-xs text-secondary mt-1">
-                  Automatically adds channel hashtags, converts Markdown formatting to WhatsApp bolding, and optimizes line breaks.
+                  Automatically adds channel hashtags and optimizes line breaks.
                 </p>
               </div>
             </>

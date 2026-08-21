@@ -1,20 +1,19 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { 
+import {
+  Camera, 
+  CheckCircle2, 
+  ChevronRight, 
+  Clock, 
+  Plus, 
   Sparkles, 
   TrendingUp, 
-  ArrowUpRight, 
-  Plus, 
-  Camera, 
   AtSign, 
-  MessageCircle, 
-  Clock, 
-  CheckCircle2, 
-  Calendar as CalendarIcon,
-  ChevronRight,
-  MoreVertical,
+  ArrowUpRight,
   BarChart3,
-  Layers
+  Layers,
+  MoreVertical,
+  Calendar as CalendarIcon
 } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 
@@ -72,8 +71,6 @@ export default function Dashboard() {
   const scheduledAutomations = automations.filter(a => a.status === 'scheduled');
   const hasInstagram = connections.some(c => c.platform === 'instagram');
   const hasTwitter = connections.some(c => c.platform === 'twitter');
-  const hasWhatsapp = connections.some(c => c.platform === 'whatsapp');
-
   return (
     <div className="flex-col gap-8">
       {/* Welcome Banner */}
@@ -140,9 +137,6 @@ export default function Dashboard() {
               </span>
               <span style={{ backgroundColor: hasTwitter ? '#e2e8f0' : '#f1f5f9', padding: '4px', borderRadius: '6px', color: hasTwitter ? '#0f172a' : '#94a3b8' }}>
                 <AtSign size={14} />
-              </span>
-              <span style={{ backgroundColor: hasWhatsapp ? '#dcfce7' : '#f1f5f9', padding: '4px', borderRadius: '6px', color: hasWhatsapp ? '#25D366' : '#94a3b8' }}>
-                <MessageCircle size={14} />
               </span>
             </div>
             <span className="text-xs text-success font-medium flex items-center gap-1 ml-auto">
@@ -276,13 +270,6 @@ export default function Dashboard() {
               </div>
               <span className="font-bold text-secondary">{hasTwitter ? 'Connected' : 'Not Connected'}</span>
             </div>
-            <div className="flex items-center justify-between text-xs p-2 rounded-lg" style={{ backgroundColor: '#f8fafc' }}>
-              <div className="flex items-center gap-2">
-                <MessageCircle size={16} style={{ color: '#25D366' }} />
-                <span className="font-semibold text-main">WhatsApp</span>
-              </div>
-              <span className="font-bold text-secondary">{hasWhatsapp ? 'Connected' : 'Not Connected'}</span>
-            </div>
           </div>
         </div>
       </div>
@@ -362,11 +349,6 @@ export default function Dashboard() {
                       {item.target_platforms?.includes('twitter') && (
                         <span title="Twitter / X" style={{ color: '#0f172a', backgroundColor: '#f1f5f9', padding: '4px', borderRadius: '6px' }}>
                           <AtSign size={14} />
-                        </span>
-                      )}
-                      {item.target_platforms?.includes('whatsapp') && (
-                        <span title="WhatsApp" style={{ color: '#25D366', backgroundColor: '#dcfce7', padding: '4px', borderRadius: '6px' }}>
-                          <MessageCircle size={14} />
                         </span>
                       )}
                     </div>

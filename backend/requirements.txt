@@ -8,3 +8,7 @@ cryptography
 httpx
 pillow
 python-multipart
+sqlalchemy
+alembic
+websockets
+pydantic-settings

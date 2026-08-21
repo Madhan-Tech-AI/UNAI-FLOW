@@ -1,15 +1,15 @@
 from typing import Dict, Any, List
 from adapters.twitter_adapter import TwitterAdapter
 from adapters.instagram_adapter import InstagramAdapter
-from adapters.whatsapp_adapter import WhatsAppAdapter
 from adapters.facebook_adapter import FacebookAdapter
+from adapters.whatsapp_adapter import WhatsAppAdapter
 from lib.supabase_client import supabase
 
 ADAPTERS = {
     "twitter": TwitterAdapter(),
     "instagram": InstagramAdapter(),
-    "whatsapp": WhatsAppAdapter(),
-    "facebook": FacebookAdapter()
+    "facebook": FacebookAdapter(),
+    "whatsapp": WhatsAppAdapter()
 }
 
 async def orchestrate_publish(automation_id: str, user_id: str) -> List[Dict[str, Any]]:

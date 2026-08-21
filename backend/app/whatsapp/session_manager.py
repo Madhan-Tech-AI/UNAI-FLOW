@@ -25,6 +25,8 @@ class SessionManager:
                 "status": status,
                 "provider": provider
             }).eq("id", existing["id"]).execute()
+            if not res.data:
+                raise Exception("Failed to update session: No data returned from Supabase. Check RLS or DB connection.")
             return res.data[0]
         else:
             res = self.sb.table("whatsapp_sessions").insert({
@@ -33,6 +35,8 @@ class SessionManager:
                 "status": status,
                 "provider": provider
             }).execute()
+            if not res.data:
+                raise Exception("Failed to create session: No data returned from Supabase. Check RLS or DB connection.")
             return res.data[0]
 
     def update_session_status(self, session_id: str, status: str) -> None:

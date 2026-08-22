@@ -1,7 +1,7 @@
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import { useEffect, useState } from 'react';
-import { LogOut, Home, Link2, PlusCircle, History, Settings, Sparkles, Search, Bell, ChevronDown } from 'lucide-react';
+import { LogOut, Home, Link2, PlusCircle, History, Settings, Sparkles, Search, Bell, ChevronDown, MessageCircle } from 'lucide-react';
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -41,6 +41,7 @@ export default function Layout() {
   const navItems = [
     { name: 'Dashboard', path: '/', icon: Home },
     { name: 'Connections', path: '/connections', icon: Link2 },
+    { name: 'WhatsApp Channels', path: '/whatsapp-channels', icon: MessageCircle },
     { name: 'New Automation', path: '/automations/new', icon: PlusCircle },
     { name: 'History', path: '/history', icon: History },
     { name: 'Settings', path: '/settings', icon: Settings },

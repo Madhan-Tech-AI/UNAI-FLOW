@@ -8,6 +8,7 @@ import NewAutomation from './pages/NewAutomation';
 import PreviewVariants from './pages/PreviewVariants';
 import AutomationHistory from './pages/AutomationHistory';
 import Settings from './pages/Settings';
+import WhatsAppChannels from './pages/WhatsAppChannels';
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="/signup" element={<Signup />} />
           <Route path="/" element={<Dashboard />} />
           <Route path="/connections" element={<Connections />} />
+          <Route path="/whatsapp-channels" element={<WhatsAppChannels />} />
           <Route path="/automations/new" element={<NewAutomation />} />
           <Route path="/automations/preview" element={<PreviewVariants />} />
           <Route path="/history" element={<AutomationHistory />} />

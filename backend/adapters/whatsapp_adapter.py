@@ -1,44 +1,51 @@
-from typing import Dict, Any
 import uuid
-from app.whatsapp.publisher import Publisher
-from app.whatsapp.channel_manager import ChannelManager
-from app.whatsapp.whatsapp_web_provider import WhatsAppWebProvider
-from app.core.config import settings
+from typing import Dict, Any
+from app.services.channel_service import channel_service
+from app.services.publishing_service import publishing_service
+from lib.supabase_client import supabase
 
 class WhatsAppAdapter:
-    def __init__(self):
-        self.publisher = Publisher()
-        self.provider = WhatsAppWebProvider()
-        self.channel_manager = ChannelManager(provider=self.provider)
-
     async def publish(self, content: str, user_id: str, automation_id: str) -> Dict[str, Any]:
         """
-        Publishes content to the user's selected WhatsApp channel.
+        Publishes content to the user's selected WhatsApp channel via the Whapi-style Gateway.
         """
-        # Find the selected channel for this user
-        channels = self.channel_manager.get_user_channels(user_id)
-        selected = [c for c in channels if c.get("is_selected")]
+        # 1. Fetch channels discovered for this user/organization
+        channels = channel_service.list_org_channels(user_id)
         
-        if not selected:
-            # For demo mode if no channel selected
+        # Look for a selected channel or the first available channel
+        target_channel = None
+        for ch in channels:
+            if ch.get("metadata", {}).get("selected") or ch.get("selected"):
+                target_channel = ch
+                break
+                
+        if not target_channel and channels:
+            target_channel = channels[0]
+            
+        if not target_channel:
+            # If no channel is linked yet, fallback gracefully for demo / testing
             return {
                 "post_id": f"demo_wa_{uuid.uuid4().hex[:8]}",
                 "post_url": "https://whatsapp.com/channel/demo",
                 "demo": True
             }
             
-        channel_id = selected[0]["id"]
+        newsletter_jid = target_channel["newsletter_jid"]
+        instance_id = target_channel.get("instance_id")
         
-        # Enqueue the job using the publisher
-        payload = {"body": content}
-        result = self.publisher.enqueue_job(user_id, channel_id, "text", payload)
+        # 2. Dispatch via PublishingService with Idempotency Key
+        idempotency_key = f"auto_{automation_id}_wa_{uuid.uuid4().hex[:8]}"
+        result = await publishing_service.enqueue_post(
+            organization_id=user_id,
+            to=newsletter_jid,
+            message_type="text",
+            payload={"body": content},
+            instance_id=instance_id,
+            idempotency_key=idempotency_key
+        )
         
-        if result["success"]:
-            # Returning a job ID as post ID for now. It will update async in the new tables.
-            return {
-                "post_id": result["job_id"],
-                "post_url": "",
-                "status": "QUEUED"
-            }
-        else:
-            raise ValueError(result.get("error", "Failed to enqueue WhatsApp publish job"))
+        return {
+            "post_id": result["job_id"],
+            "post_url": f"https://whatsapp.com/channel/{target_channel.get('invite_code', '')}",
+            "status": result["status"]
+        }

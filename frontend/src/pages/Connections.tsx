@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, MessageCircle } from 'lucide-react';
+import { Camera, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
 function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
@@ -23,15 +23,6 @@ export default function Connections() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const mountedRef = useRef(true);
-
-  const [isWaModalOpen, setIsWaModalOpen] = useState(false);
-  const [waState, setWaState] = useState('INITIALIZING');
-  const [waModalStep, setWaModalStep] = useState('pair'); // pair, channels, success
-  const [qrCode, setQrCode] = useState<any>(null);
-  const [channels, setChannels] = useState<any[]>([]);
-  const [polling, setPolling] = useState(false);
-  const [selectedChannel, setSelectedChannel] = useState<any>(null);
-  const sessionRef = useRef<string | null>(null);
   
   // ── Cleanup on unmount ──
   useEffect(() => {
@@ -40,114 +31,6 @@ export default function Connections() {
       mountedRef.current = false;
     };
   }, []);
-
-  // Polling logic
-  useEffect(() => {
-    if (!polling) return;
-    
-    const interval = setInterval(async () => {
-      if (!sessionRef.current) return;
-      try {
-        const res = await fetchApi(`/api/whatsapp/status?session_identifier=${sessionRef.current}`);
-        if (res.data?.status) {
-          setWaState(res.data.status);
-          if (res.data.status === 'CONNECTED') {
-            setPolling(false);
-            setWaModalStep('channels');
-            loadWaChannels();
-          } else if (res.data.status === 'ERROR') {
-            setPolling(false);
-            setWaError(res.data.error || 'Connection failed.');
-          }
-          // Pick up QR data if it wasn't ready during initial connect
-          if (res.data.pairing && !qrCode) {
-            setQrCode(res.data.pairing);
-          }
-        }
-      } catch (e) {
-        // Ignore poll errors
-      }
-    }, 3000);
-    
-    return () => clearInterval(interval);
-  }, [polling, qrCode]);
-
-  const loadWaChannels = async () => {
-    try {
-      const res = await fetchApi('/api/channels');
-      if (res.data) setChannels(res.data);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const [waError, setWaError] = useState('');
-
-  const handleConnectWhatsApp = async () => {
-    setIsWaModalOpen(true);
-    setWaModalStep('pair');
-    setWaState('INITIALIZING');
-    setQrCode(null);
-    setWaError('');
-    try {
-      const res = await fetchApi('/api/whatsapp/connect', {
-        method: 'POST',
-        body: JSON.stringify(sessionRef.current ? { session_identifier: sessionRef.current } : {})
-      });
-      
-      if (res.data?.session_identifier) {
-        sessionRef.current = res.data.session_identifier;
-      }
-
-      if (res.data?.status === 'WAITING_FOR_SCAN') {
-        setWaState('WAITING_FOR_SCAN');
-        setQrCode(res.data.pairing);
-        setPolling(true);
-      } else if (res.data?.status === 'CONNECTED') {
-        setWaState('CONNECTED');
-        setWaModalStep('channels');
-        loadWaChannels();
-      } else if (res.data?.status === 'INITIALIZING') {
-        setWaState('INITIALIZING');
-        setPolling(true);
-      } else if (res.data?.status === 'ERROR' || res.error) {
-        setWaState('ERROR');
-        setWaError(res.data?.error || res.error || 'Connection failed.');
-      }
-    } catch (e: any) {
-      setWaState('ERROR');
-      setWaError(e.message || 'Failed to connect. Please try again.');
-    }
-  };
-
-  const handleSyncChannels = async () => {
-    try {
-      setWaState('SYNCING');
-      const res = await fetchApi('/api/channels/sync', {
-        method: 'POST',
-        body: JSON.stringify({ session_identifier: sessionRef.current })
-      });
-      if (res.data) setChannels(res.data);
-      setWaState('CONNECTED');
-    } catch (e) {
-      setWaState('ERROR');
-    }
-  };
-
-  const handleSelectChannel = async (id: string) => {
-    try {
-      await fetchApi(`/api/channels/${id}/select`, { 
-        method: 'POST',
-        body: JSON.stringify({ session_identifier: sessionRef.current })
-      });
-      const ch = channels.find(c => c.id === id);
-      setSelectedChannel(ch);
-      setWaModalStep('success');
-      loadConnections(); // Refresh overall connections
-    } catch (e) {
-      alert("Failed to select channel");
-    }
-  };
 
   // ── Load connections from Supabase ──
   const loadConnections = async () => {
@@ -168,11 +51,6 @@ export default function Connections() {
   // ── Handlers ──
 
   const handleConnect = async (platformId: string) => {
-    if (platformId === 'whatsapp') {
-      handleConnectWhatsApp();
-      return;
-    }
-    
     try {
       const res = await fetchApi(`/connections/${platformId}/start`, { method: 'POST' });
       if (res.authorization_url) {
@@ -213,12 +91,6 @@ export default function Connections() {
 
   // ── Platform definitions ──
   const platforms = [
-    {
-      id: 'whatsapp', name: 'WhatsApp Channels', subtitle: 'WhatsApp Official API',
-      icon: <MessageCircle size={22} />,
-      description: 'Connect your WhatsApp account to publish to Channels.',
-      color: '#25D366', bgColor: '#dcfce7',
-    },
     {
       id: 'instagram', name: 'Instagram', subtitle: 'Instagram Graph API',
       icon: <Camera size={22} />,
@@ -317,8 +189,6 @@ export default function Connections() {
                   </>
                 ) : (
                   <button className="btn-primary"
-                    disabled={isWaModalOpen}
-                    style={{ backgroundColor: platform.id === 'whatsapp' ? '#25D366' : undefined }}
                     onClick={() => handleConnect(platform.id)}>
                     <Plus size={16} /><span>Connect Channel</span>
                   </button>
@@ -347,109 +217,6 @@ export default function Connections() {
         </button>
       </div>
 
-      {/* WhatsApp Connection Modal */}
-      {isWaModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden relative p-6">
-            <button 
-              onClick={() => { setIsWaModalOpen(false); setPolling(false); }}
-              className="absolute top-4 right-4 text-gray-500 hover:bg-gray-100 p-1 rounded"
-            >
-              ×
-            </button>
-            
-            {waModalStep === 'pair' && (
-              <div className="text-center">
-                <h2 className="text-xl font-bold mb-4">Connect WhatsApp</h2>
-                {waState === 'INITIALIZING' && (
-                  <div className="flex flex-col items-center py-8">
-                    <Loader2 size={32} className="animate-spin text-green-500 mb-4" />
-                    <p>Initializing secure session...</p>
-                  </div>
-                )}
-                {waState === 'WAITING_FOR_SCAN' && (
-                  <div className="flex flex-col items-center">
-                    <p className="mb-4 text-sm text-gray-600">Scan this QR code with your WhatsApp app.</p>
-                    <div className="bg-gray-100 p-4 rounded-lg mb-4 w-48 h-48 flex items-center justify-center">
-                      {qrCode ? <img src={qrCode} alt="QR Code" /> : <Loader2 className="animate-spin" />}
-                    </div>
-                    <p className="text-xs text-gray-400">Waiting for scan...</p>
-                  </div>
-                )}
-                {waState === 'AUTHENTICATING' && (
-                  <div className="flex flex-col items-center py-8">
-                    <Loader2 size={32} className="animate-spin text-green-500 mb-4" />
-                    <p className="mb-2"><strong>QR Code Scanned!</strong></p>
-                    <p className="text-sm text-gray-600 text-center px-4">
-                      Authenticating and synchronizing session with WhatsApp. This can take up to 30-45 seconds...
-                    </p>
-                  </div>
-                )}
-                {waState === 'ERROR' && (
-                  <div className="py-4">
-                    <p className="text-red-500 mb-2">{waError || 'Failed to connect. Please try again.'}</p>
-                    <button 
-                      onClick={handleConnectWhatsApp}
-                      className="mt-2 px-4 py-2 text-sm bg-green-500 text-white rounded hover:bg-green-600"
-                    >
-                      Retry
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-            
-            {waModalStep === 'channels' && (
-              <div>
-                <h2 className="text-xl font-bold mb-4">Select Channel</h2>
-                {waState === 'SYNCING' ? (
-                  <div className="flex flex-col items-center py-8">
-                    <Loader2 size={32} className="animate-spin text-green-500 mb-4" />
-                    <p>Syncing your channels...</p>
-                  </div>
-                ) : (
-                  <>
-                    <p className="text-sm mb-4">Choose the WhatsApp Channel to publish to.</p>
-                    {channels.length === 0 ? (
-                      <div className="text-center py-4">No channels found.</div>
-                    ) : (
-                      <div className="flex flex-col gap-2 max-h-60 overflow-y-auto mb-4">
-                        {channels.map(ch => (
-                          <button 
-                            key={ch.id} 
-                            onClick={() => handleSelectChannel(ch.id)}
-                            className="text-left p-3 border rounded hover:border-green-500 focus:outline-none focus:ring focus:ring-green-200"
-                          >
-                            <div className="font-semibold">{ch.name}</div>
-                            <div className="text-xs text-gray-500">{ch.followers || 0} followers</div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <button onClick={handleSyncChannels} className="w-full py-2 text-green-600 border border-green-600 rounded hover:bg-green-50">
-                      Sync Channels
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-            
-            {waModalStep === 'success' && (
-              <div className="text-center py-8">
-                <CheckCircle2 size={48} className="text-green-500 mx-auto mb-4" />
-                <h2 className="text-xl font-bold mb-2">Connected!</h2>
-                <p className="text-gray-600 mb-6">You can now publish to {selectedChannel?.name}.</p>
-                <button 
-                  onClick={() => setIsWaModalOpen(false)}
-                  className="w-full py-2 bg-green-500 text-white rounded font-medium hover:bg-green-600"
-                >
-                  Done
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

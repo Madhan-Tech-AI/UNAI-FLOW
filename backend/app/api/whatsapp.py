@@ -43,3 +43,14 @@ async def get_whatsapp_status(session_identifier: str, user_id: str = Depends(ge
     if not result["success"]:
         raise HTTPException(status_code=404, detail=result.get("error", "Session not found"))
     return {"success": True, "data": result}
+
+@router.get("/test-connect")
+async def test_connect_whatsapp():
+    """Temporary debug endpoint: runs the full connect flow with a test user."""
+    test_user_id = "00000000-0000-0000-0000-000000000000"
+    test_session = "debug_e2e_test"
+    try:
+        result = await connection_manager.start_connection(test_user_id, test_session)
+        return {"step": "start_connection returned", "result": result}
+    except Exception as e:
+        return {"step": "start_connection threw", "error": str(e), "traceback": traceback.format_exc()}

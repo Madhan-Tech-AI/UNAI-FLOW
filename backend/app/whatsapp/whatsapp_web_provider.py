@@ -21,14 +21,32 @@ class WhatsAppWebProvider(WhatsAppProvider):
         return h
 
     async def _make_request(self, method: str, path: str, timeout: float = 30.0, **kwargs) -> httpx.Response:
-        """Helper to make HTTP requests with a fresh client per request."""
-        async with httpx.AsyncClient(base_url=self.endpoint, timeout=timeout) as client:
-            # Inject auth headers if not already provided
-            kwargs.setdefault("headers", {})
-            kwargs["headers"].update(self._headers())
-            
-            response = await client.request(method, path, **kwargs)
-            return response
+        """Helper to make HTTP requests with retry for Render cold starts."""
+        kwargs.setdefault("headers", {})
+        kwargs["headers"].update(self._headers())
+
+        delays = [3, 8, 15]  # Cold-start-aware backoff
+        last_exc = None
+
+        for attempt in range(len(delays) + 1):
+            try:
+                async with httpx.AsyncClient(base_url=self.endpoint, timeout=timeout) as client:
+                    response = await client.request(method, path, **kwargs)
+                    if response.status_code == 429 and attempt < len(delays):
+                        import asyncio
+                        sleep_s = delays[attempt]
+                        await asyncio.sleep(sleep_s)
+                        continue
+                    return response
+            except (httpx.ConnectError, httpx.ReadTimeout) as e:
+                last_exc = e
+                if attempt < len(delays):
+                    import asyncio
+                    await asyncio.sleep(delays[attempt])
+                    continue
+                raise
+
+        raise last_exc or Exception("WCA request failed after retries")
 
     # ── Connection lifecycle ──
 

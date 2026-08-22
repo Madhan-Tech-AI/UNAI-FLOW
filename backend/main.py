@@ -31,12 +31,27 @@ try:
 except Exception as e:
     logger.warning(f"PublishingWorker unavailable (non-fatal): {e}")
 
+async def _warmup_wca():
+    """Wake up the WCA service on Render before accepting requests."""
+    import httpx
+    try:
+        from app.core.config import settings
+        url = f"{settings.wca_api_url}/health"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(url)
+            logger.info(f"[STARTUP] WCA warm-up: {r.status_code}")
+    except Exception as e:
+        logger.warning(f"[STARTUP] WCA warm-up failed (will retry on first request): {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Wake up WCA service (non-blocking)
+    asyncio.create_task(_warmup_wca())
+
     worker_task = None
     if worker:
         worker_task = asyncio.create_task(worker.start())
-        logger.info("PublishingWorker started.")
+        logger.info("[STARTUP] PublishingWorker started.")
     yield
     if worker:
         worker.stop()

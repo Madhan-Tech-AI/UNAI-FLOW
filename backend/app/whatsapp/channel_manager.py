@@ -12,14 +12,30 @@ class ChannelManager:
     async def sync_channels(self, user_id: str, session_identifier: str) -> Dict[str, Any]:
         """
         Fetches channels from the provider and upserts them into Supabase.
+        Includes retry logic for WCA cold-start 429 errors.
         """
         session = self.session_manager.get_session(user_id, session_identifier)
         if not session or session["status"] != "CONNECTED":
             return {"success": False, "error": "WhatsApp session is not connected."}
             
         try:
-            # 1. Fetch from provider
-            channels = await self.provider.get_channels(session_identifier)
+            # 1. Fetch from provider with retry for cold starts
+            import asyncio
+            channels = None
+            delays = [5, 10, 20]
+            
+            for attempt in range(len(delays) + 1):
+                try:
+                    channels = await self.provider.get_channels(session_identifier)
+                    break
+                except Exception as e:
+                    if attempt < len(delays):
+                        await asyncio.sleep(delays[attempt])
+                        continue
+                    raise
+            
+            if channels is None:
+                channels = []
             
             # 2. Upsert to Supabase
             upserted_channels = []

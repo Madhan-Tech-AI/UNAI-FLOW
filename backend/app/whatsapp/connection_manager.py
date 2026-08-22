@@ -2,17 +2,35 @@ from typing import Dict, Any, Optional
 from .session_manager import SessionManager
 from .provider import WhatsAppProvider
 import traceback
+import asyncio
 import logging
+import httpx
 
 logger = logging.getLogger(__name__)
+
 
 class ConnectionManager:
     """
     Orchestrates the connection workflow between the frontend, Supabase, and the WhatsAppProvider.
+    Handles Render cold-start delays with aggressive retry logic.
     """
     def __init__(self, provider: WhatsAppProvider):
         self.provider = provider
         self.session_manager = SessionManager()
+
+    async def _warmup_wca(self, provider) -> bool:
+        """Send a lightweight health ping to wake the WCA service on Render."""
+        from app.core.config import settings
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(f"{settings.wca_api_url}/health")
+                if r.status_code == 200:
+                    logger.info("[CONNECT] WCA service is awake and healthy.")
+                    return True
+                logger.warning(f"[CONNECT] WCA health returned {r.status_code}")
+        except Exception as e:
+            logger.warning(f"[CONNECT] WCA warm-up ping failed (service may be cold-starting): {e}")
+        return False
 
     async def start_connection(self, user_id: str, session_identifier: Optional[str] = None) -> Dict[str, Any]:
         # 1. Check for existing active sessions
@@ -40,30 +58,43 @@ class ConnectionManager:
         session = self.session_manager.create_or_update_session(user_id, session_identifier, "whatsapp_web", "INITIALIZING")
         
         try:
-            # 2. Ask provider to connect / initialize (WCA API is non-blocking)
-            import asyncio
-            import httpx
+            # 2. Warm up WCA service first (non-blocking wake-up for Render cold starts)
+            logger.info(f"[CONNECT] Starting connection for session {session_identifier}")
+            await self._warmup_wca(self.provider)
             
-            delays = [2, 4, 8]
-            for attempt in range(4):
+            # 3. Ask provider to connect with cold-start-aware retry
+            # Render free tier cold starts take 30-60s, so we need longer delays
+            delays = [5, 10, 20, 30]  # Total: ~65s window for cold start
+            max_attempts = len(delays) + 1  # 5 attempts total
+            
+            for attempt in range(max_attempts):
                 try:
+                    logger.info(f"[CONNECT] Attempt {attempt+1}/{max_attempts} to connect session {session_identifier}")
                     await self.provider.connect(session_identifier)
+                    logger.info(f"[CONNECT] Successfully initiated session {session_identifier}")
                     break
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code in [429, 502, 503, 504] and attempt < 3:
+                    if e.response.status_code in [429, 502, 503, 504] and attempt < max_attempts - 1:
                         retry_after = e.response.headers.get("Retry-After")
-                        sleep_time = int(retry_after) if retry_after and retry_after.isdigit() else delays[attempt]
-                        logger.warning(f"WCA service unavailable/rate limited ({e.response.status_code}), retrying in {sleep_time}s...")
+                        sleep_time = int(retry_after) if retry_after and retry_after.isdigit() else delays[min(attempt, len(delays)-1)]
+                        logger.warning(f"[CONNECT] WCA returned {e.response.status_code}, retrying in {sleep_time}s (attempt {attempt+1}/{max_attempts})")
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    raise
+                except (httpx.ConnectError, httpx.ReadTimeout) as e:
+                    if attempt < max_attempts - 1:
+                        sleep_time = delays[min(attempt, len(delays)-1)]
+                        logger.warning(f"[CONNECT] WCA connection error ({type(e).__name__}), retrying in {sleep_time}s (attempt {attempt+1}/{max_attempts})")
                         await asyncio.sleep(sleep_time)
                         continue
                     raise
             
-            # 3. Return immediately so frontend doesn't timeout
+            # 4. Return immediately so frontend doesn't timeout
             return {"success": True, "status": "INITIALIZING", "session_identifier": session_identifier}
             
         except Exception as e:
             tb = traceback.format_exc()
-            logger.error(f"Connection manager error for session {session_identifier}: {repr(e)}\n{tb}")
+            logger.error(f"[CONNECT] Connection failed for session {session_identifier}: {repr(e)}\n{tb}")
             self.session_manager.update_session_status(session["id"], "ERROR")
             return {"success": False, "status": "ERROR", "error": str(e), "traceback": tb}
 
@@ -85,6 +116,7 @@ class ConnectionManager:
                 if provider_status_str == "CONNECTED":
                     user_info = full_status.get("userInfo") or {}
                     phone = user_info.get("phone")
+                    logger.info(f"[CONNECT] Session {session_identifier} AUTHENTICATED, phone={phone}")
                     self.session_manager.update_session_connection_details(session["id"], phone)
                 else:
                     self.session_manager.update_session_status(session["id"], provider_status_str)
@@ -101,6 +133,6 @@ class ConnectionManager:
                 if pairing_data.get("type") == "qr":
                     result["pairing"] = pairing_data.get("data")
             except Exception as e:
-                logger.error(f"Error fetching pairing data: {e}")
+                logger.error(f"[CONNECT] Error fetching pairing data: {e}")
                 
         return result

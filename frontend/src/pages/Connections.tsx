@@ -101,6 +101,12 @@ export default function Connections() {
         setWaState('CONNECTED');
         setWaModalStep('channels');
         loadWaChannels();
+      } else if (res.data?.status === 'INITIALIZING') {
+        setWaState('INITIALIZING');
+        setPolling(true);
+      } else if (res.data?.status === 'ERROR' || res.error) {
+        setWaState('ERROR');
+        setWaError(res.data?.error || res.error || 'Connection failed.');
       }
     } catch (e: any) {
       setWaState('ERROR');

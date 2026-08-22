@@ -19,9 +19,19 @@ class ConnectionManager:
         session = self.session_manager.create_or_update_session(user_id, session_identifier, "whatsapp_web", "INITIALIZING")
         
         try:
-            # 2. Ask provider to connect / initialize in the background
+            # 2. Ask provider to connect / initialize (WCA API is non-blocking)
             import asyncio
-            asyncio.create_task(self.provider.connect(session_identifier))
+            import httpx
+            for attempt in range(3):
+                try:
+                    await self.provider.connect(session_identifier)
+                    break
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code in [502, 503, 504] and attempt < 2:
+                        logger.warning(f"WCA service unavailable (cold start?), retrying in 5s... {e}")
+                        await asyncio.sleep(5)
+                        continue
+                    raise
             
             # 3. Return immediately so frontend doesn't timeout
             return {"success": True, "status": "INITIALIZING", "session_id": session["id"]}
@@ -30,7 +40,7 @@ class ConnectionManager:
             tb = traceback.format_exc()
             logger.error(f"Connection manager error for session {session_identifier}: {repr(e)}\n{tb}")
             self.session_manager.update_session_status(session["id"], "ERROR")
-            return {"success": False, "error": repr(e), "traceback": tb}
+            return {"success": False, "status": "ERROR", "error": str(e), "traceback": tb}
 
     async def check_status(self, user_id: str, session_identifier: str) -> Dict[str, Any]:
         session = self.session_manager.get_session(user_id, session_identifier)

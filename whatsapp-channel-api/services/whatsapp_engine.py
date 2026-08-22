@@ -1102,6 +1102,3 @@ class WhatsAppEngine:
         if self.playwright:
             await self.playwright.stop()
 
-# Global singleton
-whatsapp_engine = WhatsAppEngine()
-

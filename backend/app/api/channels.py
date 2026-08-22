@@ -3,13 +3,13 @@ from pydantic import BaseModel
 from typing import Dict, Any, List
 from app.api.auth import get_current_user_id
 from app.whatsapp.channel_manager import ChannelManager
-from app.whatsapp.baileys_provider import BaileysProvider
+from app.whatsapp.whatsapp_web_provider import WhatsAppWebProvider
 from app.core.config import settings
 
 router = APIRouter(prefix="/channels", tags=["Channels"])
 
 # Initialize provider and manager
-provider = BaileysProvider()
+provider = WhatsAppWebProvider()
 channel_manager = ChannelManager(provider=provider)
 
 class SyncRequest(BaseModel):

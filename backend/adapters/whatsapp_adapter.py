@@ -2,13 +2,14 @@ from typing import Dict, Any
 import uuid
 from app.whatsapp.publisher import Publisher
 from app.whatsapp.channel_manager import ChannelManager
-from app.whatsapp.baileys_provider import BaileysProvider
+from app.whatsapp.whatsapp_web_provider import WhatsAppWebProvider
 from app.core.config import settings
 
 class WhatsAppAdapter:
     def __init__(self):
         self.publisher = Publisher()
-        self.channel_manager = ChannelManager(provider=BaileysProvider())
+        self.provider = WhatsAppWebProvider()
+        self.channel_manager = ChannelManager(provider=self.provider)
 
     async def publish(self, content: str, user_id: str, automation_id: str) -> Dict[str, Any]:
         """

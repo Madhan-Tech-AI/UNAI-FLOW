@@ -55,6 +55,10 @@ export default function Connections() {
             setWaModalStep('channels');
             loadWaChannels();
           }
+          // Pick up QR data if it wasn't ready during initial connect
+          if (res.data.pairing && !qrCode) {
+            setQrCode(res.data.pairing);
+          }
         }
       } catch (e) {
         // Ignore poll errors
@@ -62,7 +66,7 @@ export default function Connections() {
     }, 3000);
     
     return () => clearInterval(interval);
-  }, [polling]);
+  }, [polling, qrCode]);
 
   const loadWaChannels = async () => {
     try {

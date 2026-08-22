@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     whatsapp_provider: str = "meta"
     whatsapp_provider_config: str = ""
     wca_api_url: str = "http://127.0.0.1:3001"
+    wca_api_key: str = ""
     
     cors_origins: List[str] = ["*"]
     

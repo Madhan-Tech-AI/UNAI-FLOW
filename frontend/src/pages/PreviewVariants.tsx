@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, Copy, Sparkles, Heart, MessageSquare, Edit3, Check, AtSign, Share2, ThumbsUp, Loader2, Send, Camera, MoreHorizontal, Inbox } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Copy, Sparkles, Heart, MessageSquare, Edit3, Check, AtSign, Share2, ThumbsUp, Loader2, Send, Camera, MoreHorizontal, Inbox, MessageCircle } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
 function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
@@ -105,6 +105,7 @@ export default function PreviewVariants() {
   const instagramVariant = getVariant('instagram');
   const twitterVariant = getVariant('twitter');
   const facebookVariant = getVariant('facebook');
+  const whatsappVariant = getVariant('whatsapp');
 
   return (
     <div className="flex-col gap-8">
@@ -482,6 +483,117 @@ export default function PreviewVariants() {
                 title="Copy text"
               >
                 {copiedPlatform === 'facebook' ? <Check size={16} className="text-success" /> : <Copy size={16} />}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 4. WhatsApp Channel Native Mockup Card */}
+        {whatsappVariant && (
+          <div className="card flex-col gap-4 flex-1" style={{ minWidth: '320px', borderRadius: '20px' }}>
+            <div className="flex justify-between items-center pb-3" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-2">
+                <span style={{ color: '#25D366', backgroundColor: '#dcfce7', padding: '6px', borderRadius: '8px' }}>
+                  <MessageCircle size={18} />
+                </span>
+                <h3 className="font-bold text-base text-main">WhatsApp Channel</h3>
+              </div>
+              <span className="chip chip-default text-xs">{whatsappVariant.char_count} / 4096 chars</span>
+            </div>
+
+            {/* WhatsApp Mockup UI */}
+            <div
+              style={{
+                backgroundColor: '#e5ddd5',
+                borderRadius: '16px',
+                border: '1px solid #e2e8f0',
+                overflow: 'hidden',
+                boxShadow: 'var(--shadow-sm)'
+              }}
+            >
+              {/* Channel Header */}
+              <div className="flex items-center gap-2.5 p-3" style={{ backgroundColor: '#075E54', color: 'white' }}>
+                <div
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #25D366, #128C7E)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontWeight: 700,
+                    fontSize: '0.75rem'
+                  }}
+                >
+                  📢
+                </div>
+                <div>
+                  <p className="font-bold text-xs">Your Channel</p>
+                  <p className="text-xs" style={{ opacity: 0.75, fontSize: '0.6rem' }}>WhatsApp Channel · AI Preview</p>
+                </div>
+              </div>
+
+              {/* Media (if any) */}
+              {mediaUrl && (
+                <div style={{ padding: '8px' }}>
+                  <div style={{ borderRadius: '8px', overflow: 'hidden', maxHeight: '150px' }}>
+                    {mediaUrl.startsWith('data:video') || mediaUrl.includes('.mp4') || mediaUrl.includes('.mov') ? (
+                      <video src={mediaUrl} controls style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                    ) : (
+                      <img src={mediaUrl} alt="Campaign Media" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Message Bubble */}
+              <div style={{ padding: '8px 12px 12px' }}>
+                <div
+                  style={{
+                    backgroundColor: '#dcf8c6',
+                    borderRadius: '0 8px 8px 8px',
+                    padding: '10px 12px',
+                    maxWidth: '100%',
+                    boxShadow: '0 1px 1px rgba(0,0,0,0.1)'
+                  }}
+                >
+                  {editingPlatform === 'whatsapp' ? (
+                    <textarea
+                      className="input text-xs"
+                      rows={6}
+                      value={whatsappVariant.generated_text}
+                      onChange={(e) => updateVariantText('whatsapp', e.target.value)}
+                      style={{ backgroundColor: 'transparent', border: '1px solid #25D366' }}
+                    />
+                  ) : (
+                    <div className="text-xs text-main" style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
+                      {whatsappVariant.generated_text}
+                    </div>
+                  )}
+                  <div className="flex justify-end mt-1">
+                    <span className="text-xs" style={{ color: '#667781', fontSize: '0.6rem' }}>AI Preview ✓✓</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Card Action Controls */}
+            <div className="flex gap-2 mt-auto">
+              <button
+                className="btn-secondary flex-1"
+                onClick={() => setEditingPlatform(editingPlatform === 'whatsapp' ? null : 'whatsapp')}
+              >
+                <Edit3 size={15} />
+                <span>{editingPlatform === 'whatsapp' ? 'Done Editing' : 'Edit Post'}</span>
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => handleCopy('whatsapp', whatsappVariant.generated_text)}
+                title="Copy text"
+              >
+                {copiedPlatform === 'whatsapp' ? <Check size={16} className="text-success" /> : <Copy size={16} />}
               </button>
             </div>
           </div>

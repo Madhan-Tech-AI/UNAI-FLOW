@@ -19,7 +19,7 @@ class BaileysProvider(WhatsAppProvider):
     def __init__(self, endpoint: str = None):
         self.endpoint = endpoint or settings.wca_api_url
         self.api_key = getattr(settings, "wca_api_key", "")
-        self.client = httpx.AsyncClient(base_url=self.endpoint, timeout=30.0)
+        self.client = httpx.AsyncClient(base_url=self.endpoint, timeout=60.0)
 
     def _headers(self) -> Dict[str, str]:
         """Return auth headers for protected endpoints."""

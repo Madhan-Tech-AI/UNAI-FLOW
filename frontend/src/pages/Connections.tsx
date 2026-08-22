@@ -73,11 +73,14 @@ export default function Connections() {
     }
   };
 
+  const [waError, setWaError] = useState('');
+
   const handleConnectWhatsApp = async () => {
     setIsWaModalOpen(true);
     setWaModalStep('pair');
     setWaState('INITIALIZING');
     setQrCode(null);
+    setWaError('');
     try {
       const res = await fetchApi('/api/whatsapp/connect', {
         method: 'POST',
@@ -92,8 +95,9 @@ export default function Connections() {
         setWaModalStep('channels');
         loadWaChannels();
       }
-    } catch (e) {
+    } catch (e: any) {
       setWaState('ERROR');
+      setWaError(e.message || 'Failed to connect. Please try again.');
     }
   };
 
@@ -353,7 +357,15 @@ export default function Connections() {
                   </div>
                 )}
                 {waState === 'ERROR' && (
-                  <div className="text-red-500 py-4">Failed to connect. Please try again.</div>
+                  <div className="py-4">
+                    <p className="text-red-500 mb-2">{waError || 'Failed to connect. Please try again.'}</p>
+                    <button 
+                      onClick={handleConnectWhatsApp}
+                      className="mt-2 px-4 py-2 text-sm bg-green-500 text-white rounded hover:bg-green-600"
+                    >
+                      Retry
+                    </button>
+                  </div>
                 )}
               </div>
             )}

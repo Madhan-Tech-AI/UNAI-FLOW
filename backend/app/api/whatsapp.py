@@ -20,7 +20,11 @@ class ConnectRequest(BaseModel):
 async def connect_whatsapp(req: ConnectRequest, user_id: str = Depends(get_current_user_id)):
     result = await connection_manager.start_connection(user_id, req.session_identifier)
     if not result["success"]:
-        raise HTTPException(status_code=400, detail=result.get("error", "Failed to connect"))
+        error_msg = result.get("error", "Failed to connect")
+        # If the WCA service is unreachable, return 503 instead of 400
+        if any(keyword in error_msg.lower() for keyword in ["connect", "timeout", "refused", "unreachable"]):
+            raise HTTPException(status_code=503, detail=f"WhatsApp Channel service is currently unavailable. Please try again later. ({error_msg})")
+        raise HTTPException(status_code=400, detail=error_msg)
     return {"success": True, "data": result}
 
 @router.get("/status")

@@ -1,10 +1,11 @@
 import httpx
 from typing import Dict, Any, List
 from .provider import WhatsAppProvider
+from app.core.config import settings
 
 class BaileysProvider(WhatsAppProvider):
-    def __init__(self, endpoint: str = "http://127.0.0.1:3000"):
-        self.endpoint = endpoint
+    def __init__(self, endpoint: str = None):
+        self.endpoint = endpoint or settings.wca_api_url
         self.client = httpx.AsyncClient(base_url=self.endpoint, timeout=30.0)
 
     async def connect(self, session_identifier: str) -> Dict[str, Any]:

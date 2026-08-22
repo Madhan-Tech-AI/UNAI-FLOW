@@ -52,6 +52,10 @@ class ConnectionManager:
             full_status = await self.provider.get_full_status(session_identifier)
             provider_status_str = full_status.get("status", session["status"])
             
+            # Map WCA QR_READY to our frontend's WAITING_FOR_SCAN
+            if provider_status_str == "QR_READY":
+                provider_status_str = "WAITING_FOR_SCAN"
+                
             if provider_status_str != session["status"]:
                 if provider_status_str == "CONNECTED":
                     user_info = full_status.get("userInfo") or {}
@@ -65,13 +69,13 @@ class ConnectionManager:
         
         result: Dict[str, Any] = {"success": True, "status": session["status"], "session": session}
         
-        # If still waiting for scan, include QR data for frontend
-        if session["status"] in ("WAITING_FOR_SCAN", "CONNECTING"):
+        # If we need a QR scan, fetch the pairing data
+        if session["status"] == "WAITING_FOR_SCAN":
             try:
                 pairing_data = await self.provider.get_pairing_data(session_identifier)
-                if pairing_data.get("type") != "not_required":
+                if pairing_data.get("type") == "qr":
                     result["pairing"] = pairing_data.get("data")
-            except Exception:
-                pass
-            
+            except Exception as e:
+                logger.error(f"Error fetching pairing data: {e}")
+                
         return result

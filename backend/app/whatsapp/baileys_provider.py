@@ -63,21 +63,33 @@ class BaileysProvider(WhatsAppProvider):
         return response.json().get("status", "DISCONNECTED")
 
     async def get_pairing_data(self, session_identifier: str) -> Dict[str, Any]:
-        """GET /v1/whatsapp/:connectionId/qr?format=json"""
-        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/qr", params={"format": "json"})
+        """GET /v1/whatsapp/:connectionId/qr"""
+        # Fetch the raw PNG image, not the json format, because frontend expects an image
+        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/qr")
         
         if response.status_code == 204:
             # No QR available yet or already connected
             return {"type": "not_required"}
         response.raise_for_status()
-        data = response.json()
-
-        if data.get("state") == "connected":
-            return {"type": "not_required"}
-
-        qr = data.get("qr")
-        if qr:
-            return {"type": "qr", "data": qr}
+        
+        # If the response is an image, we base64 encode it
+        content_type = response.headers.get("content-type", "")
+        if "image" in content_type:
+            import base64
+            b64_img = base64.b64encode(response.content).decode("utf-8")
+            data_uri = f"data:{content_type};base64,{b64_img}"
+            return {"type": "qr", "data": data_uri}
+            
+        # Fallback if it returned JSON for some reason
+        try:
+            data = response.json()
+            if data.get("state") == "connected":
+                return {"type": "not_required"}
+            qr = data.get("qr")
+            if qr:
+                return {"type": "qr", "data": qr}
+        except Exception:
+            pass
 
         return {"type": "not_required"}
 

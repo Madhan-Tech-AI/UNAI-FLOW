@@ -29,8 +29,9 @@ async def connect_whatsapp(req: ConnectRequest, user_id: str = Depends(get_curre
         raise HTTPException(status_code=500, detail=f"Internal error during WhatsApp connection: {str(e)}")
     
     if not result["success"]:
-        error_msg = result.get("error", "Failed to connect")
-        logger.error(f"WhatsApp connect failed: {error_msg}")
+        error_msg = result.get("error") or "Failed to connect (unknown error)"
+        error_tb = result.get("traceback", "")
+        logger.error(f"WhatsApp connect failed: {error_msg}\n{error_tb}")
         # If the WCA service is unreachable, return 503 instead of 400
         if any(keyword in error_msg.lower() for keyword in ["timeout", "refused", "unreachable", "connecterror", "connectionerror"]):
             raise HTTPException(status_code=503, detail=f"WhatsApp Channel service is currently unavailable. Please try again later. ({error_msg})")

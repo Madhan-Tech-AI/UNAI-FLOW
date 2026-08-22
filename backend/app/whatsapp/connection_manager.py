@@ -1,6 +1,10 @@
 from typing import Dict, Any
 from .session_manager import SessionManager
 from .provider import WhatsAppProvider
+import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ConnectionManager:
     """
@@ -34,8 +38,10 @@ class ConnectionManager:
             return {"success": True, "status": "WAITING_FOR_SCAN", "pairing": None, "session_id": session["id"]}
             
         except Exception as e:
+            tb = traceback.format_exc()
+            logger.error(f"Connection manager error for session {session_identifier}: {repr(e)}\n{tb}")
             self.session_manager.update_session_status(session["id"], "ERROR")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": repr(e), "traceback": tb}
 
     async def check_status(self, user_id: str, session_identifier: str) -> Dict[str, Any]:
         session = self.session_manager.get_session(user_id, session_identifier)

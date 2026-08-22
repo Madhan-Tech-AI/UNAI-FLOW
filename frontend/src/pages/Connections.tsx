@@ -360,6 +360,15 @@ export default function Connections() {
                     <p className="text-xs text-gray-400">Waiting for scan...</p>
                   </div>
                 )}
+                {waState === 'AUTHENTICATING' && (
+                  <div className="flex flex-col items-center py-8">
+                    <Loader2 size={32} className="animate-spin text-green-500 mb-4" />
+                    <p className="mb-2"><strong>QR Code Scanned!</strong></p>
+                    <p className="text-sm text-gray-600 text-center px-4">
+                      Authenticating and synchronizing session with WhatsApp. This can take up to 30-45 seconds...
+                    </p>
+                  </div>
+                )}
                 {waState === 'ERROR' && (
                   <div className="py-4">
                     <p className="text-red-500 mb-2">{waError || 'Failed to connect. Please try again.'}</p>

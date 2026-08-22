@@ -5,6 +5,10 @@ from app.api.auth import get_current_user_id
 from app.whatsapp.connection_manager import ConnectionManager
 from app.whatsapp.baileys_provider import BaileysProvider
 from app.core.config import settings
+import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 
@@ -18,11 +22,17 @@ class ConnectRequest(BaseModel):
 
 @router.post("/connect")
 async def connect_whatsapp(req: ConnectRequest, user_id: str = Depends(get_current_user_id)):
-    result = await connection_manager.start_connection(user_id, req.session_identifier)
+    try:
+        result = await connection_manager.start_connection(user_id, req.session_identifier)
+    except Exception as e:
+        logger.error(f"WhatsApp connect error (outer): {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal error during WhatsApp connection: {str(e)}")
+    
     if not result["success"]:
         error_msg = result.get("error", "Failed to connect")
+        logger.error(f"WhatsApp connect failed: {error_msg}")
         # If the WCA service is unreachable, return 503 instead of 400
-        if any(keyword in error_msg.lower() for keyword in ["connect", "timeout", "refused", "unreachable"]):
+        if any(keyword in error_msg.lower() for keyword in ["timeout", "refused", "unreachable", "connecterror", "connectionerror"]):
             raise HTTPException(status_code=503, detail=f"WhatsApp Channel service is currently unavailable. Please try again later. ({error_msg})")
         raise HTTPException(status_code=400, detail=error_msg)
     return {"success": True, "data": result}

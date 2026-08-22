@@ -54,6 +54,9 @@ export default function Connections() {
             setPolling(false);
             setWaModalStep('channels');
             loadWaChannels();
+          } else if (res.data.status === 'ERROR') {
+            setPolling(false);
+            setWaError(res.data.error || 'Connection failed.');
           }
           // Pick up QR data if it wasn't ready during initial connect
           if (res.data.pairing && !qrCode) {

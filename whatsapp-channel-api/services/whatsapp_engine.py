@@ -30,7 +30,9 @@ class WhatsAppEngine:
       - Robust Channel publishing (text + media).
     """
 
-    def __init__(self):
+    def __init__(self, session_identifier: str):
+        self.session_identifier = session_identifier
+        self.session_dir = os.path.join(config.SESSION_DIR, self.session_identifier)
         self.playwright = None
         self.browser_context = None
         self.page = None
@@ -63,7 +65,7 @@ class WhatsAppEngine:
             if not self.playwright:
                 self.playwright = await async_playwright().start()
 
-            os.makedirs(config.SESSION_DIR, exist_ok=True)
+            os.makedirs(self.session_dir, exist_ok=True)
 
             user_agent = (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -87,7 +89,7 @@ class WhatsAppEngine:
 
             try:
                 self.browser_context = await self.playwright.chromium.launch_persistent_context(
-                    user_data_dir=config.SESSION_DIR,
+                    user_data_dir=self.session_dir,
                     headless=True,
                     user_agent=user_agent,
                     args=launch_args,
@@ -103,7 +105,7 @@ class WhatsAppEngine:
                 import subprocess
                 subprocess.run(["playwright", "install", "chromium"], check=False)
                 self.browser_context = await self.playwright.chromium.launch_persistent_context(
-                    user_data_dir=config.SESSION_DIR,
+                    user_data_dir=self.session_dir,
                     headless=True,
                     user_agent=user_agent,
                     args=launch_args,
@@ -381,8 +383,18 @@ class WhatsAppEngine:
                         self.qr_png_bytes = None
                         self.pairing_code = None
                         was_logged_in = True
+                        
+                        # Try to extract phone number from localStorage
+                        try:
+                            phone = await self.page.evaluate("() => { const wid = localStorage.getItem('last-wid') || localStorage.getItem('last-wid-md'); return wid ? wid.replace(/[^0-9]/g, '') : null; }")
+                            if phone and len(phone) > 5:
+                                phone = f"+{phone}"
+                        except:
+                            phone = None
+
                         self.user_info = {
                             "status": "active",
+                            "phone": phone,
                             "channel_id": config.CHANNEL_ID,
                             "channel_link": config.CHANNEL_LINK,
                         }
@@ -391,47 +403,15 @@ class WhatsAppEngine:
                 else:
                     login_confirm_count = 0
 
-                    # ── TIMEOUT FALLBACK: If we were authenticating and QR is gone for 30s, assume connected ──
-                    has_qr = login_check.get("hasQR", False) if login_check else False
-                    has_spinner = login_check.get("hasSpinner", False) if login_check else False
-
-                    if authenticating_since and not has_qr:
-                        no_qr_count += 1
+                    # ── AUTHENTICATION TIMEOUT ──
+                    if authenticating_since:
                         elapsed = time.time() - authenticating_since
-
-                        # Log diagnostics periodically (every 15s)
-                        now = time.time()
-                        if now - last_diagnostic_time > 15:
-                            last_diagnostic_time = now
-                            test_ids = login_check.get("dataTestIds", []) if login_check else []
-                            child_count = login_check.get("appChildCount", 0) if login_check else 0
-                            body_snippet = login_check.get("bodySnippet", "") if login_check else ""
-                            logger.info(
-                                f"🔍 Diagnostic: elapsed={elapsed:.0f}s, no_qr_count={no_qr_count}, "
-                                f"hasSpinner={has_spinner}, appChildren={child_count}, "
-                                f"testIds={test_ids[:5]}, body='{body_snippet[:60]}...'"
-                            )
-
-                        # After 30 seconds with no QR and at least 10 consecutive no-QR ticks
-                        if elapsed > 30 and no_qr_count >= 10 and not has_spinner:
-                            logger.info(
-                                f"🎉 ✅ WhatsApp connected via timeout fallback! "
-                                f"(QR gone for {elapsed:.0f}s, {no_qr_count} ticks with no QR elements). "
-                                f"Headless DOM may not match standard selectors."
-                            )
-                            self.connection_state = "connected"
-                            self.is_ready = True
-                            self.current_qr = None
-                            self.qr_png_bytes = None
-                            self.pairing_code = None
-                            was_logged_in = True
+                        if elapsed > 120:
+                            logger.error(f"❌ WhatsApp authentication timed out after {elapsed:.0f}s.")
+                            self.connection_state = "error"
+                            self.last_error = "WhatsApp authentication timed out. Please try connecting again."
+                            self.is_ready = False
                             authenticating_since = None
-                            no_qr_count = 0
-                            self.user_info = {
-                                "status": "active",
-                                "channel_id": config.CHANNEL_ID,
-                                "channel_link": config.CHANNEL_LINK,
-                            }
                             await asyncio.sleep(2)
                             continue
 
@@ -868,8 +848,8 @@ class WhatsAppEngine:
                     self.playwright = None
 
                 # Purge session directory
-                if os.path.exists(config.SESSION_DIR):
-                    shutil.rmtree(config.SESSION_DIR, ignore_errors=True)
+                if os.path.exists(self.session_dir):
+                    shutil.rmtree(self.session_dir, ignore_errors=True)
 
                 self.connection_state = "disconnected"
                 self.is_ready = False

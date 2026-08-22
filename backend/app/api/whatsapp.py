@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Dict, Any
 from app.api.auth import get_current_user_id
 from app.whatsapp.connection_manager import ConnectionManager
-from app.whatsapp.baileys_provider import BaileysProvider
+from app.whatsapp.whatsapp_web_provider import WhatsAppWebProvider
 from app.core.config import settings
 import traceback
 import logging
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 
 # Initialize provider and manager
 # In a real app, you might want to use dependency injection for these
-provider = BaileysProvider()
+provider = WhatsAppWebProvider()
 connection_manager = ConnectionManager(provider=provider)
 
 class ConnectRequest(BaseModel):

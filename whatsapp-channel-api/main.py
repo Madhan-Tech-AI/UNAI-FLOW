@@ -1,5 +1,6 @@
 import hashlib
 import time
+import asyncio
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, Header, HTTPException, Response, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,7 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from config import config
-from services.whatsapp_engine import whatsapp_engine
+from services.session_manager import session_manager
 
 app = FastAPI(title="UNAI Flow — WhatsApp Channel API (Python)")
 
@@ -32,18 +33,14 @@ def check_duplicate(content: str, media_url: Optional[str] = None):
     fingerprint = f"{config.CHANNEL_ID}|{content}|{media_url or ''}"
     content_hash = hashlib.sha256(fingerprint.encode()).hexdigest()
     now = time.time()
-
-    # Clean old hashes
     expired = [h for h, ts in recent_post_hashes.items() if now - ts > config.DUPLICATE_WINDOW_SEC]
     for h in expired:
         del recent_post_hashes[h]
-
     if content_hash in recent_post_hashes:
         raise HTTPException(
             status_code=409,
             detail=f"Duplicate post: Identical content was published within the last {config.DUPLICATE_WINDOW_SEC} seconds."
         )
-
     recent_post_hashes[content_hash] = now
 
 # ── Pydantic Request Models ──
@@ -56,53 +53,55 @@ class PublishRequest(BaseModel):
     channelLink: Optional[str] = None
     channelName: Optional[str] = None
 
-class TextPublishRequest(BaseModel):
-    text: str
-    channelId: Optional[str] = None
-    channelLink: Optional[str] = None
-    channelName: Optional[str] = None
-
-class MediaPublishRequest(BaseModel):
-    mediaUrl: str
-    caption: Optional[str] = None
-    channelId: Optional[str] = None
-    channelLink: Optional[str] = None
-    channelName: Optional[str] = None
+class ConnectRequest(BaseModel):
+    connection_id: str
 
 # ── Lifecycle Events ──
 
-@app.on_event("startup")
-async def on_startup():
-    # Start the WhatsApp Playwright engine in background
-    import asyncio
-    asyncio.create_task(whatsapp_engine.initialize())
-
 @app.on_event("shutdown")
 async def on_shutdown():
-    await whatsapp_engine.close()
+    await session_manager.close_all()
 
 # ── V1 REST API Compatibility Endpoints ──
 
 @app.post("/v1/whatsapp/connect")
-async def v1_connect():
-    status = await whatsapp_engine.get_status()
+async def v1_connect(req: ConnectRequest):
+    # Start engine in background so we don't block
+    asyncio.create_task(session_manager.start_engine(req.connection_id))
     return {
         "success": True,
-        "status": "CONNECTED" if status.get("isReady") else "INITIALIZING",
-        "isReady": status.get("isReady", False)
+        "status": "INITIALIZING",
+        "connectionId": req.connection_id,
+        "isReady": False
     }
 
 @app.get("/v1/whatsapp/{connection_id}/status")
-@app.get("/v1/whatsapp/status")
-async def v1_get_status(connection_id: Optional[str] = None):
-    status = await whatsapp_engine.get_status()
-    is_ready = status["isReady"]
+async def v1_get_status(connection_id: str):
+    engine = session_manager.get(connection_id)
+    if not engine:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": False,
+                "connectionId": connection_id,
+                "status": "DISCONNECTED",
+                "isReady": False,
+                "hasQR": False,
+                "service": "whatsapp-channel-api-python",
+            }
+        )
+    status = await engine.get_status()
+    is_ready = status.get("isReady", False)
     state_str = "CONNECTED" if is_ready else ("QR_READY" if status.get("hasQR") else ("AUTHENTICATING" if status.get("state") == "authenticating" else "INITIALIZING"))
+    
+    if status.get("state") == "error":
+        state_str = "ERROR"
+
     return JSONResponse(
         status_code=200,
         content={
             "success": is_ready,
-            "connectionId": connection_id or "default_session",
+            "connectionId": connection_id,
             "status": state_str,
             "isReady": is_ready,
             "hasQR": status.get("hasQR", False),
@@ -114,66 +113,28 @@ async def v1_get_status(connection_id: Optional[str] = None):
     )
 
 @app.get("/v1/whatsapp/{connection_id}/qr")
-@app.get("/v1/whatsapp/qr")
-async def v1_get_qr(connection_id: Optional[str] = None, format: Optional[str] = None):
-    return await get_qr(format=format)
-
-@app.post("/v1/whatsapp/{connection_id}/pair")
-@app.post("/v1/whatsapp/pair")
-async def v1_pair_phone(req: PhonePairRequest, connection_id: Optional[str] = None):
-    return await pair_phone(req)
-
-@app.get("/v1/whatsapp/{connection_id}/channels")
-@app.get("/v1/whatsapp/channels")
-async def v1_get_channels(connection_id: Optional[str] = None):
-    return await get_channels()
-
-@app.post("/v1/whatsapp/connections/{connection_id}/channels/{channel_id}/publish")
-async def v1_publish(connection_id: str, channel_id: str, req: PublishRequest, _auth: str = Depends(check_api_key)):
-    req.channelId = channel_id
-    return await publish_unified(req, _auth=_auth)
-
-@app.post("/v1/whatsapp/{connection_id}/disconnect")
-@app.post("/v1/whatsapp/disconnect")
-async def v1_disconnect(connection_id: Optional[str] = None):
-    return await logout()
-
-# ── Legacy Endpoints ──
-
-@app.get("/api/status")
-async def get_status():
-    status = await whatsapp_engine.get_status()
-    is_ready = status["isReady"]
-    return JSONResponse(
-        status_code=200,
-        content={
-            "success": is_ready,
-            "whatsapp": status,
-            "service": "whatsapp-channel-api-python",
-        }
-    )
-
-@app.get("/api/qr")
-async def get_qr(format: Optional[str] = None):
-    status = await whatsapp_engine.get_status()
-    if status["isReady"]:
+async def v1_get_qr(connection_id: str, format: Optional[str] = None):
+    engine = session_manager.get(connection_id)
+    if not engine:
+        return Response(status_code=204)
+        
+    status = await engine.get_status()
+    if status.get("isReady"):
         return {"success": True, "message": "Already connected! No QR code needed.", "state": "connected"}
 
     if format == "json":
-        if not status["hasQR"]:
+        if not status.get("hasQR"):
             return JSONResponse(
                 status_code=200,
-                content={"success": False, "state": status["state"], "message": "QR generating. Refresh in 2 seconds."}
+                content={"success": False, "state": status.get("state"), "message": "QR generating. Refresh in 2 seconds."}
             )
         return {
             "success": True,
-            "qr": whatsapp_engine.current_qr,
-            "state": status["state"],
-            "instruction": "Scan this QR code with WhatsApp > Linked Devices > Link a Device"
+            "qr": engine.current_qr,
+            "state": status.get("state"),
         }
 
-    # Default: return PNG image
-    qr_bytes = await whatsapp_engine.get_qr_image()
+    qr_bytes = await engine.get_qr_image()
     if not qr_bytes:
         return Response(status_code=204, headers={"Cache-Control": "no-cache, no-store"})
 
@@ -183,40 +144,20 @@ async def get_qr(format: Optional[str] = None):
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
     )
 
-class PhonePairRequest(BaseModel):
-    phone: str  # e.g. "+919876543210"
+@app.get("/v1/whatsapp/{connection_id}/channels")
+async def v1_get_channels(connection_id: str):
+    engine = session_manager.get(connection_id)
+    if not engine:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return await engine.get_user_channels()
 
-@app.post("/api/pair-phone")
-async def pair_phone(req: PhonePairRequest):
-    """Trigger phone number pairing mode. Returns pairing code via /api/status."""
-    result = await whatsapp_engine.request_phone_pairing(req.phone)
-    if not result.get("success"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Failed to start phone pairing"))
-    return {"success": True, "message": result["message"]}
-
-@app.get("/api/channels")
-async def get_channels():
-    """Returns list of all WhatsApp Channels owned/administered by connected WhatsApp account."""
-    result = await whatsapp_engine.get_user_channels()
-    return result
-
-@app.post("/api/session/reset")
-async def reset_session():
-    """Force clear stale session data and restart fresh pairing."""
-    result = await whatsapp_engine.reset_session()
-    return result
-
-@app.post("/api/logout")
-@app.post("/api/disconnect")
-async def logout():
-    """Logs out of WhatsApp Web and purges session storage."""
-    result = await whatsapp_engine.logout_session()
-    return result
-
-# ── Protected Publishing Endpoints ──
-
-@app.post("/api/channel/publish")
-async def publish_unified(req: PublishRequest, _auth: str = Depends(check_api_key)):
+@app.post("/v1/whatsapp/connections/{connection_id}/channels/{channel_id}/publish")
+async def v1_publish(connection_id: str, channel_id: str, req: PublishRequest, _auth: str = Depends(check_api_key)):
+    engine = session_manager.get(connection_id)
+    if not engine:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    req.channelId = channel_id
     content = req.caption or req.text or ""
     if not content and not req.mediaUrl:
         raise HTTPException(status_code=400, detail="Provide at least 'text', 'caption', or 'mediaUrl'")
@@ -224,7 +165,7 @@ async def publish_unified(req: PublishRequest, _auth: str = Depends(check_api_ke
     check_duplicate(content, req.mediaUrl)
 
     try:
-        result = await whatsapp_engine.publish_to_channel(
+        result = await engine.publish_to_channel(
             text=req.text,
             media_url=req.mediaUrl,
             caption=req.caption,
@@ -236,209 +177,17 @@ async def publish_unified(req: PublishRequest, _auth: str = Depends(check_api_ke
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/channel/text")
-async def publish_text(req: TextPublishRequest, _auth: str = Depends(check_api_key)):
-    check_duplicate(req.text)
-    try:
-        return await whatsapp_engine.publish_to_channel(
-            text=req.text,
-            channel_id=req.channelId,
-            channel_link=req.channelLink,
-            channel_name=req.channelName,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.delete("/v1/whatsapp/{connection_id}")
+async def v1_disconnect(connection_id: str):
+    engine = session_manager.get(connection_id)
+    if engine:
+        await engine.logout_session()
+        await session_manager.close(connection_id)
+    return {"success": True}
 
-@app.post("/api/channel/image")
-async def publish_image(req: MediaPublishRequest, _auth: str = Depends(check_api_key)):
-    check_duplicate(req.caption or "", req.mediaUrl)
-    try:
-        return await whatsapp_engine.publish_to_channel(
-            media_url=req.mediaUrl,
-            caption=req.caption,
-            channel_id=req.channelId,
-            channel_link=req.channelLink,
-            channel_name=req.channelName,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/channel/list")
-async def list_channels(_auth: str = Depends(check_api_key)):
-    result = await whatsapp_engine.get_user_channels()
-    return result
-
-# ── Root Live Web Dashboard ──
-
-@app.get("/", response_class=HTMLResponse)
-async def live_dashboard(request: Request):
-    accept = request.headers.get("accept", "")
-    if "application/json" in accept and "text/html" not in accept:
-        status = await whatsapp_engine.get_status()
-        return JSONResponse({
-            "service": "UNAI Flow — WhatsApp Channel API (Python)",
-            "version": "1.0.0",
-            "status": status,
-            "channel": config.CHANNEL_LINK,
-        })
-
-    html_content = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>UNAI Flow — WhatsApp Channel API (Python)</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    :root {{
-      --bg: #090d16;
-      --card-bg: #111827;
-      --card-border: #1f2937;
-      --primary: #25D366;
-      --primary-hover: #20BA56;
-      --text: #f9fafb;
-      --text-muted: #9ca3af;
-      --warning: #f59e0b;
-      --danger: #ef4444;
-    }}
-    * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }}
-    body {{
-      background: radial-gradient(circle at top center, #131d33 0%, var(--bg) 100%);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 2rem 1rem;
-    }}
-    .container {{ width: 100%; max-width: 800px; display: flex; flex-direction: column; gap: 1.5rem; }}
-    header {{ text-align: center; }}
-    .badge {{
-      display: inline-block;
-      background: rgba(37, 211, 102, 0.15);
-      border: 1px solid rgba(37, 211, 102, 0.3);
-      color: var(--primary);
-      padding: 0.35rem 0.85rem;
-      border-radius: 9999px;
-      font-size: 0.85rem;
-      font-weight: 700;
-      margin-bottom: 0.75rem;
-    }}
-    .card {{
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 1rem;
-      padding: 1.75rem;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-    }}
-    .status-bar {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 1rem 1.25rem;
-      background: #172033;
-      border-radius: 0.75rem;
-      border: 1px solid var(--card-border);
-    }}
-    .dot {{ width: 12px; height: 12px; border-radius: 50%; background: var(--warning); display: inline-block; }}
-    .dot.connected {{ background: var(--primary); box-shadow: 0 0 10px var(--primary); }}
-    .qr-box {{
-      background: #ffffff;
-      padding: 1rem;
-      border-radius: 1rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 240px;
-      height: 240px;
-      margin: 1.5rem auto;
-    }}
-    .qr-box img {{ width: 100%; height: 100%; border-radius: 0.5rem; }}
-    .code-box {{
-      background: #090d16;
-      border: 1px solid var(--card-border);
-      border-radius: 0.5rem;
-      padding: 0.85rem 1rem;
-      font-family: monospace;
-      font-size: 0.85rem;
-      color: #38bdf8;
-      word-break: break-all;
-      margin-top: 0.5rem;
-    }}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <header>
-      <div class="badge">🐍 Pure Python WhatsApp Channel Gateway</div>
-      <h1 style="font-size: 2rem; font-weight: 800;">UNAI Flow — WhatsApp Channel API</h1>
-      <p style="color: var(--text-muted); margin-top: 0.25rem;">Direct broadcast engine for WhatsApp Channel ({config.CHANNEL_ID})</p>
-    </header>
-
-    <div class="status-bar">
-      <div style="display: flex; align-items: center; gap: 0.75rem; font-weight: 600;">
-        <span class="dot" id="statusDot"></span>
-        <span id="statusText">Checking session...</span>
-      </div>
-      <span style="font-size: 0.85rem; color: var(--text-muted);">Python + Playwright Engine</span>
-    </div>
-
-    <div class="card" id="qrCard" style="text-align: center;">
-      <h3 style="font-size: 1.2rem; font-weight: 700;">Scan QR to Link WhatsApp</h3>
-      <div class="qr-box">
-        <img id="qrImg" src="/api/qr" alt="WhatsApp QR Code" />
-      </div>
-      <p style="font-size: 0.9rem; color: var(--text-muted); line-height: 1.5;">
-        Open <strong>WhatsApp</strong> &gt; <strong>Linked Devices</strong> &gt; <strong>Link a Device</strong> &gt; Scan this QR code.
-      </p>
-    </div>
-
-    <div class="card" id="connectedCard" style="display: none; text-align: center;">
-      <h2 style="color: var(--primary); font-size: 1.5rem; font-weight: 800; margin-bottom: 0.5rem;">🎉 WhatsApp Connected &amp; Live!</h2>
-      <p style="color: var(--text-muted);">Ready to broadcast posts from your UNAI Flow Dashboard.</p>
-      <div class="code-box" style="text-align: left; margin-top: 1rem;">Target Channel: {config.CHANNEL_LINK}</div>
-    </div>
-
-    <div class="card">
-      <h3 style="font-size: 1rem; margin-bottom: 0.5rem;">Backend Configuration</h3>
-      <p style="font-size: 0.85rem; color: var(--text-muted);">Configure these variables in your main backend:</p>
-      <div class="code-box">WCA_API_URL=https://your-service.onrender.com
-WCA_API_KEY={config.API_KEY}</div>
-    </div>
-  </div>
-
-  <script>
-    async function check() {{
-      try {{
-        const res = await fetch('/api/status');
-        const data = await res.json();
-        const dot = document.getElementById('statusDot');
-        const text = document.getElementById('statusText');
-        const qrCard = document.getElementById('qrCard');
-        const connCard = document.getElementById('connectedCard');
-
-        if (data.success && data.whatsapp && data.whatsapp.isReady) {{
-          dot.className = 'dot connected';
-          text.innerText = 'Connected & Active';
-          qrCard.style.display = 'none';
-          connCard.style.display = 'block';
-        }} else {{
-          dot.className = 'dot';
-          text.innerText = 'Scan QR Code below';
-          qrCard.style.display = 'block';
-          connCard.style.display = 'none';
-          document.getElementById('qrImg').src = '/api/qr?t=' + Date.now();
-        }}
-      }} catch (e) {{}}
-    }}
-    setInterval(check, 3000);
-    check();
-  </script>
-</body>
-</html>"""
-    return HTMLResponse(content=html_content)
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "whatsapp-channel-api"}
 
 if __name__ == "__main__":
     import uvicorn

@@ -4,7 +4,7 @@ from .provider import WhatsAppProvider
 from app.core.config import settings
 
 
-class BaileysProvider(WhatsAppProvider):
+class WhatsAppWebProvider(WhatsAppProvider):
     """
     Talks to the UNAI WhatsApp Channel API (WCA) service.
     """
@@ -61,6 +61,12 @@ class BaileysProvider(WhatsAppProvider):
         response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/status")
         response.raise_for_status()
         return response.json().get("status", "DISCONNECTED")
+
+    async def get_full_status(self, session_identifier: str) -> Dict[str, Any]:
+        """GET /v1/whatsapp/{session_identifier}/status (returns full JSON)"""
+        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/status")
+        response.raise_for_status()
+        return response.json()
 
     async def get_pairing_data(self, session_identifier: str) -> Dict[str, Any]:
         """GET /v1/whatsapp/:connectionId/qr"""

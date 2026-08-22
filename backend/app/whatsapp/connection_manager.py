@@ -15,27 +15,16 @@ class ConnectionManager:
         self.session_manager = SessionManager()
 
     async def start_connection(self, user_id: str, session_identifier: str) -> Dict[str, Any]:
-        # 1. Create or update session in DB as CONNECTING
-        session = self.session_manager.create_or_update_session(user_id, session_identifier, "meta", "CONNECTING")
+        # 1. Create or update session in DB as INITIALIZING
+        session = self.session_manager.create_or_update_session(user_id, session_identifier, "whatsapp_web", "INITIALIZING")
         
         try:
-            # 2. Ask provider to connect / initialize
-            res = await self.provider.connect(session_identifier)
+            # 2. Ask provider to connect / initialize in the background
+            import asyncio
+            asyncio.create_task(self.provider.connect(session_identifier))
             
-            # 3. If already connected, update DB and return
-            if res.get("status") == "CONNECTED" or res.get("isReady"):
-                self.session_manager.update_session_status(session["id"], "CONNECTED")
-                return {"success": True, "status": "CONNECTED", "session_id": session["id"]}
-                
-            # 4. Fetch pairing data (QR code) from the provider
-            pairing_data = await self.provider.get_pairing_data(session_identifier)
-            if pairing_data.get("type") != "not_required":
-                self.session_manager.update_session_status(session["id"], "WAITING_FOR_SCAN")
-                return {"success": True, "status": "WAITING_FOR_SCAN", "pairing": pairing_data.get("data"), "session_id": session["id"]}
-                
-            # 5. Session initializing – QR not ready yet, tell frontend to poll
-            self.session_manager.update_session_status(session["id"], "WAITING_FOR_SCAN")
-            return {"success": True, "status": "WAITING_FOR_SCAN", "pairing": None, "session_id": session["id"]}
+            # 3. Return immediately so frontend doesn't timeout
+            return {"success": True, "status": "INITIALIZING", "session_id": session["id"]}
             
         except Exception as e:
             tb = traceback.format_exc()
@@ -50,10 +39,17 @@ class ConnectionManager:
             
         # Ask provider for real status
         try:
-            provider_status = await self.provider.get_status(session_identifier)
-            if provider_status != session["status"]:
-                self.session_manager.update_session_status(session["id"], provider_status)
-                session["status"] = provider_status
+            full_status = await self.provider.get_full_status(session_identifier)
+            provider_status_str = full_status.get("status", session["status"])
+            
+            if provider_status_str != session["status"]:
+                if provider_status_str == "CONNECTED":
+                    user_info = full_status.get("userInfo") or {}
+                    phone = user_info.get("phone")
+                    self.session_manager.update_session_connection_details(session["id"], phone)
+                else:
+                    self.session_manager.update_session_status(session["id"], provider_status_str)
+                session["status"] = provider_status_str
         except Exception:
             pass
         

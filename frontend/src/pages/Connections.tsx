@@ -31,7 +31,7 @@ export default function Connections() {
   const [channels, setChannels] = useState<any[]>([]);
   const [polling, setPolling] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<any>(null);
-  const sessionRef = useRef(`sess_${Date.now()}`);
+  const sessionRef = useRef<string | null>(null);
   
   // ── Cleanup on unmount ──
   useEffect(() => {
@@ -46,6 +46,7 @@ export default function Connections() {
     if (!polling) return;
     
     const interval = setInterval(async () => {
+      if (!sessionRef.current) return;
       try {
         const res = await fetchApi(`/api/whatsapp/status?session_identifier=${sessionRef.current}`);
         if (res.data?.status) {
@@ -91,8 +92,13 @@ export default function Connections() {
     try {
       const res = await fetchApi('/api/whatsapp/connect', {
         method: 'POST',
-        body: JSON.stringify({ session_identifier: sessionRef.current })
+        body: JSON.stringify(sessionRef.current ? { session_identifier: sessionRef.current } : {})
       });
+      
+      if (res.data?.session_identifier) {
+        sessionRef.current = res.data.session_identifier;
+      }
+
       if (res.data?.status === 'WAITING_FOR_SCAN') {
         setWaState('WAITING_FOR_SCAN');
         setQrCode(res.data.pairing);
@@ -311,6 +317,7 @@ export default function Connections() {
                   </>
                 ) : (
                   <button className="btn-primary"
+                    disabled={isWaModalOpen}
                     style={{ backgroundColor: platform.id === 'whatsapp' ? '#25D366' : undefined }}
                     onClick={() => handleConnect(platform.id)}>
                     <Plus size={16} /><span>Connect Channel</span>

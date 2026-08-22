@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from .session_manager import SessionManager
 from .provider import WhatsAppProvider
 import traceback
@@ -14,27 +14,52 @@ class ConnectionManager:
         self.provider = provider
         self.session_manager = SessionManager()
 
-    async def start_connection(self, user_id: str, session_identifier: str) -> Dict[str, Any]:
-        # 1. Create or update session in DB as INITIALIZING
+    async def start_connection(self, user_id: str, session_identifier: Optional[str] = None) -> Dict[str, Any]:
+        # 1. Check for existing active sessions
+        active_states = ["INITIALIZING", "WAITING_FOR_SCAN", "AUTHENTICATING", "CONNECTING"]
+        existing_sessions = self.session_manager.get_sessions_for_user(user_id)
+        
+        target_session = None
+        if session_identifier:
+            target_session = next((s for s in existing_sessions if s["session_identifier"] == session_identifier), None)
+            
+        if not target_session:
+            # Look for ANY active or connected session for this user
+            for s in existing_sessions:
+                if s["status"] == "CONNECTED":
+                    return {"success": True, "status": "CONNECTED", "session_identifier": s["session_identifier"]}
+                if s["status"] in active_states:
+                    return {"success": True, "status": s["status"], "session_identifier": s["session_identifier"]}
+        
+        # If we reach here, we must create a new connection
+        import uuid
+        if not session_identifier:
+            session_identifier = f"sess_{uuid.uuid4().hex}"
+            
+        # Create or update session in DB as INITIALIZING
         session = self.session_manager.create_or_update_session(user_id, session_identifier, "whatsapp_web", "INITIALIZING")
         
         try:
             # 2. Ask provider to connect / initialize (WCA API is non-blocking)
             import asyncio
             import httpx
-            for attempt in range(3):
+            
+            delays = [2, 4, 8]
+            for attempt in range(4):
                 try:
                     await self.provider.connect(session_identifier)
                     break
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code in [502, 503, 504] and attempt < 2:
-                        logger.warning(f"WCA service unavailable (cold start?), retrying in 5s... {e}")
-                        await asyncio.sleep(5)
+                    if e.response.status_code in [429, 502, 503, 504] and attempt < 3:
+                        retry_after = e.response.headers.get("Retry-After")
+                        sleep_time = int(retry_after) if retry_after and retry_after.isdigit() else delays[attempt]
+                        logger.warning(f"WCA service unavailable/rate limited ({e.response.status_code}), retrying in {sleep_time}s...")
+                        await asyncio.sleep(sleep_time)
                         continue
                     raise
             
             # 3. Return immediately so frontend doesn't timeout
-            return {"success": True, "status": "INITIALIZING", "session_id": session["id"]}
+            return {"success": True, "status": "INITIALIZING", "session_identifier": session_identifier}
             
         except Exception as e:
             tb = traceback.format_exc()

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from app.api.auth import get_current_user_id
 from app.whatsapp.connection_manager import ConnectionManager
 from app.whatsapp.whatsapp_web_provider import WhatsAppWebProvider
@@ -18,7 +18,7 @@ provider = WhatsAppWebProvider()
 connection_manager = ConnectionManager(provider=provider)
 
 class ConnectRequest(BaseModel):
-    session_identifier: str
+    session_identifier: Optional[str] = None
 
 @router.post("/connect")
 async def connect_whatsapp(req: ConnectRequest, user_id: str = Depends(get_current_user_id)):

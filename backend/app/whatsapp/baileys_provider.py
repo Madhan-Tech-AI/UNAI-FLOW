@@ -7,19 +7,11 @@ from app.core.config import settings
 class BaileysProvider(WhatsAppProvider):
     """
     Talks to the UNAI WhatsApp Channel API (WCA) service.
-    Routes are based on the WCA v1 API:
-      POST /v1/whatsapp/connect
-      GET  /v1/whatsapp/:connectionId/status
-      GET  /v1/whatsapp/:connectionId/qr
-      GET  /v1/whatsapp/:connectionId/channels
-      POST /v1/whatsapp/connections/:connectionId/channels/:channelId/publish
-      POST /v1/whatsapp/:connectionId/disconnect
     """
 
     def __init__(self, endpoint: str = None):
         self.endpoint = endpoint or settings.wca_api_url
         self.api_key = getattr(settings, "wca_api_key", "")
-        self.client = httpx.AsyncClient(base_url=self.endpoint, timeout=60.0)
 
     def _headers(self) -> Dict[str, str]:
         """Return auth headers for protected endpoints."""
@@ -28,16 +20,30 @@ class BaileysProvider(WhatsAppProvider):
             h["X-API-Key"] = self.api_key
         return h
 
+    async def _make_request(self, method: str, path: str, timeout: float = 30.0, **kwargs) -> httpx.Response:
+        """Helper to make HTTP requests with a fresh client per request."""
+        async with httpx.AsyncClient(base_url=self.endpoint, timeout=timeout) as client:
+            # Inject auth headers if not already provided
+            kwargs.setdefault("headers", {})
+            kwargs["headers"].update(self._headers())
+            
+            response = await client.request(method, path, **kwargs)
+            return response
+
     # ── Connection lifecycle ──
 
     async def connect(self, session_identifier: str) -> Dict[str, Any]:
         """POST /v1/whatsapp/connect"""
-        response = await self.client.post(
+        # Increased timeout to 90s to give WCA Node service enough time for cold start / initial WASocket setup
+        response = await self._make_request(
+            "POST",
             "/v1/whatsapp/connect",
+            timeout=90.0,
             json={"connection_id": session_identifier},
         )
         response.raise_for_status()
         data = response.json()
+        
         # Normalize: WCA returns {success, connectionId, status, isReady}
         return {
             "status": data.get("status", "INITIALIZING"),
@@ -46,28 +52,20 @@ class BaileysProvider(WhatsAppProvider):
         }
 
     async def disconnect(self, session_identifier: str) -> bool:
-        """POST /v1/whatsapp/:connectionId/disconnect"""
-        response = await self.client.post(
-            f"/v1/whatsapp/{session_identifier}/disconnect",
-            headers=self._headers(),
-        )
+        """DELETE /v1/whatsapp/{session_identifier}"""
+        response = await self._make_request("DELETE", f"/v1/whatsapp/{session_identifier}")
         return response.status_code == 200
 
     async def get_status(self, session_identifier: str) -> str:
-        """GET /v1/whatsapp/:connectionId/status"""
-        response = await self.client.get(
-            f"/v1/whatsapp/{session_identifier}/status"
-        )
+        """GET /v1/whatsapp/{session_identifier}/status"""
+        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/status")
         response.raise_for_status()
-        data = response.json()
-        return data.get("status", "DISCONNECTED")
+        return response.json().get("status", "DISCONNECTED")
 
     async def get_pairing_data(self, session_identifier: str) -> Dict[str, Any]:
         """GET /v1/whatsapp/:connectionId/qr?format=json"""
-        response = await self.client.get(
-            f"/v1/whatsapp/{session_identifier}/qr",
-            params={"format": "json"},
-        )
+        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/qr", params={"format": "json"})
+        
         if response.status_code == 204:
             # No QR available yet or already connected
             return {"type": "not_required"}
@@ -87,9 +85,7 @@ class BaileysProvider(WhatsAppProvider):
 
     async def get_channels(self, session_identifier: str) -> List[Dict[str, Any]]:
         """GET /v1/whatsapp/:connectionId/channels"""
-        response = await self.client.get(
-            f"/v1/whatsapp/{session_identifier}/channels"
-        )
+        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/channels")
         if response.status_code == 400:
             return []
         response.raise_for_status()
@@ -115,43 +111,26 @@ class BaileysProvider(WhatsAppProvider):
     # ── Publishing ──
 
     async def publish_text(self, session_identifier: str, channel_id: str, body: str) -> Dict[str, Any]:
-        """POST /v1/whatsapp/connections/:connectionId/channels/:channelId/publish"""
         payload = {"type": "text", "text": body}
-        response = await self.client.post(
-            f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
-            json=payload,
-            headers=self._headers(),
-        )
+        response = await self._make_request("POST", f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish", json=payload)
         response.raise_for_status()
         return response.json()
 
     async def publish_image(self, session_identifier: str, channel_id: str, media_url: str, caption: str) -> Dict[str, Any]:
         payload = {"type": "image", "mediaUrl": media_url, "caption": caption}
-        response = await self.client.post(
-            f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
-            json=payload,
-            headers=self._headers(),
-        )
+        response = await self._make_request("POST", f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish", json=payload)
         response.raise_for_status()
         return response.json()
 
     async def publish_video(self, session_identifier: str, channel_id: str, media_url: str, caption: str) -> Dict[str, Any]:
         payload = {"type": "video", "mediaUrl": media_url, "caption": caption}
-        response = await self.client.post(
-            f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
-            json=payload,
-            headers=self._headers(),
-        )
+        response = await self._make_request("POST", f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish", json=payload)
         response.raise_for_status()
         return response.json()
 
     async def publish_link(self, session_identifier: str, channel_id: str, url: str, caption: str) -> Dict[str, Any]:
         payload = {"type": "text", "text": f"{caption}\n{url}"}
-        response = await self.client.post(
-            f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
-            json=payload,
-            headers=self._headers(),
-        )
+        response = await self._make_request("POST", f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish", json=payload)
         response.raise_for_status()
         return response.json()
 

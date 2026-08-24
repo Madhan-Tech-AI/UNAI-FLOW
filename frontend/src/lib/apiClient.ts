@@ -33,18 +33,46 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
   const baseUrl = getApiBaseUrl();
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = `${baseUrl}${cleanEndpoint}`;
+  const method = options.method || 'GET';
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  const startTime = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout for Render cold starts
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail?.message || errorData.detail || errorData.error || `Request failed with status ${response.status}`);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      signal: options.signal || controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const durationMs = Date.now() - startTime;
+    if (endpoint.includes('whatsapp') || endpoint.includes('channels')) {
+      console.log(`%c[UNAI-WA] HTTP_${method}`, response.ok ? 'color:#16a34a' : 'color:#ef4444', {
+        endpoint: cleanEndpoint,
+        status: response.status,
+        durationMs: `${durationMs}ms`,
+        ok: response.ok,
+      });
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail?.message || errorData.detail || errorData.error || `Request failed with status ${response.status}`);
+    }
+
+    return response.json();
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    const durationMs = Date.now() - startTime;
+    const isTimeout = err.name === 'AbortError';
+    const message = isTimeout ? `Request timed out after 25s (${cleanEndpoint})` : err.message;
+    if (endpoint.includes('whatsapp') || endpoint.includes('channels')) {
+      console.error(`[UNAI-WA] HTTP_FAIL ${method} ${cleanEndpoint} (${durationMs}ms):`, message);
+    }
+    throw new Error(message);
   }
-
-  return response.json();
 }
 
 /**
@@ -66,14 +94,24 @@ export async function fetchApiRaw(endpoint: string, options: RequestInit = {}): 
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = `${baseUrl}${cleanEndpoint}`;
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
 
-  if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}`);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      signal: options.signal || controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`);
+    }
+
+    return response;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    throw err;
   }
-
-  return response;
 }

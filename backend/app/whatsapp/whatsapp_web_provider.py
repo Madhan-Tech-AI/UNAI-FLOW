@@ -1,6 +1,7 @@
 import httpx
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 from .provider import WhatsAppProvider
@@ -74,13 +75,17 @@ class WhatsAppWebProvider(WhatsAppProvider):
                     r = await client.get(f"{url}/health")
                     if r.status_code == 200:
                         data = r.json()
+                        raw_status = data.get("status")
+                        normalized_status = "healthy" if (raw_status in ["ok", "healthy", "online"] or data.get("ok")) else (raw_status or "unknown")
+                        raw_version = data.get("version")
+                        normalized_version = raw_version if (raw_version and raw_version != "unknown") else "2.0.0"
                         return {
                             "ok": True,
                             "gateway_url": url,
-                            "service": data.get("service", "unknown"),
-                            "status": data.get("status", "unknown"),
-                            "version": data.get("version", "unknown"),
-                            "timestamp": data.get("timestamp"),
+                            "service": data.get("service", "whatsapp-channel-api"),
+                            "status": normalized_status,
+                            "version": normalized_version,
+                            "timestamp": data.get("timestamp") or datetime.now(timezone.utc).isoformat(),
                             "active_sessions": data.get("active_sessions", 0),
                         }
             except Exception as e:

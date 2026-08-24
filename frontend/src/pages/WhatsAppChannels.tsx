@@ -111,8 +111,10 @@ export default function WhatsAppChannels() {
   }, []);
 
   const stopPolling = useCallback(() => {
-    if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
-    pollCountRef.current = 0;
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
   }, []);
 
   const stopQrTimer = useCallback(() => {
@@ -143,9 +145,9 @@ export default function WhatsAppChannels() {
           sessionId: connected.id,
           sessionIdentifier: connected.session_identifier,
           connectedAt: connected.last_connected_at || connected.updated_at,
-          apiUrl: `${window.location.origin}/api/whatsapp/v1`,
+          apiUrl: `${API_BASE_URL}/api/whatsapp/v1`,
           apiToken: `whp_live_${connected.session_identifier?.slice(5, 21)}`,
-          webhookUrl: `${window.location.origin}/webhooks/whatsapp`,
+          webhookUrl: `${API_BASE_URL}/webhooks/whatsapp`,
         });
         setViewMode('dashboard');
         log('LOADED', { status: 'CONNECTED', session: connected.session_identifier });
@@ -309,13 +311,15 @@ export default function WhatsAppChannels() {
   }, [pollStatus]);
 
   const startPolling = useCallback(() => {
-    stopPolling();
-    pollCountRef.current = 0;
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
     pollIntervalRef.current = setInterval(() => {
       if (pollStatusRef.current) pollStatusRef.current();
     }, POLL_INTERVAL_MS);
     if (pollStatusRef.current) pollStatusRef.current();
-  }, [stopPolling]);
+  }, []);
 
   // ── Supabase Realtime ──
   const subscribeRealtime = useCallback((sessionIdentifier: string) => {
@@ -348,6 +352,7 @@ export default function WhatsAppChannels() {
     stopPolling();
     stopQrTimer();
     stopQrAutoRefresh();
+    pollCountRef.current = 0; // Only reset counter for brand-new connection attempt!
 
     setViewMode('connecting');
     setWaState('INITIALIZING');
@@ -714,7 +719,6 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
   const [activeTab, setActiveTab] = useState<'overview' | 'channels' | 'publish'>('overview');
 
   useEffect(() => {
-    onRefresh();
     discoverChannels();
   }, []);
 

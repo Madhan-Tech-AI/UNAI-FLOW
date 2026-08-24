@@ -123,8 +123,17 @@ class PublishingWorker:
             session_identifier = sess_res.data[0]["session_identifier"]
             session_status = sess_res.data[0].get("status", "UNKNOWN")
 
-            if session_status != "CONNECTED":
-                raise ValueError(f"Session {session_identifier} is not CONNECTED (status={session_status})")
+            if session_status not in ["CONNECTED", "READY"]:
+                # Session not ready — skip job, don't mark as failed (it can be retried later)
+                logger.warning(
+                    f"[WORKER] SESSION_NOT_READY job={job_id} session={session_identifier} "
+                    f"status={session_status} — job will be retried when session reconnects"
+                )
+                # Revert job back to QUEUED so it can be picked up later
+                self.sb.table("whatsapp_publish_jobs").update({
+                    "status": "QUEUED",
+                }).eq("id", job_id).execute()
+                return False  # Don't count as processed
 
             logger.info(f"[WORKER] SESSION_LOADED job={job_id} session={session_identifier} status={session_status}")
         except Exception as e:

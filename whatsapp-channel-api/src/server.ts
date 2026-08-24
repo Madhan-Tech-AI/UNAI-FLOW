@@ -37,12 +37,24 @@ function authenticateApiKey(req: Request, res: Response, next: NextFunction) {
 }
 
 // ── Health & Diagnostics ──
+const startTime = Date.now();
+
 app.get('/health', (req: Request, res: Response) => {
+  // Count active sessions
+  let activeSessions = 0;
+  const allSessions = (sessionManager as any).sessions;
+  if (allSessions && typeof allSessions.size === 'number') {
+    activeSessions = allSessions.size;
+  }
+
   res.json({
+    ok: true,
+    service: 'whatsapp-channel-api',
     status: 'healthy',
-    service: 'UNAI WhatsApp Gateway',
-    version: '2.0.0 (Native Baileys Multi-Device)',
+    version: '2.0.0',
     timestamp: new Date().toISOString(),
+    active_sessions: activeSessions,
+    uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
   });
 });
 
@@ -119,7 +131,14 @@ app.get('/v1/whatsapp/:connectionId/qr', async (req: Request, res: Response) => 
   const connectionId = getParam(req, 'connectionId');
   const format = req.query.format as string;
 
-  const session = await sessionManager.getOrCreateSession(connectionId);
+  // CRITICAL: Use getSession() NOT getOrCreateSession()
+  // getOrCreateSession() was destroying the existing session (with QR) and creating a fresh one
+  const session = sessionManager.getSession(connectionId);
+
+  if (!session) {
+    logger.warn({ connectionId }, '[WCA] QR_REQUEST_NO_SESSION');
+    return res.status(404).json({ success: false, error: 'Session not found. Call /connect first.' });
+  }
 
   if (session.status === 'CONNECTED') {
     if (format === 'json') {
@@ -137,11 +156,13 @@ app.get('/v1/whatsapp/:connectionId/qr', async (req: Request, res: Response) => 
   }
 
   if (session.qrCodePng) {
+    logger.info({ connectionId, size: session.qrCodePng.length }, '[WCA] QR_SERVED_AS_PNG');
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     return res.send(session.qrCodePng);
   }
 
+  logger.warn({ connectionId, status: session.status, hasRaw: Boolean(session.qrCodeRaw) }, '[WCA] QR_NOT_READY_YET');
   return res.status(204).setHeader('Cache-Control', 'no-cache').send();
 });
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink } from 'lucide-react';
+import { Camera, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, MessageCircle } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
 function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
@@ -51,6 +51,13 @@ export default function Connections() {
   // ── Handlers ──
 
   const handleConnect = async (platformId: string) => {
+    // WhatsApp has its own dedicated page with the connection wizard
+    const platform = platforms.find(p => p.id === platformId) as any;
+    if (platform?.linkTo) {
+      window.location.href = platform.linkTo;
+      return;
+    }
+
     try {
       const res = await fetchApi(`/connections/${platformId}/start`, { method: 'POST' });
       if (res.authorization_url) {
@@ -91,6 +98,13 @@ export default function Connections() {
 
   // ── Platform definitions ──
   const platforms = [
+    {
+      id: 'whatsapp', name: 'WhatsApp Channels', subtitle: 'WhatsApp Channel API',
+      icon: <MessageCircle size={22} />,
+      description: 'Connect your WhatsApp account to publish to Channels.',
+      color: '#25D366', bgColor: '#dcfce7',
+      linkTo: '/whatsapp-channels',
+    },
     {
       id: 'instagram', name: 'Instagram', subtitle: 'Instagram Graph API',
       icon: <Camera size={22} />,

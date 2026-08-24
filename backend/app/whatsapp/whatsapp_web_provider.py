@@ -1,17 +1,24 @@
 import httpx
-from typing import Dict, Any, List
+import asyncio
+import logging
+from typing import Dict, Any, List, Optional
+
 from .provider import WhatsAppProvider
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class WhatsAppWebProvider(WhatsAppProvider):
     """
     Talks to the UNAI WhatsApp Channel API (WCA) service.
+    Includes structured boundary logging at every gateway interaction.
     """
 
     def __init__(self, endpoint: str = None):
         self.endpoint = endpoint or settings.wca_api_url
         self.api_key = getattr(settings, "wca_api_key", "")
+        self._resolved_url: Optional[str] = None  # Cache the resolved gateway URL
 
     def _headers(self) -> Dict[str, str]:
         """Return auth headers for protected endpoints."""
@@ -20,29 +27,122 @@ class WhatsAppWebProvider(WhatsAppProvider):
             h["X-API-Key"] = self.api_key
         return h
 
-    async def _make_request(self, method: str, path: str, timeout: float = 30.0, **kwargs) -> httpx.Response:
-        """Helper to make HTTP requests with retry for Render cold starts."""
+    # ── Gateway Resolution ──
+
+    async def resolve_gateway(self) -> Optional[str]:
+        """
+        Try each candidate WCA URL in order. Return the first healthy one.
+        Logs the resolution process at every step.
+        """
+        candidate_urls = settings.get_wca_candidate_urls()
+        logger.info(f"[WA] GATEWAY_RESOLVE candidates={candidate_urls}")
+
+        for url in candidate_urls:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    r = await client.get(f"{url}/health")
+                    if r.status_code == 200:
+                        data = r.json()
+                        logger.info(
+                            f"[WA] GATEWAY_HEALTH_CHECK url={url} status=healthy "
+                            f"service={data.get('service', 'unknown')} "
+                            f"version={data.get('version', 'unknown')}"
+                        )
+                        self._resolved_url = url
+                        return url
+                    else:
+                        logger.warning(f"[WA] GATEWAY_HEALTH_CHECK url={url} status=unhealthy http={r.status_code}")
+            except httpx.ConnectError:
+                logger.warning(f"[WA] GATEWAY_HEALTH_CHECK url={url} status=unreachable error=connection_refused")
+            except httpx.ReadTimeout:
+                logger.warning(f"[WA] GATEWAY_HEALTH_CHECK url={url} status=unreachable error=timeout")
+            except Exception as e:
+                logger.warning(f"[WA] GATEWAY_HEALTH_CHECK url={url} status=error error={type(e).__name__}: {e}")
+
+        logger.error("[WA] GATEWAY_RESOLVE result=ALL_UNAVAILABLE")
+        self._resolved_url = None
+        return None
+
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Perform a health check against the gateway. Returns structured result.
+        """
+        url = await self.resolve_gateway()
+        if url:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    r = await client.get(f"{url}/health")
+                    if r.status_code == 200:
+                        data = r.json()
+                        return {
+                            "ok": True,
+                            "gateway_url": url,
+                            "service": data.get("service", "unknown"),
+                            "status": data.get("status", "unknown"),
+                            "version": data.get("version", "unknown"),
+                            "timestamp": data.get("timestamp"),
+                            "active_sessions": data.get("active_sessions", 0),
+                        }
+            except Exception as e:
+                return {"ok": False, "gateway_url": url, "error": str(e)}
+        return {
+            "ok": False,
+            "gateway_url": None,
+            "error": "All gateway candidates unreachable",
+        }
+
+    # ── HTTP helper ──
+
+    async def _make_request(
+        self,
+        method: str,
+        path: str,
+        timeout: float = 30.0,
+        gateway_url: Optional[str] = None,
+        **kwargs,
+    ) -> httpx.Response:
+        """
+        Make HTTP request to WCA with cold-start-aware retry.
+        Uses resolved gateway URL or tries resolution if not cached.
+        """
+        base_url = gateway_url or self._resolved_url
+        if not base_url:
+            # Try to resolve
+            base_url = await self.resolve_gateway()
+            if not base_url:
+                raise httpx.ConnectError(
+                    "WhatsApp gateway unavailable — all candidate URLs unreachable"
+                )
+
         kwargs.setdefault("headers", {})
         kwargs["headers"].update(self._headers())
 
-        delays = [3, 8, 15]  # Cold-start-aware backoff
+        delays = [2, 4, 8, 15]  # Exponential backoff for cold starts
         last_exc = None
 
         for attempt in range(len(delays) + 1):
             try:
-                async with httpx.AsyncClient(base_url=self.endpoint, timeout=timeout) as client:
+                async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as client:
                     response = await client.request(method, path, **kwargs)
                     if response.status_code == 429 and attempt < len(delays):
-                        import asyncio
                         sleep_s = delays[attempt]
+                        logger.warning(
+                            f"[WA] GATEWAY_RATE_LIMITED path={path} "
+                            f"retry_in={sleep_s}s attempt={attempt+1}/{len(delays)+1}"
+                        )
                         await asyncio.sleep(sleep_s)
                         continue
                     return response
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
                 last_exc = e
                 if attempt < len(delays):
-                    import asyncio
-                    await asyncio.sleep(delays[attempt])
+                    sleep_s = delays[attempt]
+                    logger.warning(
+                        f"[WA] GATEWAY_REQUEST_RETRY path={path} "
+                        f"error={type(e).__name__} retry_in={sleep_s}s "
+                        f"attempt={attempt+1}/{len(delays)+1}"
+                    )
+                    await asyncio.sleep(sleep_s)
                     continue
                 raise
 
@@ -51,8 +151,9 @@ class WhatsAppWebProvider(WhatsAppProvider):
     # ── Connection lifecycle ──
 
     async def connect(self, session_identifier: str) -> Dict[str, Any]:
-        """POST /v1/whatsapp/connect"""
-        # Increased timeout to 90s to give WCA Node service enough time for cold start / initial WASocket setup
+        """POST /v1/whatsapp/connect — creates or resumes a session on the gateway."""
+        logger.info(f"[WA] GATEWAY_SESSION_CREATE session_id={session_identifier} request=sent")
+
         response = await self._make_request(
             "POST",
             "/v1/whatsapp/connect",
@@ -61,18 +162,29 @@ class WhatsAppWebProvider(WhatsAppProvider):
         )
         response.raise_for_status()
         data = response.json()
-        
-        # Normalize: WCA returns {success, connectionId, status, isReady}
+
+        status = data.get("status", "INITIALIZING")
+        logger.info(
+            f"[WA] GATEWAY_SESSION_CREATE session_id={session_identifier} "
+            f"response={response.status_code} status={status} "
+            f"isReady={data.get('isReady', False)}"
+        )
+
         return {
-            "status": data.get("status", "INITIALIZING"),
+            "status": status,
             "connectionId": data.get("connectionId"),
             "isReady": data.get("isReady", False),
         }
 
     async def disconnect(self, session_identifier: str) -> bool:
         """DELETE /v1/whatsapp/{session_identifier}"""
-        response = await self._make_request("DELETE", f"/v1/whatsapp/{session_identifier}")
-        return response.status_code == 200
+        logger.info(f"[WA] GATEWAY_DISCONNECT session_id={session_identifier}")
+        try:
+            response = await self._make_request("DELETE", f"/v1/whatsapp/{session_identifier}")
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"[WA] GATEWAY_DISCONNECT_FAILED session_id={session_identifier} error={e}")
+            return False
 
     async def get_status(self, session_identifier: str) -> str:
         """GET /v1/whatsapp/{session_identifier}/status"""
@@ -81,61 +193,101 @@ class WhatsAppWebProvider(WhatsAppProvider):
         return response.json().get("status", "DISCONNECTED")
 
     async def get_full_status(self, session_identifier: str) -> Dict[str, Any]:
-        """GET /v1/whatsapp/{session_identifier}/status (returns full JSON)"""
-        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/status")
+        """
+        GET /v1/whatsapp/{session_identifier}/status (returns full JSON).
+        CRITICAL: This must NOT silently swallow errors.
+        """
+        logger.info(f"[WA] STATUS_REQUEST session_id={session_identifier}")
+
+        response = await self._make_request(
+            "GET", f"/v1/whatsapp/{session_identifier}/status"
+        )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+
+        status = data.get("status", "DISCONNECTED")
+        logger.info(
+            f"[WA] STATUS_RESPONSE session_id={session_identifier} "
+            f"status={status} hasQR={data.get('hasQR', False)} "
+            f"isReady={data.get('isReady', False)}"
+        )
+        return data
 
     async def get_pairing_data(self, session_identifier: str) -> Dict[str, Any]:
-        """GET /v1/whatsapp/:connectionId/qr"""
-        # Fetch the raw PNG image, not the json format, because frontend expects an image
-        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/qr")
-        
+        """GET /v1/whatsapp/:connectionId/qr — fetch QR code from gateway."""
+        logger.info(f"[WA] QR_REQUEST session_id={session_identifier}")
+
+        response = await self._make_request(
+            "GET", f"/v1/whatsapp/{session_identifier}/qr"
+        )
+
         if response.status_code == 204:
-            # No QR available yet or already connected
+            logger.info(f"[WA] QR_NOT_READY session_id={session_identifier} reason=204_no_content")
             return {"type": "not_required"}
+
         response.raise_for_status()
-        
+
         # If the response is an image, we base64 encode it
         content_type = response.headers.get("content-type", "")
         if "image" in content_type:
             import base64
+
             b64_img = base64.b64encode(response.content).decode("utf-8")
             data_uri = f"data:{content_type};base64,{b64_img}"
+            logger.info(
+                f"[WA] QR_RECEIVED session_id={session_identifier} "
+                f"format=image length={len(response.content)}"
+            )
             return {"type": "qr", "data": data_uri}
-            
+
         # Fallback if it returned JSON for some reason
         try:
             data = response.json()
             if data.get("state") == "connected":
+                logger.info(f"[WA] QR_NOT_REQUIRED session_id={session_identifier} reason=already_connected")
                 return {"type": "not_required"}
             qr = data.get("qr")
             if qr:
+                logger.info(
+                    f"[WA] QR_RECEIVED session_id={session_identifier} "
+                    f"format=json length={len(qr)}"
+                )
                 return {"type": "qr", "data": qr}
         except Exception:
             pass
 
+        logger.warning(f"[WA] QR_EMPTY session_id={session_identifier} content_type={content_type}")
         return {"type": "not_required"}
 
     # ── Channel discovery ──
 
     async def get_channels(self, session_identifier: str) -> List[Dict[str, Any]]:
         """GET /v1/whatsapp/:connectionId/channels"""
-        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/channels")
+        logger.info(f"[WA] CHANNELS_REQUEST session_id={session_identifier}")
+        response = await self._make_request(
+            "GET", f"/v1/whatsapp/{session_identifier}/channels"
+        )
         if response.status_code == 400:
+            logger.warning(f"[WA] CHANNELS_REQUEST session_id={session_identifier} error=400")
             return []
         response.raise_for_status()
         data = response.json()
-        return data.get("channels", [])
+        channels = data.get("channels", [])
+        logger.info(f"[WA] CHANNELS_RECEIVED session_id={session_identifier} count={len(channels)}")
+        return channels
 
-    async def get_channel(self, session_identifier: str, channel_id: str) -> Dict[str, Any]:
+    async def get_channel(
+        self, session_identifier: str, channel_id: str
+    ) -> Dict[str, Any]:
         channels = await self.get_channels(session_identifier)
         for ch in channels:
             if ch.get("id") == channel_id:
                 return ch
         raise ValueError("Channel not found")
 
-    async def get_channel_permissions(self, session_identifier: str, channel_id: str) -> Dict[str, Any]:
+    async def get_channel_permissions(
+        self, session_identifier: str, channel_id: str
+    ) -> Dict[str, Any]:
         ch = await self.get_channel(session_identifier, channel_id)
         role = ch.get("role", "GUEST")
         return {
@@ -146,31 +298,70 @@ class WhatsAppWebProvider(WhatsAppProvider):
 
     # ── Publishing ──
 
-    async def publish_text(self, session_identifier: str, channel_id: str, body: str) -> Dict[str, Any]:
+    async def publish_text(
+        self, session_identifier: str, channel_id: str, body: str
+    ) -> Dict[str, Any]:
+        logger.info(f"[WA] PUBLISH_TEXT session_id={session_identifier} channel_id={channel_id}")
         payload = {"type": "text", "text": body}
-        response = await self._make_request("POST", f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish", json=payload)
+        response = await self._make_request(
+            "POST",
+            f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
+            json=payload,
+        )
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        logger.info(
+            f"[WA] PUBLISH_TEXT_RESULT session_id={session_identifier} "
+            f"message_id={result.get('postId', 'unknown')}"
+        )
+        return result
 
-    async def publish_image(self, session_identifier: str, channel_id: str, media_url: str, caption: str) -> Dict[str, Any]:
+    async def publish_image(
+        self, session_identifier: str, channel_id: str, media_url: str, caption: str
+    ) -> Dict[str, Any]:
+        logger.info(f"[WA] PUBLISH_IMAGE session_id={session_identifier} channel_id={channel_id}")
         payload = {"type": "image", "mediaUrl": media_url, "caption": caption}
-        response = await self._make_request("POST", f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish", json=payload)
+        response = await self._make_request(
+            "POST",
+            f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
+            json=payload,
+        )
         response.raise_for_status()
         return response.json()
 
-    async def publish_video(self, session_identifier: str, channel_id: str, media_url: str, caption: str) -> Dict[str, Any]:
+    async def publish_video(
+        self, session_identifier: str, channel_id: str, media_url: str, caption: str
+    ) -> Dict[str, Any]:
+        logger.info(f"[WA] PUBLISH_VIDEO session_id={session_identifier} channel_id={channel_id}")
         payload = {"type": "video", "mediaUrl": media_url, "caption": caption}
-        response = await self._make_request("POST", f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish", json=payload)
+        response = await self._make_request(
+            "POST",
+            f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
+            json=payload,
+        )
         response.raise_for_status()
         return response.json()
 
-    async def publish_link(self, session_identifier: str, channel_id: str, url: str, caption: str) -> Dict[str, Any]:
+    async def publish_link(
+        self, session_identifier: str, channel_id: str, url: str, caption: str
+    ) -> Dict[str, Any]:
+        logger.info(f"[WA] PUBLISH_LINK session_id={session_identifier} channel_id={channel_id}")
         payload = {"type": "text", "text": f"{caption}\n{url}"}
-        response = await self._make_request("POST", f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish", json=payload)
+        response = await self._make_request(
+            "POST",
+            f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
+            json=payload,
+        )
         response.raise_for_status()
         return response.json()
 
-    async def publish_poll(self, session_identifier: str, channel_id: str, question: str, options: List[str]) -> Dict[str, Any]:
+    async def publish_poll(
+        self,
+        session_identifier: str,
+        channel_id: str,
+        question: str,
+        options: List[str],
+    ) -> Dict[str, Any]:
         raise NotImplementedError("NOT_SUPPORTED_BY_PROVIDER")
 
     async def register_webhook(self) -> bool:

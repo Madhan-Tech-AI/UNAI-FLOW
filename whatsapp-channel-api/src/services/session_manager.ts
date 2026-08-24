@@ -29,6 +29,8 @@ export interface UserSession {
   status: ConnectionState;
   qrCodeRaw: string | null;
   qrCodePng: Buffer | null;
+  qrGeneratedAt: Date | null;
+  qrExpiresAt: Date | null;
   pairingCode: string | null;
   userJid: string | null;
   phoneNumber: string | null;
@@ -90,6 +92,8 @@ export class SessionManager {
       status: 'INITIALIZING',
       qrCodeRaw: null,
       qrCodePng: null,
+      qrGeneratedAt: null,
+      qrExpiresAt: null,
       pairingCode: null,
       userJid: null,
       phoneNumber: null,
@@ -97,6 +101,8 @@ export class SessionManager {
       lastActive: new Date(),
       retryCount: 0,
     };
+
+    logger.info({ connectionId }, '[WCA] SESSION_INITIALIZING');
 
     this.sessions.set(connectionId, userSession);
 
@@ -127,6 +133,9 @@ export class SessionManager {
       if (qr) {
         userSession.qrCodeRaw = qr;
         userSession.status = 'QR_READY';
+        userSession.qrGeneratedAt = new Date();
+        // WhatsApp QR codes typically expire in ~60 seconds
+        userSession.qrExpiresAt = new Date(Date.now() + 60 * 1000);
         try {
           userSession.qrCodePng = await QRCode.toBuffer(qr, {
             type: 'png',
@@ -135,19 +144,25 @@ export class SessionManager {
             color: { dark: '#000000', light: '#ffffff' },
           });
         } catch (err) {
-          logger.error({ err }, 'Failed to render QR Code buffer');
+          logger.error({ err }, '[WCA] QR_RENDER_FAILED');
         }
-        logger.info({ connectionId }, '📱 Fresh QR Code generated for connection');
+        logger.info(
+          { connectionId, qr_length: qr.length },
+          '[WCA] QR_GENERATED'
+        );
       }
 
       if (connection === 'connecting') {
         userSession.status = 'AUTHENTICATING';
+        logger.info({ connectionId }, '[WCA] SESSION_AUTHENTICATING');
       }
 
       if (connection === 'open') {
         userSession.status = 'CONNECTED';
         userSession.qrCodeRaw = null;
         userSession.qrCodePng = null;
+        userSession.qrGeneratedAt = null;
+        userSession.qrExpiresAt = null;
         userSession.pairingCode = null;
         userSession.userJid = sock.user?.id || null;
         userSession.userName = sock.user?.name || 'WhatsApp Account';
@@ -156,8 +171,8 @@ export class SessionManager {
         userSession.retryCount = 0;
 
         logger.info(
-          { connectionId, userJid: userSession.userJid, phone: userSession.phoneNumber },
-          '🎉 ✅ WhatsApp Session successfully authenticated & connected!'
+          { connectionId, phone: userSession.phoneNumber },
+          '[WCA] SESSION_AUTHENTICATED'
         );
       }
 
@@ -167,7 +182,7 @@ export class SessionManager {
 
         logger.warn(
           { connectionId, statusCode, reason: lastDisconnect?.error?.message },
-          `⚠️ Socket connection closed. Should reconnect: ${shouldReconnect}`
+          `[WCA] SESSION_DISCONNECTED shouldReconnect=${shouldReconnect}`
         );
 
         if (statusCode === DisconnectReason.loggedOut) {

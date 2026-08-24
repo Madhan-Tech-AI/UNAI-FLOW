@@ -5,16 +5,14 @@ from typing import Dict, Any, List
 from middleware.auth import verify_jwt
 from lib.supabase_client import supabase
 from lib.encryption import encrypt_token, decrypt_token
+from app.core.config import settings
 import httpx
 
 router = APIRouter(prefix="/connections", tags=["Connections"])
 
 def get_candidate_wca_urls() -> List[str]:
-    urls = ["http://127.0.0.1:3001"]
-    cloud_url = os.getenv("WCA_API_URL", "https://unai-whatsapp-channelapi.onrender.com").rstrip("/")
-    if cloud_url and cloud_url not in urls:
-        urls.append(cloud_url)
-    return urls
+    """Use centralized config for gateway URL resolution."""
+    return settings.get_wca_candidate_urls()
 
 @router.get("")
 async def get_connections(user: Dict[str, Any] = Depends(verify_jwt)):

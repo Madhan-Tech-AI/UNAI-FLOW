@@ -66,6 +66,11 @@ async def select_channel(channel_id: str, user_id: str = Depends(get_current_use
         raise HTTPException(status_code=404, detail={"code": "CHANNEL_NOT_FOUND", "message": str(e)})
 
 
+class ResolveChannelRequest(BaseModel):
+    session_identifier: str
+    link_or_code: str
+
+
 @router.get("/discover")
 async def discover_channels(session_identifier: str, user_id: str = Depends(get_current_user_id)):
     """
@@ -80,6 +85,22 @@ async def discover_channels(session_identifier: str, user_id: str = Depends(get_
     except Exception as e:
         logger.error(f"[WA] CHANNELS_DISCOVER_FAILED session_id={session_identifier} error={e}")
         return {"success": False, "data": [], "error": str(e)}
+
+
+@router.post("/resolve")
+async def resolve_channel(req: ResolveChannelRequest, user_id: str = Depends(get_current_user_id)):
+    """
+    Resolves a specific WhatsApp Channel by invite link or code (e.g. https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M).
+    Extracts the official JID, title, description, subscriber count, and admin/owner role.
+    """
+    logger.info(f"[WA] CHANNEL_RESOLVE_REQUEST session_id={req.session_identifier} input={req.link_or_code}")
+    channel = await provider.resolve_channel(req.session_identifier, req.link_or_code)
+    if not channel:
+        raise HTTPException(
+            status_code=404,
+            detail="Could not resolve WhatsApp channel from the provided link or invite code. Please verify the URL."
+        )
+    return {"success": True, "data": channel}
 
 
 @router.post("/publish")

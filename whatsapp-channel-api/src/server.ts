@@ -217,6 +217,45 @@ app.get('/v1/whatsapp/:connectionId/channels', async (req: Request, res: Respons
 });
 
 /**
+ * 5b. Resolve Channel by Invite Link or Code
+ * POST /v1/whatsapp/:connectionId/channels/resolve
+ */
+app.post('/v1/whatsapp/:connectionId/channels/resolve', async (req: Request, res: Response) => {
+  try {
+    const connectionId = getParam(req, 'connectionId');
+    const { link, code, channelId } = req.body || {};
+    const input = link || code || channelId;
+
+    if (!input) {
+      return res.status(400).json({ success: false, error: 'Provide a channel link or invite code.' });
+    }
+
+    const session = sessionManager.getSession(connectionId);
+    if (!session || session.status !== 'CONNECTED' || !session.socket) {
+      return res.status(400).json({
+        success: false,
+        error: 'WhatsApp session not connected',
+      });
+    }
+
+    const channel = await NewsletterService.resolveChannel(session.socket, input);
+    if (!channel) {
+      return res.status(404).json({
+        success: false,
+        error: 'Could not resolve WhatsApp channel from the provided link/code. Ensure the link is valid.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      channel,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * 6. Publish to WhatsApp Channel / Newsletter
  * POST /v1/whatsapp/connections/:connectionId/channels/:channelId/publish
  */

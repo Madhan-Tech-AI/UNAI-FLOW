@@ -108,6 +108,7 @@ export default function WhatsAppChannels() {
 
   useEffect(() => {
     loadExistingSessions();
+    checkGatewayHealth();
   }, []);
 
   const stopPolling = useCallback(() => {
@@ -672,13 +673,35 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
   showToken: boolean;
   setShowToken: (v: boolean) => void;
 }) {
-  const [channels, setChannels] = useState<any[]>([]);
+  const [channels, setChannels] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem(`wa_channels_${account?.sessionIdentifier}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [selectedChannel, setSelectedChannel] = useState<any>(null);
   const [loadingChannels, setLoadingChannels] = useState(false);
+  const [channelLinkInput, setChannelLinkInput] = useState('');
+  const [resolvingLink, setResolvingLink] = useState(false);
+  const [resolveError, setResolveError] = useState('');
   const [publishText, setPublishText] = useState('');
   const [publishing, setPublishing] = useState(false);
   const [publishResult, setPublishResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'channels' | 'publish'>('overview');
+
+  useEffect(() => {
+    onRefresh();
+    discoverChannels();
+  }, []);
+
+  const saveChannelsList = (updated: any[]) => {
+    setChannels(updated);
+    try {
+      localStorage.setItem(`wa_channels_${account?.sessionIdentifier}`, JSON.stringify(updated));
+    } catch {}
+  };
 
   const discoverChannels = async () => {
     setLoadingChannels(true);
@@ -686,13 +709,51 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
     try {
       const res = await fetchApi(`/api/channels/discover?session_identifier=${account.sessionIdentifier}`);
       const data = res?.data || [];
-      setChannels(data);
       console.log('%c[UNAI-WA] CHANNELS_FOUND', 'color:#25D366;font-weight:bold', { count: data.length, channels: data });
-      if (data.length > 0 && !selectedChannel) setSelectedChannel(data[0]);
+      if (data.length > 0) {
+        saveChannelsList(data);
+        if (!selectedChannel) setSelectedChannel(data[0]);
+      }
     } catch (e: any) {
       console.error('[UNAI-WA] CHANNELS_ERROR', e);
     } finally {
       setLoadingChannels(false);
+    }
+  };
+
+  const handleLinkChannel = async () => {
+    const input = channelLinkInput.trim();
+    if (!input) return;
+    setResolvingLink(true);
+    setResolveError('');
+
+    console.log('%c[UNAI-WA] RESOLVE_CHANNEL', 'color:#25D366;font-weight:bold', { input });
+    try {
+      const res = await fetchApi('/api/channels/resolve', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_identifier: account.sessionIdentifier,
+          link_or_code: input,
+        }),
+      });
+
+      const newCh = res?.data;
+      if (newCh) {
+        console.log('%c[UNAI-WA] RESOLVE_CHANNEL_SUCCESS', 'color:#16a34a;font-weight:bold', newCh);
+        const existingWithoutThis = channels.filter(c => c.id !== newCh.id);
+        const updated = [newCh, ...existingWithoutThis];
+        saveChannelsList(updated);
+        setSelectedChannel(newCh);
+        setChannelLinkInput('');
+        setActiveTab('publish');
+      } else {
+        setResolveError('Channel not found. Please verify the URL.');
+      }
+    } catch (e: any) {
+      console.error('[UNAI-WA] RESOLVE_CHANNEL_ERROR', e);
+      setResolveError(e.message || 'Failed to link channel. Make sure your WhatsApp account has access.');
+    } finally {
+      setResolvingLink(false);
     }
   };
 
@@ -862,50 +923,87 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
 
       {/* ── TAB: Channels ── */}
       {activeTab === 'channels' && (
-        <div className="card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-bold">Your WhatsApp Channels</h3>
-            <button onClick={discoverChannels} disabled={loadingChannels}
-              className="px-3 py-1.5 text-xs border rounded hover:bg-gray-50 flex items-center gap-1">
-              <RefreshCw size={12} className={loadingChannels ? 'animate-spin' : ''} />
-              {loadingChannels ? 'Discovering...' : 'Discover Channels'}
-            </button>
+        <div className="space-y-4">
+          {/* Link Channel by URL */}
+          <div className="card p-5" style={{ backgroundColor: '#fafffe', border: '1px solid #bbf7d0' }}>
+            <h4 className="font-bold text-sm text-main mb-1 flex items-center gap-2">
+              <Link2 size={16} style={{ color: '#25D366' }} /> Link Channel by Invite Link or Code
+            </h4>
+            <p className="text-xs text-secondary mb-3">
+              Paste your channel's public link (e.g. <code>https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M</code>) to import and publish to it immediately.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                className="flex-1 px-3 py-2 border rounded-lg text-sm bg-white"
+                placeholder="https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M"
+                value={channelLinkInput}
+                onChange={(e) => setChannelLinkInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleLinkChannel(); }}
+              />
+              <button
+                onClick={handleLinkChannel}
+                disabled={resolvingLink || !channelLinkInput.trim()}
+                className="px-4 py-2 text-white rounded-lg text-sm font-medium flex items-center gap-1.5 disabled:opacity-50"
+                style={{ backgroundColor: '#25D366' }}>
+                {resolvingLink ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                <span>Link Channel</span>
+              </button>
+            </div>
+            {resolveError && (
+              <p className="text-xs text-red-600 mt-2">{resolveError}</p>
+            )}
           </div>
 
-          {loadingChannels && channels.length === 0 ? (
-            <div className="text-center py-8">
-              <Loader2 size={24} className="animate-spin mx-auto mb-2" style={{ color: '#25D366' }} />
-              <p className="text-sm text-gray-500">Discovering your WhatsApp Channels...</p>
+          {/* Channels List */}
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold">Your WhatsApp Channels</h3>
+              <button onClick={discoverChannels} disabled={loadingChannels}
+                className="px-3 py-1.5 text-xs border rounded hover:bg-gray-50 flex items-center gap-1">
+                <RefreshCw size={12} className={loadingChannels ? 'animate-spin' : ''} />
+                {loadingChannels ? 'Discovering...' : 'Auto-Discover'}
+              </button>
             </div>
-          ) : channels.length === 0 ? (
-            <div className="text-center py-8">
-              <MessageCircle size={32} className="mx-auto mb-3" style={{ color: '#d1d5db' }} />
-              <p className="text-sm text-gray-500 mb-2">No channels found yet.</p>
-              <p className="text-xs text-gray-400">Click "Discover Channels" to scan for WhatsApp Channels you administer.</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {channels.map((ch: any, idx: number) => (
-                <div key={ch.id || idx}
-                  className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all"
-                  style={{
-                    borderColor: selectedChannel?.id === ch.id ? '#25D366' : '#e5e7eb',
-                    backgroundColor: selectedChannel?.id === ch.id ? '#f0fdf4' : '#fff',
-                  }}
-                  onClick={() => { setSelectedChannel(ch); setActiveTab('publish'); }}>
-                  <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <MessageCircle size={16} style={{ color: '#25D366' }} />
+
+            {loadingChannels && channels.length === 0 ? (
+              <div className="text-center py-8">
+                <Loader2 size={24} className="animate-spin mx-auto mb-2" style={{ color: '#25D366' }} />
+                <p className="text-sm text-gray-500">Discovering your WhatsApp Channels...</p>
+              </div>
+            ) : channels.length === 0 ? (
+              <div className="text-center py-8">
+                <MessageCircle size={32} className="mx-auto mb-3" style={{ color: '#d1d5db' }} />
+                <p className="text-sm text-gray-500 mb-1">No channels linked yet.</p>
+                <p className="text-xs text-gray-400 mb-3">Paste your channel link above or click "Auto-Discover" to find channels you own or administer.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {channels.map((ch: any, idx: number) => (
+                  <div key={ch.id || idx}
+                    className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all hover:shadow-sm"
+                    style={{
+                      borderColor: selectedChannel?.id === ch.id ? '#25D366' : '#e5e7eb',
+                      backgroundColor: selectedChannel?.id === ch.id ? '#f0fdf4' : '#fff',
+                    }}
+                    onClick={() => { setSelectedChannel(ch); setActiveTab('publish'); }}>
+                    <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <MessageCircle size={16} style={{ color: '#25D366' }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm truncate">{ch.name || ch.subject || `Channel ${idx + 1}`}</span>
+                        {ch.role && <span className="chip chip-success" style={{ fontSize: 9 }}>{ch.role.toUpperCase()}</span>}
+                      </div>
+                      <div className="text-xs text-gray-500 truncate">{ch.id || ch.jid || ch.newsletter_id}</div>
+                    </div>
+                    <div className="text-xs text-gray-400">{ch.subscribers_count || ch.followers || 0} subscribers</div>
+                    <span className="text-xs text-green-600 font-medium">Select →</span>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-sm truncate">{ch.name || ch.subject || `Channel ${idx + 1}`}</div>
-                    <div className="text-xs text-gray-500 truncate">{ch.id || ch.jid || ch.newsletter_id}</div>
-                  </div>
-                  <div className="text-xs text-gray-400">{ch.subscribers_count || ch.followers || 0} subscribers</div>
-                  <span className="text-xs text-green-600">Select →</span>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

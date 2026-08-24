@@ -106,37 +106,71 @@ class NewsletterService {
         }
     }
     /**
-     * Fetches metadata for a specific WhatsApp Newsletter / Channel.
+     * Resolves a WhatsApp Channel / Newsletter by invite link, invite code, or JID.
      */
-    static async getChannelMetadata(sock, channelId) {
+    static async resolveChannel(sock, linkOrCode) {
+        const raw = (linkOrCode || '').trim();
+        if (!raw)
+            return null;
+        logger.info({ linkOrCode: raw }, '[WCA] RESOLVE_CHANNEL_START');
+        // 1. Check if it's an invite code or full URL
+        const inviteMatch = raw.match(/(?:whatsapp\.com\/channel\/)?([a-zA-Z0-9_-]{15,35})/);
+        const inviteCode = inviteMatch ? inviteMatch[1] : null;
+        if (inviteCode && !raw.includes('@newsletter')) {
+            try {
+                if (typeof sock.newsletterMetadata === 'function') {
+                    const meta = await sock.newsletterMetadata('invite', inviteCode);
+                    if (meta && meta.id) {
+                        const role = (meta.viewer_metadata?.role || 'ADMIN').toLowerCase();
+                        logger.info({ id: meta.id, name: meta.name, role }, '[WCA] RESOLVE_CHANNEL_BY_INVITE_SUCCESS');
+                        return {
+                            id: meta.id,
+                            name: meta.name || meta.thread_metadata?.name?.text || 'WhatsApp Channel',
+                            link: `https://whatsapp.com/channel/${meta.invite || inviteCode}`,
+                            role: role,
+                            subscribers_count: parseInt(meta.thread_metadata?.subscribers_count || '0', 10),
+                            verified: Boolean(meta.thread_metadata?.verification === 'VERIFIED'),
+                            description: meta.thread_metadata?.description?.text || '',
+                            pictureUrl: meta.thread_metadata?.picture?.direct_path || '',
+                        };
+                    }
+                }
+            }
+            catch (err) {
+                logger.warn({ err: err.message, inviteCode }, '[WCA] Failed to resolve channel by invite code');
+            }
+        }
+        // 2. Resolve by JID
+        const jid = raw.includes('@newsletter') ? raw : `${raw}@newsletter`;
         try {
-            const normalizedJid = channelId.includes('@') ? channelId : `${channelId}@newsletter`;
             if (typeof sock.newsletterMetadata === 'function') {
-                const metadata = await sock.newsletterMetadata('jid', normalizedJid);
-                if (metadata) {
+                const meta = await sock.newsletterMetadata('jid', jid);
+                if (meta && meta.id) {
+                    const role = (meta.viewer_metadata?.role || 'ADMIN').toLowerCase();
+                    logger.info({ id: meta.id, name: meta.name, role }, '[WCA] RESOLVE_CHANNEL_BY_JID_SUCCESS');
                     return {
-                        id: metadata.id || normalizedJid,
-                        name: metadata.name || metadata.thread_metadata?.name?.text || 'WhatsApp Channel',
-                        link: metadata.invite ? `https://whatsapp.com/channel/${metadata.invite}` : `https://whatsapp.com/channel/${normalizedJid.split('@')[0]}`,
-                        role: metadata.viewer_metadata?.role?.toLowerCase() || 'admin',
-                        subscribers_count: metadata.thread_metadata?.subscribers_count || 0,
-                        verified: metadata.thread_metadata?.verification === 'VERIFIED',
-                        description: metadata.thread_metadata?.description?.text || '',
+                        id: meta.id,
+                        name: meta.name || meta.thread_metadata?.name?.text || 'WhatsApp Channel',
+                        link: meta.invite ? `https://whatsapp.com/channel/${meta.invite}` : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
+                        role: role,
+                        subscribers_count: parseInt(meta.thread_metadata?.subscribers_count || '0', 10),
+                        verified: Boolean(meta.thread_metadata?.verification === 'VERIFIED'),
+                        description: meta.thread_metadata?.description?.text || '',
+                        pictureUrl: meta.thread_metadata?.picture?.direct_path || '',
                     };
                 }
             }
         }
         catch (err) {
-            logger.warn({ err, channelId }, 'Failed to fetch channel metadata via socket');
+            logger.warn({ err: err.message, jid }, '[WCA] Failed to resolve channel by JID');
         }
-        return {
-            id: channelId.includes('@') ? channelId : `${channelId}@newsletter`,
-            name: 'WhatsApp Channel',
-            link: `https://whatsapp.com/channel/${channelId.split('@')[0]}`,
-            role: 'admin',
-            subscribers_count: 0,
-            verified: false,
-        };
+        return null;
+    }
+    /**
+     * Fetches metadata for a specific WhatsApp Newsletter / Channel.
+     */
+    static async getChannelMetadata(sock, channelId) {
+        return await this.resolveChannel(sock, channelId);
     }
     /**
      * Publishes message to a WhatsApp Channel (@newsletter JID) directly via WebSocket protocol.

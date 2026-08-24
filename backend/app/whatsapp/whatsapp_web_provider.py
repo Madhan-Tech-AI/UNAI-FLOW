@@ -384,5 +384,25 @@ class WhatsAppWebProvider(WhatsAppProvider):
             logger.error(f"[WA] CHANNELS_REQUEST_FAILED session_id={session_identifier} error={e}")
             return []
 
+    async def resolve_channel(self, session_identifier: str, link_or_code: str) -> Optional[Dict[str, Any]]:
+        """Resolve a WhatsApp Channel by invite link or code from the gateway."""
+        logger.info(f"[WA] RESOLVE_CHANNEL_REQUEST session_id={session_identifier} input={link_or_code}")
+        try:
+            response = await self._make_request(
+                "POST",
+                f"/v1/whatsapp/{session_identifier}/channels/resolve",
+                json={"link": link_or_code},
+            )
+            if response.status_code == 200:
+                data = response.json()
+                channel = data.get("channel")
+                logger.info(f"[WA] RESOLVE_CHANNEL_RESPONSE session_id={session_identifier} found={bool(channel)}")
+                return channel
+            logger.warning(f"[WA] RESOLVE_CHANNEL_FAILED session_id={session_identifier} status={response.status_code}")
+            return None
+        except Exception as e:
+            logger.error(f"[WA] RESOLVE_CHANNEL_ERROR session_id={session_identifier} error={e}")
+            return None
+
     async def register_webhook(self) -> bool:
         return True

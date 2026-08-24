@@ -39,6 +39,24 @@ function authenticateApiKey(req: Request, res: Response, next: NextFunction) {
 // ── Health & Diagnostics ──
 const startTime = Date.now();
 
+app.get('/', (req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    service: 'whatsapp-channel-api',
+    status: 'healthy',
+    version: '2.0.0',
+    endpoints: {
+      health: '/health',
+      connect: 'POST /v1/whatsapp/connect',
+      status: 'GET /v1/whatsapp/:connectionId/status',
+      qr: 'GET /v1/whatsapp/:connectionId/qr',
+      channels: 'GET /v1/whatsapp/:connectionId/channels',
+      resolve: 'POST /v1/whatsapp/:connectionId/channels/resolve',
+      publish: 'POST /v1/whatsapp/:connectionId/channels/:channelId/publish',
+    },
+  });
+});
+
 app.get('/health', (req: Request, res: Response) => {
   // Count active sessions
   let activeSessions = 0;

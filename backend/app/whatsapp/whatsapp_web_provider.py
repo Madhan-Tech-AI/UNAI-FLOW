@@ -177,10 +177,12 @@ class WhatsAppWebProvider(WhatsAppProvider):
         }
 
     async def disconnect(self, session_identifier: str) -> bool:
-        """DELETE /v1/whatsapp/{session_identifier}"""
+        """POST /v1/whatsapp/{session_identifier}/disconnect — purges session on gateway."""
         logger.info(f"[WA] GATEWAY_DISCONNECT session_id={session_identifier}")
         try:
-            response = await self._make_request("DELETE", f"/v1/whatsapp/{session_identifier}")
+            response = await self._make_request(
+                "POST", f"/v1/whatsapp/{session_identifier}/disconnect"
+            )
             return response.status_code == 200
         except Exception as e:
             logger.error(f"[WA] GATEWAY_DISCONNECT_FAILED session_id={session_identifier} error={e}")

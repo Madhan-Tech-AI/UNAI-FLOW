@@ -16,28 +16,56 @@ export interface DiscoveredNewsletter {
 
 export class NewsletterService {
   /**
-   * Discovers all WhatsApp Channels/Newsletters where the connected user is owner/admin or member.
+   * Discovers all WhatsApp Channels/Newsletters where the connected user is owner/admin or subscriber.
    */
   public static async discoverChannels(sock: WASocket): Promise<DiscoveredNewsletter[]> {
     const channels: DiscoveredNewsletter[] = [];
     const seenIds = new Set<string>();
 
     try {
-      // 1. Fetch user's subscribed newsletters if supported by Baileys
-      if (typeof (sock as any).newsletterSubscribedList === 'function') {
-        try {
-          const res = await (sock as any).newsletterSubscribedList();
-          if (Array.isArray(res)) {
-            for (const item of res) {
+      // 1. Direct WMex Query for xwa2_newsletter_subscribed_list (Query ID: 6388546374527196)
+      try {
+        if (typeof (sock as any).query === 'function') {
+          const generateMessageTag = (sock as any).generateMessageTag || (() => `${Date.now()}`);
+          const mexResult = await (sock as any).query({
+            tag: 'iq',
+            attrs: {
+              id: generateMessageTag(),
+              type: 'get',
+              to: 's.whatsapp.net',
+              xmlns: 'w:mex'
+            },
+            content: [
+              {
+                tag: 'query',
+                attrs: { query_id: '6388546374527196' },
+                content: Buffer.from(JSON.stringify({ variables: {} }), 'utf-8')
+              }
+            ]
+          });
+
+          // Parse result node from binary
+          const resultChild = mexResult?.content?.find?.((c: any) => c.tag === 'result');
+          if (resultChild?.content) {
+            const rawText = Buffer.isBuffer(resultChild.content)
+              ? resultChild.content.toString('utf-8')
+              : String(resultChild.content);
+            const parsed = JSON.parse(rawText);
+            const list = parsed?.data?.xwa2_newsletter_subscribed_list || [];
+
+            for (const item of list) {
               const jid = item.id || item.jid;
               if (jid && !seenIds.has(jid)) {
                 seenIds.add(jid);
+                const role = (item.viewer_metadata?.role || 'ADMIN').toLowerCase();
                 channels.push({
                   id: jid,
-                  name: item.name || item.thread_metadata?.name?.text || 'WhatsApp Channel',
-                  link: item.invite ? `https://whatsapp.com/channel/${item.invite}` : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
-                  role: item.viewer_metadata?.role?.toLowerCase() || 'admin',
-                  subscribers_count: item.thread_metadata?.subscribers_count || 0,
+                  name: item.thread_metadata?.name?.text || item.name || 'WhatsApp Channel',
+                  link: item.thread_metadata?.invite
+                    ? `https://whatsapp.com/channel/${item.thread_metadata.invite}`
+                    : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
+                  role: role as any,
+                  subscribers_count: parseInt(item.thread_metadata?.subscribers_count || '0', 10),
                   verified: Boolean(item.thread_metadata?.verification === 'VERIFIED'),
                   description: item.thread_metadata?.description?.text || '',
                   pictureUrl: item.thread_metadata?.picture?.direct_path || '',
@@ -45,37 +73,45 @@ export class NewsletterService {
               }
             }
           }
-        } catch (subErr) {
-          logger.warn({ err: subErr }, 'newsletterSubscribedList returned error, falling back to chat store');
         }
+      } catch (mexErr) {
+        logger.warn({ err: mexErr }, '[WCA] WMex subscribed list query warning');
       }
 
-      // 2. Query chat list from socket memory for all @newsletter JIDs
+      // 2. Query chat list from socket memory for any @newsletter JIDs
       try {
-        const chats = await (sock as any).groupFetchAllParticipating?.() || {};
-        // Also inspect stored newsletter messages/chats
         const chatStore = (sock as any).store?.chats?.all?.() || [];
         for (const c of chatStore) {
           const jid = c.id || '';
           if (jid.endsWith('@newsletter') && !seenIds.has(jid)) {
             seenIds.add(jid);
+            // Try to get full metadata via socket if available
+            let meta: any = null;
+            try {
+              if (typeof (sock as any).newsletterMetadata === 'function') {
+                meta = await (sock as any).newsletterMetadata('jid', jid);
+              }
+            } catch (e) {}
+
             channels.push({
               id: jid,
-              name: c.name || 'WhatsApp Channel',
-              link: `https://whatsapp.com/channel/${jid.split('@')[0]}`,
-              role: 'admin',
-              subscribers_count: 0,
-              verified: false,
+              name: meta?.name || meta?.thread_metadata?.name?.text || c.name || 'WhatsApp Channel',
+              link: meta?.invite ? `https://whatsapp.com/channel/${meta.invite}` : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
+              role: (meta?.viewer_metadata?.role?.toLowerCase() || 'admin') as any,
+              subscribers_count: meta?.thread_metadata?.subscribers_count || 0,
+              verified: Boolean(meta?.thread_metadata?.verification === 'VERIFIED'),
+              description: meta?.thread_metadata?.description?.text || '',
             });
           }
         }
       } catch (storeErr) {
-        logger.debug({ err: storeErr }, 'store inspection note');
+        logger.debug({ err: storeErr }, '[WCA] Chat store scan note');
       }
 
+      logger.info({ count: channels.length }, '[WCA] CHANNELS_DISCOVERED');
       return channels;
     } catch (err) {
-      logger.error({ err }, 'Error during channel discovery');
+      logger.error({ err }, '[WCA] Error during channel discovery');
       return channels;
     }
   }

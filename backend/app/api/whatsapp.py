@@ -79,6 +79,13 @@ async def get_whatsapp_status(
     return {"success": True, "data": result}
 
 
+@router.get("/sessions")
+async def get_user_sessions(user_id: str = Depends(get_current_user_id)):
+    """Get all WhatsApp sessions belonging strictly to the authenticated user."""
+    sessions = connection_manager.session_manager.get_sessions_for_user(user_id)
+    return {"success": True, "data": sessions}
+
+
 @router.post("/disconnect")
 async def disconnect_whatsapp(
     req: DisconnectRequest, user_id: str = Depends(get_current_user_id)

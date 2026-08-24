@@ -8,27 +8,53 @@ const pino_1 = __importDefault(require("pino"));
 const logger = (0, pino_1.default)({ level: 'info' });
 class NewsletterService {
     /**
-     * Discovers all WhatsApp Channels/Newsletters where the connected user is owner/admin or member.
+     * Discovers all WhatsApp Channels/Newsletters where the connected user is owner/admin or subscriber.
      */
     static async discoverChannels(sock) {
         const channels = [];
         const seenIds = new Set();
         try {
-            // 1. Fetch user's subscribed newsletters if supported by Baileys
-            if (typeof sock.newsletterSubscribedList === 'function') {
-                try {
-                    const res = await sock.newsletterSubscribedList();
-                    if (Array.isArray(res)) {
-                        for (const item of res) {
+            // 1. Direct WMex Query for xwa2_newsletter_subscribed_list (Query ID: 6388546374527196)
+            try {
+                if (typeof sock.query === 'function') {
+                    const generateMessageTag = sock.generateMessageTag || (() => `${Date.now()}`);
+                    const mexResult = await sock.query({
+                        tag: 'iq',
+                        attrs: {
+                            id: generateMessageTag(),
+                            type: 'get',
+                            to: 's.whatsapp.net',
+                            xmlns: 'w:mex'
+                        },
+                        content: [
+                            {
+                                tag: 'query',
+                                attrs: { query_id: '6388546374527196' },
+                                content: Buffer.from(JSON.stringify({ variables: {} }), 'utf-8')
+                            }
+                        ]
+                    });
+                    // Parse result node from binary
+                    const resultChild = mexResult?.content?.find?.((c) => c.tag === 'result');
+                    if (resultChild?.content) {
+                        const rawText = Buffer.isBuffer(resultChild.content)
+                            ? resultChild.content.toString('utf-8')
+                            : String(resultChild.content);
+                        const parsed = JSON.parse(rawText);
+                        const list = parsed?.data?.xwa2_newsletter_subscribed_list || [];
+                        for (const item of list) {
                             const jid = item.id || item.jid;
                             if (jid && !seenIds.has(jid)) {
                                 seenIds.add(jid);
+                                const role = (item.viewer_metadata?.role || 'ADMIN').toLowerCase();
                                 channels.push({
                                     id: jid,
-                                    name: item.name || item.thread_metadata?.name?.text || 'WhatsApp Channel',
-                                    link: item.invite ? `https://whatsapp.com/channel/${item.invite}` : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
-                                    role: item.viewer_metadata?.role?.toLowerCase() || 'admin',
-                                    subscribers_count: item.thread_metadata?.subscribers_count || 0,
+                                    name: item.thread_metadata?.name?.text || item.name || 'WhatsApp Channel',
+                                    link: item.thread_metadata?.invite
+                                        ? `https://whatsapp.com/channel/${item.thread_metadata.invite}`
+                                        : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
+                                    role: role,
+                                    subscribers_count: parseInt(item.thread_metadata?.subscribers_count || '0', 10),
                                     verified: Boolean(item.thread_metadata?.verification === 'VERIFIED'),
                                     description: item.thread_metadata?.description?.text || '',
                                     pictureUrl: item.thread_metadata?.picture?.direct_path || '',
@@ -37,37 +63,45 @@ class NewsletterService {
                         }
                     }
                 }
-                catch (subErr) {
-                    logger.warn({ err: subErr }, 'newsletterSubscribedList returned error, falling back to chat store');
-                }
             }
-            // 2. Query chat list from socket memory for all @newsletter JIDs
+            catch (mexErr) {
+                logger.warn({ err: mexErr }, '[WCA] WMex subscribed list query warning');
+            }
+            // 2. Query chat list from socket memory for any @newsletter JIDs
             try {
-                const chats = await sock.groupFetchAllParticipating?.() || {};
-                // Also inspect stored newsletter messages/chats
                 const chatStore = sock.store?.chats?.all?.() || [];
                 for (const c of chatStore) {
                     const jid = c.id || '';
                     if (jid.endsWith('@newsletter') && !seenIds.has(jid)) {
                         seenIds.add(jid);
+                        // Try to get full metadata via socket if available
+                        let meta = null;
+                        try {
+                            if (typeof sock.newsletterMetadata === 'function') {
+                                meta = await sock.newsletterMetadata('jid', jid);
+                            }
+                        }
+                        catch (e) { }
                         channels.push({
                             id: jid,
-                            name: c.name || 'WhatsApp Channel',
-                            link: `https://whatsapp.com/channel/${jid.split('@')[0]}`,
-                            role: 'admin',
-                            subscribers_count: 0,
-                            verified: false,
+                            name: meta?.name || meta?.thread_metadata?.name?.text || c.name || 'WhatsApp Channel',
+                            link: meta?.invite ? `https://whatsapp.com/channel/${meta.invite}` : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
+                            role: (meta?.viewer_metadata?.role?.toLowerCase() || 'admin'),
+                            subscribers_count: meta?.thread_metadata?.subscribers_count || 0,
+                            verified: Boolean(meta?.thread_metadata?.verification === 'VERIFIED'),
+                            description: meta?.thread_metadata?.description?.text || '',
                         });
                     }
                 }
             }
             catch (storeErr) {
-                logger.debug({ err: storeErr }, 'store inspection note');
+                logger.debug({ err: storeErr }, '[WCA] Chat store scan note');
             }
+            logger.info({ count: channels.length }, '[WCA] CHANNELS_DISCOVERED');
             return channels;
         }
         catch (err) {
-            logger.error({ err }, 'Error during channel discovery');
+            logger.error({ err }, '[WCA] Error during channel discovery');
             return channels;
         }
     }

@@ -130,37 +130,35 @@ export default function WhatsAppChannels() {
   // ── Load existing sessions ──
   const loadExistingSessions = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { setLoading(false); return; }
+      const res = await fetchApi('/api/whatsapp/sessions');
+      const data = res?.data || [];
 
-      const { data } = await supabase
-        .from('whatsapp_sessions')
-        .select('*')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false });
-
-      if (data && data.length > 0) {
-        setExistingSessions(data);
-        // If there's a CONNECTED session, show dashboard
-        const connected = data.find((s: any) => s.status === 'CONNECTED' || s.status === 'READY');
-        if (connected) {
-          sessionRef.current = connected.session_identifier;
-          setAccount({
-            phone: connected.phone_number,
-            name: connected.phone_number ? `+${connected.phone_number}` : 'WhatsApp Account',
-            sessionId: connected.id,
-            sessionIdentifier: connected.session_identifier,
-            connectedAt: connected.last_connected_at || connected.updated_at,
-            apiUrl: `${window.location.origin}/api/whatsapp/v1`,
-            apiToken: `whp_live_${connected.session_identifier?.slice(5, 21)}`,
-            webhookUrl: `${window.location.origin}/webhooks/whatsapp`,
-          });
-          setViewMode('dashboard');
-          log('LOADED', { status: 'CONNECTED', session: connected.session_identifier });
-        }
+      setExistingSessions(data);
+      const connected = data.find((s: any) => s.status === 'CONNECTED' || s.status === 'READY');
+      if (connected) {
+        sessionRef.current = connected.session_identifier;
+        setAccount({
+          phone: connected.phone_number,
+          name: connected.phone_number ? `+${connected.phone_number}` : 'WhatsApp Account',
+          sessionId: connected.id,
+          sessionIdentifier: connected.session_identifier,
+          connectedAt: connected.last_connected_at || connected.updated_at,
+          apiUrl: `${window.location.origin}/api/whatsapp/v1`,
+          apiToken: `whp_live_${connected.session_identifier?.slice(5, 21)}`,
+          webhookUrl: `${window.location.origin}/webhooks/whatsapp`,
+        });
+        setViewMode('dashboard');
+        log('LOADED', { status: 'CONNECTED', session: connected.session_identifier });
+      } else {
+        setAccount(null);
+        setViewMode('list');
+        sessionRef.current = null;
+        log('LOADED', { status: 'NO_ACTIVE_SESSION' });
       }
     } catch (e) {
       console.error('Failed to load sessions:', e);
+      setAccount(null);
+      setViewMode('list');
     } finally {
       setLoading(false);
     }

@@ -263,6 +263,19 @@ class ConnectionManager:
                     self.session_manager.update_session_connection_details(
                         session["id"], phone or ""
                     )
+                    # Also link in platform_connections table
+                    try:
+                        supabase_client = self.session_manager.sb
+                        supabase_client.table("platform_connections").upsert({
+                            "user_id": user_id,
+                            "platform": "whatsapp",
+                            "platform_account_name": name or (f"+{phone}" if phone else "WhatsApp Account"),
+                            "platform_account_id": phone or session_identifier,
+                            "status": "active",
+                            "updated_at": "now()",
+                        }, on_conflict="user_id,platform").execute()
+                    except Exception as pc_err:
+                        logger.warning(f"[WA] PLATFORM_CONNECTIONS_UPSERT_NOTE error={pc_err}")
                 else:
                     self.session_manager.update_session_status(
                         session["id"], provider_status_str
@@ -331,8 +344,16 @@ class ConnectionManager:
         except Exception as e:
             logger.warning(f"[WA] DISCONNECT_GATEWAY_ERROR session_id={session_identifier} error={e}")
 
-        # Update DB
+        # Update DB session
         self.session_manager.update_session_status(session["id"], SessionStatus.DISCONNECTED.value)
+        
+        # Remove from platform_connections
+        try:
+            supabase_client = self.session_manager.sb
+            supabase_client.table("platform_connections").delete().eq("user_id", user_id).eq("platform", "whatsapp").execute()
+        except Exception as pc_del_err:
+            logger.warning(f"[WA] PLATFORM_CONNECTIONS_DELETE_NOTE error={pc_del_err}")
+
         logger.info(f"[WA] DISCONNECT_COMPLETE session_id={session_identifier}")
 
         return {"success": True, "status": SessionStatus.DISCONNECTED.value}

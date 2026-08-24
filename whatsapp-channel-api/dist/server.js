@@ -250,9 +250,15 @@ app.post('/v1/whatsapp/connections/:connectionId/channels/:channelId/publish', a
 /**
  * 7. Disconnect session
  * POST /v1/whatsapp/:connectionId/disconnect
+ * DELETE /v1/whatsapp/:connectionId
+ * POST /v1/whatsapp/disconnect
  */
-app.post('/v1/whatsapp/:connectionId/disconnect', authenticateApiKey, async (req, res) => {
-    const connectionId = getParam(req, 'connectionId');
+app.all(['/v1/whatsapp/:connectionId/disconnect', '/v1/whatsapp/:connectionId', '/v1/whatsapp/disconnect'], async (req, res) => {
+    const connectionId = getParam(req, 'connectionId') || (req.body?.connectionId || req.body?.connection_id || req.body?.session_identifier || '').toString();
+    if (!connectionId) {
+        return res.status(400).json({ success: false, error: 'connectionId required' });
+    }
+    logger.info({ connectionId }, '[WCA] SESSION_PURGE_REQUEST');
     await sessionManager.purgeSession(connectionId);
     return res.json({ success: true, message: 'Session disconnected and purged' });
 });

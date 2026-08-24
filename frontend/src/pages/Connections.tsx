@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Camera, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, MessageCircle } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Camera, Loader2, CheckCircle2, ShieldCheck, RefreshCw, Plus, ExternalLink, MessageCircle, XCircle, Clock } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
 function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
@@ -23,14 +23,30 @@ export default function Connections() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const mountedRef = useRef(true);
-  
+
+  // ── WhatsApp Modal State ──
+  const [isWaModalOpen, setIsWaModalOpen] = useState(false);
+  const [waState, setWaState] = useState('CREATING');
+  const [waQrCode, setWaQrCode] = useState<string | null>(null);
+  const [waQrTimer, setWaQrTimer] = useState(30);
+  const [waError, setWaError] = useState('');
+  const waSessionRef = useRef<string | null>(null);
+  const waPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const waTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopWaPolling = useCallback(() => {
+    if (waPollRef.current) { clearInterval(waPollRef.current); waPollRef.current = null; }
+    if (waTimerRef.current) { clearInterval(waTimerRef.current); waTimerRef.current = null; }
+  }, []);
+
   // ── Cleanup on unmount ──
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      stopWaPolling();
     };
-  }, []);
+  }, [stopWaPolling]);
 
   // ── Load connections from Supabase ──
   const loadConnections = async () => {
@@ -48,13 +64,76 @@ export default function Connections() {
     loadConnections();
   }, []);
 
-  // ── Handlers ──
+  // ── WhatsApp In-Page Connection Handlers ──
+  const startWhatsAppConnection = async () => {
+    setIsWaModalOpen(true);
+    setWaState('INITIALIZING');
+    setWaQrCode(null);
+    setWaError('');
+    setWaQrTimer(30);
 
+    try {
+      const res = await fetchApi('/api/whatsapp/connect', { method: 'POST', body: JSON.stringify({}) });
+      const data = res?.data;
+      if (data?.session_identifier) {
+        waSessionRef.current = data.session_identifier;
+      }
+
+      if (data?.status === 'CONNECTED' || data?.status === 'READY') {
+        setWaState('CONNECTED');
+        loadConnections();
+        setTimeout(() => setIsWaModalOpen(false), 1200);
+        return;
+      }
+
+      // Start polling
+      stopWaPolling();
+      const poll = async () => {
+        if (!waSessionRef.current || !mountedRef.current) return;
+        try {
+          const statusRes = await fetchApi(`/api/whatsapp/status?session_identifier=${waSessionRef.current}`);
+          const sData = statusRes?.data;
+          if (!sData) return;
+
+          setWaState(sData.status);
+
+          if (sData.pairing && sData.status === 'WAITING_FOR_SCAN') {
+            setWaQrCode(sData.pairing);
+          }
+
+          if (sData.status === 'CONNECTED' || sData.status === 'READY' || sData.status === 'AUTHENTICATED') {
+            stopWaPolling();
+            loadConnections();
+            setTimeout(() => setIsWaModalOpen(false), 1500);
+          }
+
+          if (sData.status === 'ERROR') {
+            stopWaPolling();
+            setWaError(sData.error || 'Connection failed.');
+          }
+        } catch (e: any) {
+          // Retry next tick
+        }
+      };
+
+      waPollRef.current = setInterval(poll, 4000);
+      poll();
+
+      // Countdown timer
+      waTimerRef.current = setInterval(() => {
+        setWaQrTimer(prev => (prev <= 1 ? 30 : prev - 1));
+      }, 1000);
+
+    } catch (err: any) {
+      setWaState('ERROR');
+      setWaError(err.message || 'Failed to start WhatsApp connection.');
+    }
+  };
+
+  // ── Handlers ──
   const handleConnect = async (platformId: string) => {
-    // WhatsApp has its own dedicated page with the connection wizard
-    const platform = platforms.find(p => p.id === platformId) as any;
-    if (platform?.linkTo) {
-      window.location.href = platform.linkTo;
+    if (platformId === 'whatsapp') {
+      startWhatsAppConnection();
       return;
     }
 
@@ -74,6 +153,17 @@ export default function Connections() {
   const handleDisconnect = async (platformId: string) => {
     if (!confirm(`Are you sure you want to disconnect ${platformId}?`)) return;
     try {
+      if (platformId === 'whatsapp') {
+        const waConn = connections.find(c => c.platform === 'whatsapp');
+        if (waConn?.platform_account_id) {
+          try {
+            await fetchApi('/api/whatsapp/disconnect', {
+              method: 'POST',
+              body: JSON.stringify({ session_identifier: waConn.platform_account_id }),
+            });
+          } catch (e) {}
+        }
+      }
       await fetchApi(`/connections/${platformId}`, { method: 'DELETE' });
       setConnections(prev => prev.filter(c => c.platform !== platformId));
     } catch {
@@ -103,7 +193,6 @@ export default function Connections() {
       icon: <MessageCircle size={22} />,
       description: 'Connect your WhatsApp account to publish to Channels.',
       color: '#25D366', bgColor: '#dcfce7',
-      linkTo: '/whatsapp-channels',
     },
     {
       id: 'instagram', name: 'Instagram', subtitle: 'Instagram Graph API',
@@ -182,7 +271,7 @@ export default function Connections() {
                   {connected && (
                     <div className="flex items-center gap-4 mt-3 text-xs text-muted">
                       {account?.platform_account_name && (
-                        <span>Channel: <strong className="text-main">{account.platform_account_name}</strong></span>
+                        <span>Account: <strong className="text-main">{account.platform_account_name}</strong></span>
                       )}
                       <span>Status: <strong className="text-success">Active</strong></span>
                     </div>
@@ -193,7 +282,6 @@ export default function Connections() {
               <div className="flex items-center gap-3">
                 {connected ? (
                   <>
-
                     <button className="btn-secondary" onClick={() => handleTestSync(platform.id)}>
                       <ExternalLink size={15} /><span>Test Sync</span>
                     </button>
@@ -203,6 +291,7 @@ export default function Connections() {
                   </>
                 ) : (
                   <button className="btn-primary"
+                    style={{ backgroundColor: platform.id === 'whatsapp' ? '#25D366' : undefined }}
                     onClick={() => handleConnect(platform.id)}>
                     <Plus size={16} /><span>Connect Channel</span>
                   </button>
@@ -212,6 +301,65 @@ export default function Connections() {
           );
         })}
       </div>
+
+      {/* WhatsApp Connection Modal */}
+      {isWaModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden p-6 relative">
+            <button
+              onClick={() => { setIsWaModalOpen(false); stopWaPolling(); }}
+              className="absolute top-4 right-4 text-gray-500 hover:bg-gray-100 p-1 rounded">
+              ✕
+            </button>
+
+            <h3 className="text-lg font-bold text-center mb-1">Connect WhatsApp</h3>
+            <p className="text-xs text-gray-500 text-center mb-4">
+              Open WhatsApp → Settings → Linked Devices → Link a Device
+            </p>
+
+            {(waState === 'INITIALIZING' || waState === 'CREATING') && (
+              <div className="flex flex-col items-center py-8">
+                <Loader2 size={36} className="animate-spin mb-3" style={{ color: '#25D366' }} />
+                <p className="text-sm text-gray-600">Generating secure QR code...</p>
+              </div>
+            )}
+
+            {waState === 'WAITING_FOR_SCAN' && (
+              <div className="flex flex-col items-center">
+                <div className="p-2 border-2 rounded-xl mb-3" style={{ width: 220, height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {waQrCode ? (
+                    <img src={waQrCode} alt="WhatsApp QR Code" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  ) : (
+                    <Loader2 className="animate-spin" style={{ color: '#25D366' }} />
+                  )}
+                </div>
+                <div className="flex items-center gap-1 text-xs text-gray-500 mb-2">
+                  <Clock size={12} /> Refreshes in {waQrTimer}s
+                </div>
+              </div>
+            )}
+
+            {(waState === 'CONNECTED' || waState === 'READY' || waState === 'AUTHENTICATED') && (
+              <div className="text-center py-6">
+                <CheckCircle2 size={44} className="mx-auto mb-2" style={{ color: '#25D366' }} />
+                <h4 className="font-bold text-base text-green-700 mb-1">Connected Successfully!</h4>
+                <p className="text-xs text-gray-500">Your WhatsApp Channel is now linked.</p>
+              </div>
+            )}
+
+            {waState === 'ERROR' && (
+              <div className="text-center py-4">
+                <XCircle size={36} className="mx-auto mb-2 text-red-500" />
+                <p className="text-sm font-semibold text-red-600 mb-1">Connection Failed</p>
+                <p className="text-xs text-gray-500 mb-3">{waError}</p>
+                <button onClick={startWhatsAppConnection} className="px-4 py-1.5 text-xs text-white rounded" style={{ backgroundColor: '#25D366' }}>
+                  Retry
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Custom Integration */}
       <div className="card flex items-center justify-between p-6 mt-4"
@@ -234,3 +382,4 @@ export default function Connections() {
     </div>
   );
 }
+

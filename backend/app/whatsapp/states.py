@@ -12,6 +12,7 @@ class SessionStatus(str, Enum):
     INITIALIZING = "INITIALIZING"
     WAITING_FOR_SCAN = "WAITING_FOR_SCAN"
     PAIRING = "PAIRING"
+    AUTHENTICATING = "AUTHENTICATING"
     AUTHENTICATED = "AUTHENTICATED"
     SYNCING = "SYNCING"
     READY = "READY"
@@ -27,18 +28,32 @@ VALID_TRANSITIONS: Dict[SessionStatus, Set[SessionStatus]] = {
     SessionStatus.CREATING: {SessionStatus.INITIALIZING, SessionStatus.ERROR},
     SessionStatus.INITIALIZING: {
         SessionStatus.WAITING_FOR_SCAN,
+        SessionStatus.AUTHENTICATING,
+        SessionStatus.AUTHENTICATED,
         SessionStatus.CONNECTED,  # If credentials already exist
         SessionStatus.ERROR,
         SessionStatus.DISCONNECTED,
     },
     SessionStatus.WAITING_FOR_SCAN: {
         SessionStatus.PAIRING,
+        SessionStatus.AUTHENTICATING,
+        SessionStatus.AUTHENTICATED,
+        SessionStatus.CONNECTED,
         SessionStatus.EXPIRED,
         SessionStatus.ERROR,
         SessionStatus.DISCONNECTED,
     },
     SessionStatus.PAIRING: {
+        SessionStatus.AUTHENTICATING,
         SessionStatus.AUTHENTICATED,
+        SessionStatus.ERROR,
+        SessionStatus.DISCONNECTED,
+    },
+    SessionStatus.AUTHENTICATING: {
+        SessionStatus.AUTHENTICATED,
+        SessionStatus.SYNCING,
+        SessionStatus.READY,
+        SessionStatus.CONNECTED,
         SessionStatus.ERROR,
         SessionStatus.DISCONNECTED,
     },

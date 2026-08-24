@@ -97,14 +97,14 @@ export default function Connections() {
 
           setWaState(sData.status);
 
-          if (sData.pairing && sData.status === 'WAITING_FOR_SCAN') {
+          if (sData.pairing) {
             setWaQrCode(sData.pairing);
           }
 
           if (sData.status === 'CONNECTED' || sData.status === 'READY' || sData.status === 'AUTHENTICATED') {
             stopWaPolling();
             loadConnections();
-            setTimeout(() => setIsWaModalOpen(false), 1500);
+            setTimeout(() => setIsWaModalOpen(false), 1200);
           }
 
           if (sData.status === 'ERROR') {
@@ -116,7 +116,7 @@ export default function Connections() {
         }
       };
 
-      waPollRef.current = setInterval(poll, 4000);
+      waPollRef.current = setInterval(poll, 2000);
       poll();
 
       // Countdown timer

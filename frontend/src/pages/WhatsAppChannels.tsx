@@ -20,19 +20,18 @@ import {
   Link2,
   Phone,
 } from 'lucide-react';
-import { fetchApi } from '../lib/apiClient';
+import { fetchApi, API_BASE_URL } from '../lib/apiClient';
 import { supabase } from '../lib/supabaseClient';
 
 // ── Constants ──
-const POLL_INTERVAL_MS = 5000;
-const MAX_POLL_COUNT = 60;
-const QR_REFRESH_INTERVAL = 30000; // Auto-refresh QR every 30s
+const POLL_INTERVAL_MS = 2000; // Snappy 2s polling to match localhost responsiveness
+const MAX_POLL_COUNT = 300;     // 10 minutes max connection window
 
 // ── Types ──
 type ViewMode = 'list' | 'connecting' | 'dashboard';
 type SessionStatus =
   | 'CREATING' | 'INITIALIZING' | 'WAITING_FOR_SCAN' | 'PAIRING'
-  | 'AUTHENTICATED' | 'SYNCING' | 'READY' | 'CONNECTED'
+  | 'AUTHENTICATING' | 'AUTHENTICATED' | 'SYNCING' | 'READY' | 'CONNECTED'
   | 'DISCONNECTED' | 'RECONNECTING' | 'EXPIRED' | 'ERROR';
 
 interface GatewayHealth {
@@ -56,13 +55,13 @@ interface ConnectedAccount {
   webhookUrl?: string;
 }
 
-// ── Console Logger ──
+// ── Production-Safe Diagnostic Logger ──
 const log = (tag: string, data: any) => {
   const prefix = `%c[UNAI-WA] ${tag}`;
-  const style = tag.includes('ERROR') ? 'color:#ef4444;font-weight:bold'
+  const style = tag.includes('ERROR') || tag.includes('FAILED') ? 'color:#ef4444;font-weight:bold'
     : tag.includes('QR') ? 'color:#25D366;font-weight:bold'
     : tag.includes('AUTH') ? 'color:#f59e0b;font-weight:bold'
-    : tag.includes('CONNECTED') ? 'color:#16a34a;font-weight:bold'
+    : tag.includes('CONNECTED') || tag.includes('SUCCESS') ? 'color:#16a34a;font-weight:bold'
     : 'color:#3b82f6;font-weight:bold';
   console.log(prefix, style, data);
 };
@@ -203,9 +202,9 @@ export default function WhatsAppChannels() {
       stopPolling();
       stopQrAutoRefresh();
       setWaState('ERROR');
-      setWaError('Connection timed out after 5 minutes.');
+      setWaError('Connection timed out. Please try again.');
       setWaErrorCode('TIMEOUT');
-      log('ERROR', { reason: 'TIMEOUT', polls: pollCountRef.current });
+      log('SESSION_FAILED', { reason: 'TIMEOUT', polls: pollCountRef.current });
       return;
     }
 
@@ -218,7 +217,12 @@ export default function WhatsAppChannels() {
 
       const newStatus = data.status as SessionStatus;
       
-      log('POLL_TICK', { status: newStatus, hasPairing: Boolean(data.pairing), pollCount: pollCountRef.current });
+      log('STATUS_POLL', {
+        status: newStatus,
+        hasPairing: Boolean(data.pairing),
+        pollCount: pollCountRef.current,
+        sessionId: sessionRef.current,
+      });
 
       setWaState((prev) => {
         if (newStatus !== prev) {
@@ -227,14 +231,7 @@ export default function WhatsAppChannels() {
         return newStatus;
       });
 
-      // Log health status like Whapi
-      const statusCode = newStatus === 'WAITING_FOR_SCAN' ? 3
-        : newStatus === 'AUTHENTICATED' || newStatus === 'CONNECTED' ? 4
-        : newStatus === 'ERROR' ? 0
-        : 1;
-      log('health.status', { code: statusCode, text: newStatus });
-
-      // Surface gateway errors
+      // Surface gateway errors if any
       if (data.gateway_error && !data.gateway_reachable) {
         setWaError(`Gateway: ${data.gateway_error}`);
         log('GATEWAY_ERROR', data.gateway_error);
@@ -244,16 +241,24 @@ export default function WhatsAppChannels() {
       if (data.pairing) {
         setQrCode(data.pairing);
         setWaState((prev) => {
-          if (prev !== 'CONNECTED' && prev !== 'READY' && prev !== 'AUTHENTICATED') {
+          if (prev !== 'CONNECTED' && prev !== 'READY' && prev !== 'AUTHENTICATING' && prev !== 'AUTHENTICATED') {
             return 'WAITING_FOR_SCAN';
           }
           return prev;
         });
         startQrTimer();
-        log('QR', { status: 'OK', type: 'qr', hasData: true, length: data.pairing.length });
+        log('QR_AVAILABLE', { type: 'qr', length: data.pairing.length });
+      } else if (newStatus === 'INITIALIZING' || newStatus === 'WAITING_FOR_SCAN') {
+        log('QR_204_NOT_READY', { status: newStatus });
       }
 
-      // Handle authentication
+      // Handle intermediate scan/authenticating state
+      if (newStatus === 'AUTHENTICATING' || newStatus === 'SYNCING') {
+        log('AUTHENTICATING', { session: sessionRef.current, status: newStatus });
+        // Keep polling actively — do NOT terminate or timeout
+      }
+
+      // Handle final authentication / ready
       if (newStatus === 'CONNECTED' || newStatus === 'READY' || newStatus === 'AUTHENTICATED') {
         stopPolling();
         stopQrTimer();
@@ -261,7 +266,7 @@ export default function WhatsAppChannels() {
 
         const userInfo = data.session || {};
         const phone = userInfo.phone_number;
-        log('AUTH', { status: 'AUTHENTICATED', phone });
+        log('AUTHENTICATED', { phone, session: sessionRef.current });
 
         setAccount({
           phone: phone,
@@ -269,31 +274,30 @@ export default function WhatsAppChannels() {
           sessionId: userInfo.id,
           sessionIdentifier: sessionRef.current!,
           connectedAt: new Date().toISOString(),
-          apiUrl: `${window.location.origin}/api/whatsapp/v1`,
+          apiUrl: `${API_BASE_URL}/api/whatsapp/v1`,
           apiToken: `whp_live_${sessionRef.current?.slice(5, 21)}`,
-          webhookUrl: `${window.location.origin}/webhooks/whatsapp`,
+          webhookUrl: `${API_BASE_URL}/webhooks/whatsapp`,
         });
 
         log('CONNECTED', {
           id: phone,
           name: userInfo.display_name,
-          is_business: false,
           session: sessionRef.current,
         });
 
-        // Transition to dashboard after a brief delay
+        // Transition to dashboard smoothly
         setTimeout(() => {
           if (mountedRef.current) setViewMode('dashboard');
         }, 1200);
       }
 
-      // Handle errors
+      // Handle terminal errors
       if (newStatus === 'ERROR') {
         stopPolling();
         stopQrTimer();
         stopQrAutoRefresh();
         setWaError(data.error || data.gateway_error || 'Connection failed.');
-        log('ERROR', { error: data.error || data.gateway_error });
+        log('SESSION_FAILED', { error: data.error || data.gateway_error });
       }
     } catch (e: any) {
       log('POLL_ERROR', e.message);
@@ -327,7 +331,7 @@ export default function WhatsAppChannels() {
         if (newStatus) {
           log('REALTIME', { status: newStatus });
           setWaState(newStatus);
-          if (['CONNECTED', 'READY', 'AUTHENTICATED'].includes(newStatus)) {
+          if (['CONNECTED', 'READY', 'AUTHENTICATED', 'AUTHENTICATING'].includes(newStatus)) {
             pollStatusRef.current?.();
           }
           if (newStatus === 'WAITING_FOR_SCAN') {
@@ -341,12 +345,17 @@ export default function WhatsAppChannels() {
 
   // ── Start Connection ──
   const handleStartConnection = async () => {
+    stopPolling();
+    stopQrTimer();
+    stopQrAutoRefresh();
+
     setViewMode('connecting');
     setWaState('INITIALIZING');
     setQrCode(null);
     setWaError('');
     setWaErrorCode('');
 
+    log('API_BASE_URL', { url: API_BASE_URL });
     log('SESSION_CREATE', { channelName });
 
     const health = await checkGatewayHealth();
@@ -354,7 +363,7 @@ export default function WhatsAppChannels() {
       setWaState('ERROR');
       setWaError(`WhatsApp gateway unavailable. ${health.error || 'Start the gateway service.'}`);
       setWaErrorCode('WHATSAPP_GATEWAY_UNAVAILABLE');
-      log('ERROR', { code: 'GATEWAY_UNAVAILABLE' });
+      log('SESSION_FAILED', { code: 'GATEWAY_UNAVAILABLE' });
       return;
     }
 
@@ -365,7 +374,7 @@ export default function WhatsAppChannels() {
       });
 
       const data = res.data;
-      log('SESSION_RESPONSE', data);
+      log('SESSION_ID', { sessionId: data?.session_identifier, initialStatus: data?.status });
 
       if (!data) { setWaState('ERROR'); setWaError('No response.'); return; }
 
@@ -382,27 +391,19 @@ export default function WhatsAppChannels() {
         return;
       }
 
-      // Subscribe + poll
+      // Subscribe + start single polling loop
       if (sessionRef.current) subscribeRealtime(sessionRef.current);
       startPolling();
-
-      // Auto-refresh QR every 30s
-      qrRefreshRef.current = setInterval(() => {
-        if (mountedRef.current && sessionRef.current) {
-          log('QR_AUTO_REFRESH', { interval: '30s' });
-          pollStatus();
-        }
-      }, QR_REFRESH_INTERVAL);
 
     } catch (e: any) {
       setWaState('ERROR');
       setWaError(e.message || 'Connection failed.');
-      log('ERROR', e.message);
+      log('SESSION_FAILED', { error: e.message });
     }
   };
 
   const handleRefreshQR = async () => {
-    log('QR_REFRESH', { manual: true });
+    log('QR_POLL', { manual: true, session: sessionRef.current });
     setQrCode(null);
     stopQrTimer();
     try {
@@ -445,9 +446,10 @@ export default function WhatsAppChannels() {
   const getStatusDisplay = (status: SessionStatus) => {
     const map: Record<string, { label: string; color: string; icon: any; code: number }> = {
       CREATING: { label: 'Creating...', color: '#6b7280', icon: Loader2, code: 0 },
-      INITIALIZING: { label: 'Initializing...', color: '#3b82f6', icon: Loader2, code: 1 },
+      INITIALIZING: { label: 'Preparing QR code...', color: '#3b82f6', icon: Loader2, code: 1 },
       WAITING_FOR_SCAN: { label: 'Scan QR Code', color: '#25D366', icon: MessageCircle, code: 3 },
       PAIRING: { label: 'Pairing...', color: '#f59e0b', icon: Loader2, code: 2 },
+      AUTHENTICATING: { label: 'Authenticating...', color: '#f59e0b', icon: Loader2, code: 4 },
       AUTHENTICATED: { label: 'Authenticated!', color: '#16a34a', icon: CheckCircle2, code: 4 },
       SYNCING: { label: 'Syncing...', color: '#3b82f6', icon: Loader2, code: 2 },
       READY: { label: 'Connected', color: '#16a34a', icon: CheckCircle2, code: 5 },
@@ -562,12 +564,12 @@ export default function WhatsAppChannels() {
             </div>
           )}
 
-          {/* AUTHENTICATED */}
-          {(waState === 'AUTHENTICATED' || waState === 'SYNCING') && (
+          {/* AUTHENTICATING / AUTHENTICATED / SYNCING */}
+          {(waState === 'AUTHENTICATING' || waState === 'AUTHENTICATED' || waState === 'SYNCING') && (
             <div className="text-center py-8">
               <CheckCircle2 size={48} className="mx-auto mb-3" style={{ color: '#25D366' }} />
-              <p className="font-bold text-lg mb-1">QR Scanned!</p>
-              <p className="text-sm text-gray-600">Setting up your channel...</p>
+              <p className="font-bold text-lg mb-1">QR Code Scanned!</p>
+              <p className="text-sm text-gray-600">Authenticating & synchronizing session with WhatsApp...</p>
               <Loader2 size={20} className="animate-spin mx-auto mt-3" style={{ color: '#25D366' }} />
             </div>
           )}
@@ -747,7 +749,7 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
     setResolvingLink(true);
     setResolveError('');
 
-    console.log('%c[UNAI-WA] RESOLVE_CHANNEL', 'color:#25D366;font-weight:bold', { input });
+    log('CHANNEL_RESOLVE_REQUEST', { input, session: account.sessionIdentifier, apiBase: API_BASE_URL });
     try {
       const res = await fetchApi('/api/channels/resolve', {
         method: 'POST',
@@ -759,7 +761,7 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
 
       const newCh = res?.data;
       if (newCh) {
-        console.log('%c[UNAI-WA] RESOLVE_CHANNEL_SUCCESS', 'color:#16a34a;font-weight:bold', newCh);
+        log('CHANNEL_RESOLVE_SUCCESS', newCh);
         const existingWithoutThis = channels.filter(c => c.id !== newCh.id);
         const updated = [newCh, ...existingWithoutThis];
         saveChannelsList(updated);
@@ -770,7 +772,7 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
         setResolveError('Channel not found. Please verify the URL.');
       }
     } catch (e: any) {
-      console.error('[UNAI-WA] RESOLVE_CHANNEL_ERROR', e);
+      log('CHANNEL_RESOLVE_FAILED', { error: e.message });
       setResolveError(e.message || 'Failed to link channel. Make sure your WhatsApp account has access.');
     } finally {
       setResolvingLink(false);

@@ -364,5 +364,23 @@ class WhatsAppWebProvider(WhatsAppProvider):
     ) -> Dict[str, Any]:
         raise NotImplementedError("NOT_SUPPORTED_BY_PROVIDER")
 
+    async def get_channels(self, session_identifier: str) -> List[Dict[str, Any]]:
+        """Discover WhatsApp Channels/Newsletters from the gateway."""
+        logger.info(f"[WA] CHANNELS_REQUEST session_id={session_identifier}")
+        try:
+            response = await self._make_request(
+                "GET", f"/v1/whatsapp/{session_identifier}/channels"
+            )
+            if response.status_code == 200:
+                data = response.json()
+                channels = data.get("channels", [])
+                logger.info(f"[WA] CHANNELS_RESPONSE session_id={session_identifier} count={len(channels)}")
+                return channels
+            logger.warning(f"[WA] CHANNELS_RESPONSE session_id={session_identifier} status={response.status_code}")
+            return []
+        except Exception as e:
+            logger.error(f"[WA] CHANNELS_REQUEST_FAILED session_id={session_identifier} error={e}")
+            return []
+
     async def register_webhook(self) -> bool:
         return True

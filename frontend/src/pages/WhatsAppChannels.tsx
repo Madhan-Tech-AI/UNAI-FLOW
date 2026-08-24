@@ -455,143 +455,15 @@ export default function WhatsAppChannels() {
   // VIEW: Connected Dashboard (like Whapi.cloud)
   // ═══════════════════════════════════════════════════════
   if (viewMode === 'dashboard' && account) {
-    return (
-      <div style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem 1.5rem' }}>
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-main">WhatsApp Channel</h1>
-            <p className="text-sm text-secondary mt-1">Channel ID: {account.sessionIdentifier}</p>
-          </div>
-          <div className="flex gap-2">
-            <button className="btn-secondary" onClick={() => { log('REFRESH_STATUS', {}); loadExistingSessions(); }}>
-              <RefreshCw size={15} /> <span>Refresh</span>
-            </button>
-            <button className="btn-secondary" style={{ color: '#ef4444', borderColor: '#fecaca' }} onClick={handleDisconnect}>
-              Disconnect
-            </button>
-          </div>
-        </div>
-
-        {/* Status Banner */}
-        <div className="card p-4 mb-4" style={{ backgroundColor: '#f0fdf4', borderColor: '#bbf7d0', borderLeft: '4px solid #25D366' }}>
-          <div className="flex items-center gap-3">
-            <div style={{ width: 48, height: 48, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <CheckCircle2 size={24} style={{ color: '#25D366' }} />
-            </div>
-            <div className="flex-1">
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-lg text-main">{account.name || 'WhatsApp Account'}</span>
-                <span className="chip chip-success" style={{ fontSize: 11 }}>● Online</span>
-              </div>
-              {account.phone && (
-                <div className="flex items-center gap-1 text-sm text-secondary mt-0.5">
-                  <Phone size={13} /> <span>+{account.phone}</span>
-                </div>
-              )}
-              <p className="text-xs text-muted mt-1">
-                Connected {account.connectedAt ? new Date(account.connectedAt).toLocaleString() : 'just now'}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* API Credentials Grid */}
-        <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
-          {/* API URL */}
-          <div className="card p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Link2 size={16} style={{ color: '#3b82f6' }} />
-              <span className="text-sm font-semibold text-main">API URL</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-xs p-2 rounded" style={{ backgroundColor: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {account.apiUrl}
-              </code>
-              <button onClick={() => copyToClipboard(account.apiUrl!, 'API URL')} className="p-1.5 rounded hover:bg-gray-100" title="Copy">
-                <Copy size={14} />
-              </button>
-            </div>
-          </div>
-
-          {/* API Token */}
-          <div className="card p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Key size={16} style={{ color: '#f59e0b' }} />
-              <span className="text-sm font-semibold text-main">API Token</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-xs p-2 rounded" style={{ backgroundColor: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {showToken ? account.apiToken : '••••••••••••••••••••••'}
-              </code>
-              <button onClick={() => setShowToken(!showToken)} className="p-1.5 rounded hover:bg-gray-100" title="Toggle visibility">
-                {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-              <button onClick={() => copyToClipboard(account.apiToken!, 'API Token')} className="p-1.5 rounded hover:bg-gray-100" title="Copy">
-                <Copy size={14} />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Webhook + Channel Info */}
-        <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
-          {/* Webhook URL */}
-          <div className="card p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Activity size={16} style={{ color: '#8b5cf6' }} />
-              <span className="text-sm font-semibold text-main">Webhook URL</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-xs p-2 rounded" style={{ backgroundColor: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {account.webhookUrl}
-              </code>
-              <button onClick={() => copyToClipboard(account.webhookUrl!, 'Webhook URL')} className="p-1.5 rounded hover:bg-gray-100" title="Copy">
-                <Copy size={14} />
-              </button>
-            </div>
-          </div>
-
-          {/* Session Info */}
-          <div className="card p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Settings size={16} style={{ color: '#6b7280' }} />
-              <span className="text-sm font-semibold text-main">Session</span>
-            </div>
-            <div className="text-xs text-secondary space-y-1">
-              <div className="flex justify-between">
-                <span>Session ID</span>
-                <code className="text-main">{account.sessionIdentifier?.slice(0, 20)}...</code>
-              </div>
-              <div className="flex justify-between">
-                <span>Provider</span>
-                <span className="text-main">WhatsApp Web</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Gateway</span>
-                <span className="text-main">{gatewayHealth?.ok ? '● Online' : '○ Offline'}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Quick Stats */}
-        <div className="grid gap-4" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr' }}>
-          {[
-            { label: 'Status', value: 'Active', color: '#16a34a', icon: Wifi },
-            { label: 'Messages', value: '0', color: '#3b82f6', icon: MessageCircle },
-            { label: 'Requests', value: '0', color: '#8b5cf6', icon: Activity },
-            { label: 'Uptime', value: gatewayHealth?.ok ? `${Math.floor((gatewayHealth as any).uptime_seconds / 60)}m` : '-', color: '#f59e0b', icon: Clock },
-          ].map((stat) => (
-            <div key={stat.label} className="card p-4 text-center">
-              <stat.icon size={20} className="mx-auto mb-2" style={{ color: stat.color }} />
-              <div className="text-lg font-bold text-main">{stat.value}</div>
-              <div className="text-xs text-secondary">{stat.label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
+    return <DashboardView
+      account={account}
+      gatewayHealth={gatewayHealth}
+      onDisconnect={handleDisconnect}
+      onRefresh={() => { log('REFRESH_STATUS', {}); checkGatewayHealth(); loadExistingSessions(); }}
+      copyToClipboard={copyToClipboard}
+      showToken={showToken}
+      setShowToken={setShowToken}
+    />;
   }
 
   // ═══════════════════════════════════════════════════════
@@ -788,6 +660,327 @@ export default function WhatsAppChannels() {
           <MessageCircle size={18} /> Create & Connect
         </button>
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// DashboardView Component
+// ═══════════════════════════════════════════════════════
+function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyToClipboard, showToken, setShowToken }: {
+  account: any;
+  gatewayHealth: any;
+  onDisconnect: () => void;
+  onRefresh: () => void;
+  copyToClipboard: (text: string, label: string) => void;
+  showToken: boolean;
+  setShowToken: (v: boolean) => void;
+}) {
+  const [channels, setChannels] = useState<any[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState<any>(null);
+  const [loadingChannels, setLoadingChannels] = useState(false);
+  const [publishText, setPublishText] = useState('');
+  const [publishing, setPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<'overview' | 'channels' | 'publish'>('overview');
+
+  const discoverChannels = async () => {
+    setLoadingChannels(true);
+    console.log('%c[UNAI-WA] CHANNELS_DISCOVER', 'color:#25D366;font-weight:bold', { session: account.sessionIdentifier });
+    try {
+      const res = await fetchApi(`/api/channels/discover?session_identifier=${account.sessionIdentifier}`);
+      const data = res?.data || [];
+      setChannels(data);
+      console.log('%c[UNAI-WA] CHANNELS_FOUND', 'color:#25D366;font-weight:bold', { count: data.length, channels: data });
+      if (data.length > 0 && !selectedChannel) setSelectedChannel(data[0]);
+    } catch (e: any) {
+      console.error('[UNAI-WA] CHANNELS_ERROR', e);
+    } finally {
+      setLoadingChannels(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!publishText.trim() || !selectedChannel) return;
+    setPublishing(true);
+    setPublishResult(null);
+
+    const channelJid = selectedChannel.id || selectedChannel.jid || selectedChannel.newsletter_id;
+    console.log('%c[UNAI-WA] PUBLISH', 'color:#f59e0b;font-weight:bold', {
+      channel: channelJid,
+      channelName: selectedChannel.name,
+      text: publishText.slice(0, 50),
+      type: 'text',
+    });
+
+    try {
+      const res = await fetchApi('/api/channels/publish-direct', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_identifier: account.sessionIdentifier,
+          channel_jid: channelJid,
+          type: 'text',
+          text: publishText,
+        }),
+      });
+      console.log('%c[UNAI-WA] PUBLISH_SUCCESS', 'color:#16a34a;font-weight:bold', res);
+      setPublishResult({ success: true, data: res.data });
+      setPublishText('');
+    } catch (e: any) {
+      console.error('[UNAI-WA] PUBLISH_FAILED', e);
+      setPublishResult({ success: false, error: e.message });
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem 1.5rem' }}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-main">WhatsApp Channel</h1>
+          <p className="text-sm text-secondary mt-1">Channel ID: {account.sessionIdentifier}</p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-secondary" onClick={onRefresh}>
+            <RefreshCw size={15} /> <span>Refresh</span>
+          </button>
+          <button className="btn-secondary" style={{ color: '#ef4444', borderColor: '#fecaca' }} onClick={onDisconnect}>
+            Disconnect
+          </button>
+        </div>
+      </div>
+
+      {/* Status Banner */}
+      <div className="card p-4 mb-4" style={{ backgroundColor: '#f0fdf4', borderLeft: '4px solid #25D366' }}>
+        <div className="flex items-center gap-3">
+          <div style={{ width: 48, height: 48, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <CheckCircle2 size={24} style={{ color: '#25D366' }} />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-lg text-main">{account.name || 'WhatsApp Account'}</span>
+              <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>● Online</span>
+            </div>
+            {account.phone && (
+              <div className="flex items-center gap-1 text-sm text-secondary mt-0.5">
+                <Phone size={13} /> <span>+{account.phone}</span>
+              </div>
+            )}
+            <p className="text-xs text-muted mt-1">
+              Connected {account.connectedAt ? new Date(account.connectedAt).toLocaleString() : 'just now'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="flex gap-1 mb-4 p-1 rounded-lg" style={{ backgroundColor: '#f1f5f9' }}>
+        {(['overview', 'channels', 'publish'] as const).map((tab) => (
+          <button key={tab} onClick={() => { setActiveTab(tab); if (tab === 'channels' && channels.length === 0) discoverChannels(); }}
+            className="flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all"
+            style={{
+              backgroundColor: activeTab === tab ? '#fff' : 'transparent',
+              color: activeTab === tab ? '#111' : '#6b7280',
+              boxShadow: activeTab === tab ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            }}>
+            {tab === 'overview' ? '📊 Overview' : tab === 'channels' ? '📢 Channels' : '✍️ Publish'}
+          </button>
+        ))}
+      </div>
+
+      {/* ── TAB: Overview ── */}
+      {activeTab === 'overview' && (
+        <>
+          <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Link2 size={16} style={{ color: '#3b82f6' }} />
+                <span className="text-sm font-semibold">API URL</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs p-2 rounded" style={{ backgroundColor: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {account.apiUrl}
+                </code>
+                <button onClick={() => copyToClipboard(account.apiUrl, 'API URL')} className="p-1.5 rounded hover:bg-gray-100"><Copy size={14} /></button>
+              </div>
+            </div>
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Key size={16} style={{ color: '#f59e0b' }} />
+                <span className="text-sm font-semibold">API Token</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs p-2 rounded" style={{ backgroundColor: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {showToken ? account.apiToken : '••••••••••••••••••••••'}
+                </code>
+                <button onClick={() => setShowToken(!showToken)} className="p-1.5 rounded hover:bg-gray-100">
+                  {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+                <button onClick={() => copyToClipboard(account.apiToken, 'Token')} className="p-1.5 rounded hover:bg-gray-100"><Copy size={14} /></button>
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Activity size={16} style={{ color: '#8b5cf6' }} />
+                <span className="text-sm font-semibold">Webhook URL</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs p-2 rounded" style={{ backgroundColor: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {account.webhookUrl}
+                </code>
+                <button onClick={() => copyToClipboard(account.webhookUrl, 'Webhook')} className="p-1.5 rounded hover:bg-gray-100"><Copy size={14} /></button>
+              </div>
+            </div>
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Settings size={16} style={{ color: '#6b7280' }} />
+                <span className="text-sm font-semibold">Session</span>
+              </div>
+              <div className="text-xs text-secondary space-y-1">
+                <div className="flex justify-between"><span>Session</span><code>{account.sessionIdentifier?.slice(0, 20)}...</code></div>
+                <div className="flex justify-between"><span>Provider</span><span>WhatsApp Web (Baileys)</span></div>
+                <div className="flex justify-between"><span>Gateway</span><span style={{ color: gatewayHealth?.ok ? '#16a34a' : '#ef4444' }}>{gatewayHealth?.ok ? '● Online' : '○ Offline'}</span></div>
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-4" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr' }}>
+            {[
+              { label: 'Status', value: 'Active', color: '#16a34a', icon: Wifi },
+              { label: 'Messages', value: '0', color: '#3b82f6', icon: MessageCircle },
+              { label: 'Requests', value: '0', color: '#8b5cf6', icon: Activity },
+              { label: 'Uptime', value: gatewayHealth?.ok ? `${Math.floor((gatewayHealth as any)?.uptime_seconds / 60 || 0)}m` : '-', color: '#f59e0b', icon: Clock },
+            ].map((s) => (
+              <div key={s.label} className="card p-4 text-center">
+                <s.icon size={20} className="mx-auto mb-2" style={{ color: s.color }} />
+                <div className="text-lg font-bold">{s.value}</div>
+                <div className="text-xs text-secondary">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* ── TAB: Channels ── */}
+      {activeTab === 'channels' && (
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold">Your WhatsApp Channels</h3>
+            <button onClick={discoverChannels} disabled={loadingChannels}
+              className="px-3 py-1.5 text-xs border rounded hover:bg-gray-50 flex items-center gap-1">
+              <RefreshCw size={12} className={loadingChannels ? 'animate-spin' : ''} />
+              {loadingChannels ? 'Discovering...' : 'Discover Channels'}
+            </button>
+          </div>
+
+          {loadingChannels && channels.length === 0 ? (
+            <div className="text-center py-8">
+              <Loader2 size={24} className="animate-spin mx-auto mb-2" style={{ color: '#25D366' }} />
+              <p className="text-sm text-gray-500">Discovering your WhatsApp Channels...</p>
+            </div>
+          ) : channels.length === 0 ? (
+            <div className="text-center py-8">
+              <MessageCircle size={32} className="mx-auto mb-3" style={{ color: '#d1d5db' }} />
+              <p className="text-sm text-gray-500 mb-2">No channels found yet.</p>
+              <p className="text-xs text-gray-400">Click "Discover Channels" to scan for WhatsApp Channels you administer.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {channels.map((ch: any, idx: number) => (
+                <div key={ch.id || idx}
+                  className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all"
+                  style={{
+                    borderColor: selectedChannel?.id === ch.id ? '#25D366' : '#e5e7eb',
+                    backgroundColor: selectedChannel?.id === ch.id ? '#f0fdf4' : '#fff',
+                  }}
+                  onClick={() => { setSelectedChannel(ch); setActiveTab('publish'); }}>
+                  <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <MessageCircle size={16} style={{ color: '#25D366' }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate">{ch.name || ch.subject || `Channel ${idx + 1}`}</div>
+                    <div className="text-xs text-gray-500 truncate">{ch.id || ch.jid || ch.newsletter_id}</div>
+                  </div>
+                  <div className="text-xs text-gray-400">{ch.subscribers_count || ch.followers || 0} subscribers</div>
+                  <span className="text-xs text-green-600">Select →</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB: Publish ── */}
+      {activeTab === 'publish' && (
+        <div className="card p-5">
+          <h3 className="font-bold mb-4">Publish to Channel</h3>
+
+          {!selectedChannel ? (
+            <div className="text-center py-8">
+              <p className="text-sm text-gray-500 mb-3">Select a channel first</p>
+              <button onClick={() => { setActiveTab('channels'); if (channels.length === 0) discoverChannels(); }}
+                className="px-4 py-2 text-sm text-white rounded" style={{ backgroundColor: '#25D366' }}>
+                Discover Channels
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Selected Channel */}
+              <div className="flex items-center gap-3 p-3 rounded-lg mb-4" style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <MessageCircle size={16} style={{ color: '#25D366' }} />
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold text-sm">{selectedChannel.name || selectedChannel.subject || 'Channel'}</div>
+                  <div className="text-xs text-gray-500">{selectedChannel.id || selectedChannel.jid}</div>
+                </div>
+                <button onClick={() => setActiveTab('channels')} className="text-xs text-blue-600 hover:underline">Change</button>
+              </div>
+
+              {/* Composer */}
+              <div className="mb-3">
+                <label className="block text-sm font-medium mb-1">Message</label>
+                <textarea
+                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                  rows={4}
+                  placeholder="Type your message to publish to this channel..."
+                  value={publishText}
+                  onChange={(e) => setPublishText(e.target.value)}
+                />
+              </div>
+
+              <button onClick={handlePublish} disabled={publishing || !publishText.trim()}
+                className="w-full py-2.5 text-white rounded-lg font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+                style={{ backgroundColor: '#25D366' }}>
+                {publishing ? <><Loader2 size={16} className="animate-spin" /> Publishing...</> : <><MessageCircle size={16} /> Publish to Channel</>}
+              </button>
+
+              {/* Result */}
+              {publishResult && (
+                <div className="mt-3 p-3 rounded-lg text-sm" style={{
+                  backgroundColor: publishResult.success ? '#f0fdf4' : '#fef2f2',
+                  border: `1px solid ${publishResult.success ? '#bbf7d0' : '#fecaca'}`,
+                }}>
+                  {publishResult.success ? (
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 size={16} style={{ color: '#16a34a' }} />
+                      <span className="text-green-700">Published successfully!</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <XCircle size={16} style={{ color: '#ef4444' }} />
+                      <span className="text-red-700">{publishResult.error || 'Publish failed'}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

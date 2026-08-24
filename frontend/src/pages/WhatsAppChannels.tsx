@@ -19,7 +19,6 @@ import {
   Key,
   Link2,
   Phone,
-  User,
 } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 import { supabase } from '../lib/supabaseClient';
@@ -59,7 +58,6 @@ interface ConnectedAccount {
 
 // ── Console Logger ──
 const log = (tag: string, data: any) => {
-  const timestamp = new Date().toISOString();
   const prefix = `%c[UNAI-WA] ${tag}`;
   const style = tag.includes('ERROR') ? 'color:#ef4444;font-weight:bold'
     : tag.includes('QR') ? 'color:#25D366;font-weight:bold'

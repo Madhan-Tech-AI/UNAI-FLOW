@@ -88,6 +88,8 @@ export default function WhatsAppChannels() {
   // ── Refs ──
   const sessionRef = useRef<string | null>(null);
   const pollCountRef = useRef(0);
+  const isPollingRef = useRef(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -111,10 +113,15 @@ export default function WhatsAppChannels() {
   }, []);
 
   const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
+    isPollingRef.current = false;
   }, []);
 
   const stopQrTimer = useCallback(() => {
@@ -198,7 +205,9 @@ export default function WhatsAppChannels() {
   // ── Poll Status ──
   const pollStatus = useCallback(async () => {
     if (!sessionRef.current || !mountedRef.current) return;
+    if (isPollingRef.current) return; // Prevent concurrent overlapping requests
 
+    isPollingRef.current = true;
     pollCountRef.current += 1;
     if (pollCountRef.current > MAX_POLL_COUNT) {
       stopPolling();
@@ -207,8 +216,11 @@ export default function WhatsAppChannels() {
       setWaError('Connection timed out. Please try again.');
       setWaErrorCode('TIMEOUT');
       log('SESSION_FAILED', { reason: 'TIMEOUT', polls: pollCountRef.current });
+      isPollingRef.current = false;
       return;
     }
+
+    let isTerminal = false;
 
     try {
       const res = await fetchApi(`/api/whatsapp/status?session_identifier=${sessionRef.current}`);
@@ -262,6 +274,7 @@ export default function WhatsAppChannels() {
 
       // Handle final authentication / ready
       if (newStatus === 'CONNECTED' || newStatus === 'READY' || newStatus === 'AUTHENTICATED') {
+        isTerminal = true;
         stopPolling();
         stopQrTimer();
         stopQrAutoRefresh();
@@ -295,6 +308,7 @@ export default function WhatsAppChannels() {
 
       // Handle terminal errors
       if (newStatus === 'ERROR') {
+        isTerminal = true;
         stopPolling();
         stopQrTimer();
         stopQrAutoRefresh();
@@ -303,6 +317,15 @@ export default function WhatsAppChannels() {
       }
     } catch (e: any) {
       log('POLL_ERROR', e.message);
+    } finally {
+      isPollingRef.current = false;
+      // Schedule next poll cleanly only if not terminal and still active
+      if (mountedRef.current && sessionRef.current && !isTerminal) {
+        if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = setTimeout(() => {
+          if (pollStatusRef.current) pollStatusRef.current();
+        }, POLL_INTERVAL_MS);
+      }
     }
   }, [startQrTimer, stopPolling, stopQrTimer, stopQrAutoRefresh]);
 
@@ -311,15 +334,9 @@ export default function WhatsAppChannels() {
   }, [pollStatus]);
 
   const startPolling = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-    pollIntervalRef.current = setInterval(() => {
-      if (pollStatusRef.current) pollStatusRef.current();
-    }, POLL_INTERVAL_MS);
+    stopPolling();
     if (pollStatusRef.current) pollStatusRef.current();
-  }, []);
+  }, [stopPolling]);
 
   // ── Supabase Realtime ──
   const subscribeRealtime = useCallback((sessionIdentifier: string) => {

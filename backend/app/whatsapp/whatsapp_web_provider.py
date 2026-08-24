@@ -103,6 +103,7 @@ class WhatsAppWebProvider(WhatsAppProvider):
         method: str,
         path: str,
         timeout: float = 30.0,
+        max_retries: int = 3,
         gateway_url: Optional[str] = None,
         **kwargs,
     ) -> httpx.Response:
@@ -122,7 +123,7 @@ class WhatsAppWebProvider(WhatsAppProvider):
         kwargs.setdefault("headers", {})
         kwargs["headers"].update(self._headers())
 
-        delays = [2, 4, 8, 15]  # Exponential backoff for cold starts
+        delays = [2, 4, 8][:max_retries]
         last_exc = None
 
         for attempt in range(len(delays) + 1):
@@ -158,25 +159,23 @@ class WhatsAppWebProvider(WhatsAppProvider):
     async def connect(self, session_identifier: str) -> Dict[str, Any]:
         """POST /v1/whatsapp/connect — creates or resumes a session on the gateway."""
         logger.info(f"[WA] GATEWAY_SESSION_CREATE session_id={session_identifier} request=sent")
-
         response = await self._make_request(
             "POST",
             "/v1/whatsapp/connect",
-            timeout=90.0,
-            json={"connection_id": session_identifier},
+            timeout=35.0,
+            max_retries=3,
+            json={"session_identifier": session_identifier},
         )
         response.raise_for_status()
         data = response.json()
-
-        status = data.get("status", "INITIALIZING")
         logger.info(
             f"[WA] GATEWAY_SESSION_CREATE session_id={session_identifier} "
-            f"response={response.status_code} status={status} "
-            f"isReady={data.get('isReady', False)}"
+            f"response=received isReady={data.get('isReady', False)}"
         )
-
         return {
-            "status": status,
+            "success": True,
+            "status": "INITIALIZING",
+            "session_identifier": session_identifier,
             "connectionId": data.get("connectionId"),
             "isReady": data.get("isReady", False),
         }
@@ -186,7 +185,10 @@ class WhatsAppWebProvider(WhatsAppProvider):
         logger.info(f"[WA] GATEWAY_DISCONNECT session_id={session_identifier}")
         try:
             response = await self._make_request(
-                "POST", f"/v1/whatsapp/{session_identifier}/disconnect"
+                "POST",
+                f"/v1/whatsapp/{session_identifier}/disconnect",
+                timeout=15.0,
+                max_retries=1,
             )
             return response.status_code == 200
         except Exception as e:
@@ -195,7 +197,12 @@ class WhatsAppWebProvider(WhatsAppProvider):
 
     async def get_status(self, session_identifier: str) -> str:
         """GET /v1/whatsapp/{session_identifier}/status"""
-        response = await self._make_request("GET", f"/v1/whatsapp/{session_identifier}/status")
+        response = await self._make_request(
+            "GET",
+            f"/v1/whatsapp/{session_identifier}/status",
+            timeout=8.0,
+            max_retries=0,
+        )
         response.raise_for_status()
         return response.json().get("status", "DISCONNECTED")
 
@@ -207,7 +214,10 @@ class WhatsAppWebProvider(WhatsAppProvider):
         logger.info(f"[WA] STATUS_REQUEST session_id={session_identifier}")
 
         response = await self._make_request(
-            "GET", f"/v1/whatsapp/{session_identifier}/status"
+            "GET",
+            f"/v1/whatsapp/{session_identifier}/status",
+            timeout=8.0,
+            max_retries=0,
         )
         response.raise_for_status()
         data = response.json()
@@ -225,7 +235,10 @@ class WhatsAppWebProvider(WhatsAppProvider):
         logger.info(f"[WA] QR_REQUEST session_id={session_identifier}")
 
         response = await self._make_request(
-            "GET", f"/v1/whatsapp/{session_identifier}/qr"
+            "GET",
+            f"/v1/whatsapp/{session_identifier}/qr",
+            timeout=8.0,
+            max_retries=0,
         )
 
         if response.status_code == 204:

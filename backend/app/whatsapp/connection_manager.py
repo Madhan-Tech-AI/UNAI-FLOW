@@ -67,28 +67,49 @@ class ConnectionManager:
                 None,
             )
 
+        # Check existing sessions — but VERIFY with gateway first
         if not target_session:
             for s in existing_sessions:
-                if s["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value]:
-                    logger.info(
-                        f"[WA] SESSION_EXISTING request_id={request_id} "
-                        f"session_id={s['session_identifier']} status=CONNECTED"
-                    )
-                    return {
-                        "success": True,
-                        "status": s["status"],
-                        "session_identifier": s["session_identifier"],
-                    }
-                if s["status"] in active_states:
-                    logger.info(
-                        f"[WA] SESSION_EXISTING request_id={request_id} "
-                        f"session_id={s['session_identifier']} status={s['status']}"
-                    )
-                    return {
-                        "success": True,
-                        "status": s["status"],
-                        "session_identifier": s["session_identifier"],
-                    }
+                if s["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value] + active_states:
+                    # Verify this session still exists on the gateway
+                    try:
+                        gw_status = await self.provider.get_full_status(s["session_identifier"])
+                        gw_state = gw_status.get("status", "DISCONNECTED")
+                        if gw_state == "QR_READY":
+                            gw_state = SessionStatus.WAITING_FOR_SCAN.value
+
+                        if gw_state in ["DISCONNECTED", "ERROR"]:
+                            # Gateway lost this session (e.g. after restart) — mark it and skip
+                            logger.warning(
+                                f"[WA] SESSION_STALE request_id={request_id} "
+                                f"session_id={s['session_identifier']} "
+                                f"db_status={s['status']} gateway_status={gw_state} "
+                                f"— gateway lost this session, will create fresh"
+                            )
+                            self.session_manager.update_session_status(
+                                s["id"], SessionStatus.DISCONNECTED.value
+                            )
+                            continue
+
+                        # Gateway confirms session is alive
+                        logger.info(
+                            f"[WA] SESSION_EXISTING_VERIFIED request_id={request_id} "
+                            f"session_id={s['session_identifier']} gateway_status={gw_state}"
+                        )
+                        return {
+                            "success": True,
+                            "status": gw_state,
+                            "session_identifier": s["session_identifier"],
+                        }
+                    except Exception as e:
+                        logger.warning(
+                            f"[WA] SESSION_VERIFY_FAILED request_id={request_id} "
+                            f"session_id={s['session_identifier']} error={e} — will create fresh"
+                        )
+                        self.session_manager.update_session_status(
+                            s["id"], SessionStatus.DISCONNECTED.value
+                        )
+                        continue
 
         # 2. Generate session identifier if needed
         if not session_identifier:

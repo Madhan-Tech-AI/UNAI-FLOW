@@ -311,12 +311,15 @@ class ConnectionManager:
         if gateway_error:
             result["gateway_error"] = gateway_error
 
-        # If we need a QR scan, fetch the pairing data
-        if session["status"] == SessionStatus.WAITING_FOR_SCAN.value:
+        # If QR is ready or we are waiting for scan, fetch the pairing data
+        if session["status"] in [SessionStatus.WAITING_FOR_SCAN.value, SessionStatus.INITIALIZING.value, "QR_READY"] or full_status.get("hasQR"):
             try:
                 pairing_data = await self.provider.get_pairing_data(session_identifier)
                 if pairing_data.get("type") == "qr":
                     result["pairing"] = pairing_data.get("data")
+                    result["status"] = SessionStatus.WAITING_FOR_SCAN.value
+                    session["status"] = SessionStatus.WAITING_FOR_SCAN.value
+                    self.session_manager.update_session_status(session["id"], SessionStatus.WAITING_FOR_SCAN.value)
                     logger.info(
                         f"[WA] QR_DELIVERED session_id={session_identifier} "
                         f"has_data={bool(pairing_data.get('data'))}"

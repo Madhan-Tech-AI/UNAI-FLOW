@@ -192,6 +192,8 @@ export default function WhatsAppChannels() {
     }, 1000);
   }, [stopQrTimer]);
 
+  const pollStatusRef = useRef<(() => Promise<void>) | null>(null);
+
   // ── Poll Status ──
   const pollStatus = useCallback(async () => {
     if (!sessionRef.current || !mountedRef.current) return;
@@ -215,13 +217,15 @@ export default function WhatsAppChannels() {
       if (!data) return;
 
       const newStatus = data.status as SessionStatus;
-      const prevStatus = waState;
+      
+      log('POLL_TICK', { status: newStatus, hasPairing: Boolean(data.pairing), pollCount: pollCountRef.current });
 
-      if (newStatus !== prevStatus) {
-        log('STATUS_CHANGED', { from: prevStatus, to: newStatus });
-      }
-
-      setWaState(newStatus);
+      setWaState((prev) => {
+        if (newStatus !== prev) {
+          log('STATUS_CHANGED', { from: prev, to: newStatus });
+        }
+        return newStatus;
+      });
 
       // Log health status like Whapi
       const statusCode = newStatus === 'WAITING_FOR_SCAN' ? 3
@@ -236,9 +240,15 @@ export default function WhatsAppChannels() {
         log('GATEWAY_ERROR', data.gateway_error);
       }
 
-      // Handle QR delivery
-      if (data.pairing && newStatus === 'WAITING_FOR_SCAN') {
+      // Handle QR delivery unconditionally whenever pairing data is present
+      if (data.pairing) {
         setQrCode(data.pairing);
+        setWaState((prev) => {
+          if (prev !== 'CONNECTED' && prev !== 'READY' && prev !== 'AUTHENTICATED') {
+            return 'WAITING_FOR_SCAN';
+          }
+          return prev;
+        });
         startQrTimer();
         log('QR', { status: 'OK', type: 'qr', hasData: true, length: data.pairing.length });
       }
@@ -274,7 +284,7 @@ export default function WhatsAppChannels() {
         // Transition to dashboard after a brief delay
         setTimeout(() => {
           if (mountedRef.current) setViewMode('dashboard');
-        }, 1500);
+        }, 1200);
       }
 
       // Handle errors
@@ -288,14 +298,20 @@ export default function WhatsAppChannels() {
     } catch (e: any) {
       log('POLL_ERROR', e.message);
     }
-  }, [waState, startQrTimer, stopPolling, stopQrTimer, stopQrAutoRefresh]);
+  }, [startQrTimer, stopPolling, stopQrTimer, stopQrAutoRefresh]);
+
+  useEffect(() => {
+    pollStatusRef.current = pollStatus;
+  }, [pollStatus]);
 
   const startPolling = useCallback(() => {
     stopPolling();
     pollCountRef.current = 0;
-    pollIntervalRef.current = setInterval(pollStatus, POLL_INTERVAL_MS);
-    pollStatus();
-  }, [pollStatus, stopPolling]);
+    pollIntervalRef.current = setInterval(() => {
+      if (pollStatusRef.current) pollStatusRef.current();
+    }, POLL_INTERVAL_MS);
+    if (pollStatusRef.current) pollStatusRef.current();
+  }, [stopPolling]);
 
   // ── Supabase Realtime ──
   const subscribeRealtime = useCallback((sessionIdentifier: string) => {
@@ -311,13 +327,17 @@ export default function WhatsAppChannels() {
         if (newStatus) {
           log('REALTIME', { status: newStatus });
           setWaState(newStatus);
-          if (['CONNECTED', 'READY', 'AUTHENTICATED'].includes(newStatus)) pollStatus();
-          if (newStatus === 'WAITING_FOR_SCAN') pollStatus();
+          if (['CONNECTED', 'READY', 'AUTHENTICATED'].includes(newStatus)) {
+            pollStatusRef.current?.();
+          }
+          if (newStatus === 'WAITING_FOR_SCAN') {
+            pollStatusRef.current?.();
+          }
         }
       })
       .subscribe();
     realtimeChannelRef.current = channel;
-  }, [unsubscribeRealtime, pollStatus]);
+  }, [unsubscribeRealtime]);
 
   // ── Start Connection ──
   const handleStartConnection = async () => {

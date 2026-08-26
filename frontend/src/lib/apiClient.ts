@@ -8,7 +8,7 @@ export function getApiBaseUrl(): string {
     if (!isLocalhost) {
       // In remote production (e.g. Vercel), if envUrl is missing or points to localhost, always fallback to deployed Render backend
       if (!envUrl || envUrl.includes('localhost') || envUrl.includes('127.0.0.1')) {
-        return 'https://unai-flow-backend.onrender.com';
+        return 'https://unai-flow-backend-w4al.onrender.com';
       }
       return envUrl.replace(/\/+$/, '');
     }

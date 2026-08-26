@@ -397,7 +397,9 @@ class WhatsAppWebProvider(WhatsAppProvider):
         logger.info(f"[WA] CHANNELS_REQUEST session_id={session_identifier}")
         try:
             response = await self._make_request(
-                "GET", f"/v1/whatsapp/{session_identifier}/channels"
+                "GET", f"/v1/whatsapp/{session_identifier}/channels",
+                timeout=8.0,
+                max_retries=0,
             )
             if response.status_code == 200:
                 data = response.json()
@@ -418,6 +420,8 @@ class WhatsAppWebProvider(WhatsAppProvider):
                 "POST",
                 f"/v1/whatsapp/{session_identifier}/channels/resolve",
                 json={"link": link_or_code},
+                timeout=10.0,
+                max_retries=0,
             )
             if response.status_code == 200:
                 data = response.json()

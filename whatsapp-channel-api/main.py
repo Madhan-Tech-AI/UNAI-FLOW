@@ -53,8 +53,46 @@ class PublishRequest(BaseModel):
     channelLink: Optional[str] = None
     channelName: Optional[str] = None
 
+class ResolveChannelRequest(BaseModel):
+    link: Optional[str] = None
+    code: Optional[str] = None
+    channelId: Optional[str] = None
+    channel_link: Optional[str] = None
+
 class ConnectRequest(BaseModel):
-    connection_id: str
+    connection_id: Optional[str] = None
+    connectionId: Optional[str] = None
+    session_identifier: Optional[str] = None
+
+# ── Root & Health Endpoints ──
+
+@app.get("/")
+async def root_status():
+    return {
+        "ok": True,
+        "service": "whatsapp-channel-api",
+        "status": "healthy",
+        "version": "2.0.0",
+        "endpoints": {
+            "health": "/health",
+            "connect": "POST /v1/whatsapp/connect",
+            "status": "GET /v1/whatsapp/{connectionId}/status",
+            "qr": "GET /v1/whatsapp/{connectionId}/qr",
+            "channels": "GET /v1/whatsapp/{connectionId}/channels",
+            "resolve": "POST /v1/whatsapp/{connectionId}/channels/resolve",
+            "publish": "POST /v1/whatsapp/connections/{connectionId}/channels/{channelId}/publish",
+        },
+    }
+
+@app.get("/health")
+async def health_check():
+    return {
+        "ok": True,
+        "status": "ok",
+        "service": "whatsapp-channel-api",
+        "version": "2.0.0",
+        "active_sessions": len(session_manager.sessions),
+    }
 
 # ── Lifecycle Events ──
 
@@ -62,16 +100,17 @@ class ConnectRequest(BaseModel):
 async def on_shutdown():
     await session_manager.close_all()
 
-# ── V1 REST API Compatibility Endpoints ──
+# ── V1 REST API Endpoints ──
 
 @app.post("/v1/whatsapp/connect")
 async def v1_connect(req: ConnectRequest):
+    cid = req.connection_id or req.connectionId or req.session_identifier or f"sess_{int(time.time())}"
     # Start engine in background so we don't block
-    asyncio.create_task(session_manager.start_engine(req.connection_id))
+    asyncio.create_task(session_manager.start_engine(cid))
     return {
         "success": True,
         "status": "INITIALIZING",
-        "connectionId": req.connection_id,
+        "connectionId": cid,
         "isReady": False
     }
 
@@ -177,6 +216,56 @@ async def v1_publish(connection_id: str, channel_id: str, req: PublishRequest, _
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/v1/whatsapp/{connection_id}/channels/resolve")
+async def v1_resolve_channel(connection_id: str, req: ResolveChannelRequest):
+    input_str = req.link or req.code or req.channelId or req.channel_link or ""
+    if not input_str:
+        raise HTTPException(status_code=400, detail="Provide a channel link or invite code")
+    engine = session_manager.get(connection_id)
+    if not engine or not engine.is_ready:
+        # Fallback resolve directly from invite code / URL
+        import re
+        m = re.search(r'(?:whatsapp\.com/channel/)?([a-zA-Z0-9_-]{15,35})', input_str)
+        code = m.group(1) if m else input_str
+        return {
+            "success": True,
+            "channel": {
+                "id": code,
+                "name": "WhatsApp Channel",
+                "link": f"https://whatsapp.com/channel/{code}",
+                "role": "admin",
+                "subscribers_count": 0,
+                "verified": False,
+                "description": "",
+                "pictureUrl": "",
+            }
+        }
+    
+    # If engine is connected, get channels
+    channels_res = await engine.get_user_channels()
+    channels = channels_res.get("channels", [])
+    for ch in channels:
+        if ch.get("id") == input_str or ch.get("link") == input_str or input_str in (ch.get("link") or ""):
+            return {"success": True, "channel": ch}
+            
+    import re
+    m = re.search(r'(?:whatsapp\.com/channel/)?([a-zA-Z0-9_-]{15,35})', input_str)
+    code = m.group(1) if m else input_str
+    return {
+        "success": True,
+        "channel": {
+            "id": code,
+            "name": "WhatsApp Channel",
+            "link": f"https://whatsapp.com/channel/{code}",
+            "role": "admin",
+            "subscribers_count": 0,
+            "verified": False,
+            "description": "",
+            "pictureUrl": "",
+        }
+    }
+
+@app.post("/v1/whatsapp/{connection_id}/disconnect")
 @app.delete("/v1/whatsapp/{connection_id}")
 async def v1_disconnect(connection_id: str):
     engine = session_manager.get(connection_id)
@@ -184,10 +273,6 @@ async def v1_disconnect(connection_id: str):
         await engine.logout_session()
         await session_manager.close(connection_id)
     return {"success": True}
-
-@app.get("/health")
-async def health_check():
-    return {"status": "ok", "service": "whatsapp-channel-api"}
 
 if __name__ == "__main__":
     import uvicorn

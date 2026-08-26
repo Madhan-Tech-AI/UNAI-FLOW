@@ -47,6 +47,7 @@ interface GatewayHealth {
 interface ConnectedAccount {
   phone?: string;
   name?: string;
+  profilePictureUrl?: string;
   sessionId?: string;
   sessionIdentifier?: string;
   connectedAt?: string;
@@ -149,6 +150,7 @@ export default function WhatsAppChannels() {
         setAccount({
           phone: connected.phone_number,
           name: connected.phone_number ? `+${connected.phone_number}` : 'WhatsApp Account',
+          profilePictureUrl: connected.profile_picture_url || undefined,
           sessionId: connected.id,
           sessionIdentifier: connected.session_identifier,
           connectedAt: connected.last_connected_at || connected.updated_at,
@@ -281,11 +283,15 @@ export default function WhatsAppChannels() {
 
         const userInfo = data.session || {};
         const phone = userInfo.phone_number;
-        log('AUTHENTICATED', { phone, session: sessionRef.current });
+        const profilePictureUrl = userInfo.profile_picture_url ||
+          data.session?.profile_picture_url ||
+          (data as any)?.userInfo?.profilePictureUrl;
+        log('AUTHENTICATED', { phone, profilePictureUrl: Boolean(profilePictureUrl), session: sessionRef.current });
 
         setAccount({
           phone: phone,
           name: phone ? `+${phone}` : 'WhatsApp Account',
+          profilePictureUrl: profilePictureUrl || undefined,
           sessionId: userInfo.id,
           sessionIdentifier: sessionRef.current!,
           connectedAt: new Date().toISOString(),
@@ -656,6 +662,7 @@ export default function WhatsAppChannels() {
             setAccount({
               phone: session.phone_number,
               name: session.phone_number ? `+${session.phone_number}` : 'WhatsApp Account',
+              profilePictureUrl: session.profile_picture_url || undefined,
               sessionId: session.id,
               sessionIdentifier: session.session_identifier,
               connectedAt: session.last_connected_at || session.updated_at,
@@ -666,9 +673,13 @@ export default function WhatsAppChannels() {
             setViewMode('dashboard');
           }}>
           <div className="flex items-center gap-4">
-            <div style={{ width: 44, height: 44, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <MessageCircle size={22} style={{ color: '#25D366' }} />
-            </div>
+            {session.profile_picture_url ? (
+              <img src={session.profile_picture_url} alt="Profile" style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover', border: '2px solid #bbf7d0' }} />
+            ) : (
+              <div style={{ width: 44, height: 44, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <MessageCircle size={22} style={{ color: '#25D366' }} />
+              </div>
+            )}
             <div className="flex-1">
               <div className="flex items-center gap-2">
                 <span className="font-bold">{session.phone_number ? `+${session.phone_number}` : 'WhatsApp Channel'}</span>
@@ -855,9 +866,13 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
       {/* Status Banner */}
       <div className="card p-4 mb-4" style={{ backgroundColor: '#f0fdf4', borderLeft: '4px solid #25D366' }}>
         <div className="flex items-center gap-3">
-          <div style={{ width: 48, height: 48, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <CheckCircle2 size={24} style={{ color: '#25D366' }} />
-          </div>
+          {account.profilePictureUrl ? (
+            <img src={account.profilePictureUrl} alt="Profile" style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover', border: '2px solid #bbf7d0' }} />
+          ) : (
+            <div style={{ width: 48, height: 48, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <CheckCircle2 size={24} style={{ color: '#25D366' }} />
+            </div>
+          )}
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <span className="font-bold text-lg text-main">{account.name || 'WhatsApp Account'}</span>
@@ -1030,9 +1045,13 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
                       backgroundColor: selectedChannel?.id === ch.id ? '#f0fdf4' : '#fff',
                     }}
                     onClick={() => { setSelectedChannel(ch); setActiveTab('publish'); }}>
-                    <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <MessageCircle size={16} style={{ color: '#25D366' }} />
-                    </div>
+                    {ch.pictureUrl ? (
+                      <img src={ch.pictureUrl} alt={ch.name || 'Channel'} style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1px solid #e5e7eb' }} />
+                    ) : (
+                      <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <MessageCircle size={16} style={{ color: '#25D366' }} />
+                      </div>
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-sm truncate">{ch.name || ch.subject || `Channel ${idx + 1}`}</span>
@@ -1067,9 +1086,13 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
             <>
               {/* Selected Channel */}
               <div className="flex items-center gap-3 p-3 rounded-lg mb-4" style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0' }}>
-                <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <MessageCircle size={16} style={{ color: '#25D366' }} />
-                </div>
+                {selectedChannel.pictureUrl ? (
+                  <img src={selectedChannel.pictureUrl} alt={selectedChannel.name || 'Channel'} style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '1px solid #bbf7d0' }} />
+                ) : (
+                  <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <MessageCircle size={16} style={{ color: '#25D366' }} />
+                  </div>
+                )}
                 <div className="flex-1">
                   <div className="font-semibold text-sm">{selectedChannel.name || selectedChannel.subject || 'Channel'}</div>
                   <div className="text-xs text-gray-500">{selectedChannel.id || selectedChannel.jid}</div>

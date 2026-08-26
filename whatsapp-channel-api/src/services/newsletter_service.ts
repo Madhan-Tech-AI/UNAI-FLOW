@@ -53,11 +53,19 @@ export class NewsletterService {
             const parsed = JSON.parse(rawText);
             const list = parsed?.data?.xwa2_newsletter_subscribed_list || [];
 
-            for (const item of list) {
+              for (const item of list) {
               const jid = item.id || item.jid;
               if (jid && !seenIds.has(jid)) {
                 seenIds.add(jid);
                 const role = (item.viewer_metadata?.role || 'ADMIN').toLowerCase();
+
+                // Try to get full profile picture URL
+                let pictureUrl = item.thread_metadata?.picture?.direct_path || '';
+                try {
+                  const fullUrl = await sock.profilePictureUrl(jid, 'image');
+                  if (fullUrl) pictureUrl = fullUrl;
+                } catch {}
+
                 channels.push({
                   id: jid,
                   name: item.thread_metadata?.name?.text || item.name || 'WhatsApp Channel',
@@ -68,7 +76,7 @@ export class NewsletterService {
                   subscribers_count: parseInt(item.thread_metadata?.subscribers_count || '0', 10),
                   verified: Boolean(item.thread_metadata?.verification === 'VERIFIED'),
                   description: item.thread_metadata?.description?.text || '',
-                  pictureUrl: item.thread_metadata?.picture?.direct_path || '',
+                  pictureUrl,
                 });
               }
             }
@@ -135,6 +143,13 @@ export class NewsletterService {
           const meta = await (sock as any).newsletterMetadata('invite', inviteCode);
           if (meta && meta.id) {
             const role = (meta.viewer_metadata?.role || 'ADMIN').toLowerCase();
+            // Try to get full profile picture URL
+            let pictureUrl = meta.thread_metadata?.picture?.direct_path || '';
+            try {
+              const fullUrl = await sock.profilePictureUrl(meta.id, 'image');
+              if (fullUrl) pictureUrl = fullUrl;
+            } catch {}
+
             logger.info({ id: meta.id, name: meta.name, role }, '[WCA] RESOLVE_CHANNEL_BY_INVITE_SUCCESS');
             return {
               id: meta.id,
@@ -144,7 +159,7 @@ export class NewsletterService {
               subscribers_count: parseInt(meta.thread_metadata?.subscribers_count || '0', 10),
               verified: Boolean(meta.thread_metadata?.verification === 'VERIFIED'),
               description: meta.thread_metadata?.description?.text || '',
-              pictureUrl: meta.thread_metadata?.picture?.direct_path || '',
+              pictureUrl,
             };
           }
         }
@@ -160,6 +175,13 @@ export class NewsletterService {
         const meta = await (sock as any).newsletterMetadata('jid', jid);
         if (meta && meta.id) {
           const role = (meta.viewer_metadata?.role || 'ADMIN').toLowerCase();
+          // Try to get full profile picture URL
+          let pictureUrl = meta.thread_metadata?.picture?.direct_path || '';
+          try {
+            const fullUrl = await sock.profilePictureUrl(meta.id, 'image');
+            if (fullUrl) pictureUrl = fullUrl;
+          } catch {}
+
           logger.info({ id: meta.id, name: meta.name, role }, '[WCA] RESOLVE_CHANNEL_BY_JID_SUCCESS');
           return {
             id: meta.id,
@@ -169,7 +191,7 @@ export class NewsletterService {
             subscribers_count: parseInt(meta.thread_metadata?.subscribers_count || '0', 10),
             verified: Boolean(meta.thread_metadata?.verification === 'VERIFIED'),
             description: meta.thread_metadata?.description?.text || '',
-            pictureUrl: meta.thread_metadata?.picture?.direct_path || '',
+            pictureUrl,
           };
         }
       }

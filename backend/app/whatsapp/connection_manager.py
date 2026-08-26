@@ -256,12 +256,14 @@ class ConnectionManager:
                     user_info = full_status.get("userInfo") or full_status.get("whatsapp", {}).get("userInfo", {})
                     phone = user_info.get("phone")
                     name = user_info.get("name")
+                    profile_picture_url = user_info.get("profilePictureUrl")
                     logger.info(
                         f"[WA] SESSION_AUTHENTICATED session_id={session_identifier} "
-                        f"phone={'***' + phone[-4:] if phone and len(phone) > 4 else 'unknown'}"
+                        f"phone={'***' + phone[-4:] if phone and len(phone) > 4 else 'unknown'} "
+                        f"has_profile_pic={bool(profile_picture_url)}"
                     )
                     self.session_manager.update_session_connection_details(
-                        session["id"], phone or ""
+                        session["id"], phone or "", profile_picture_url
                     )
                     # Also link in platform_connections table
                     try:

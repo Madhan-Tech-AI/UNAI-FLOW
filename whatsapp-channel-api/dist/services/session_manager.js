@@ -94,8 +94,10 @@ class SessionManager {
             userJid: null,
             phoneNumber: null,
             userName: null,
+            profilePictureUrl: null,
             lastActive: new Date(),
             retryCount: 0,
+            _qrWasGenerated: false,
         };
         logger.info({ connectionId }, '[WCA] SESSION_INITIALIZING');
         this.sessions.set(connectionId, userSession);
@@ -122,6 +124,7 @@ class SessionManager {
             if (qr) {
                 userSession.qrCodeRaw = qr;
                 userSession.status = 'QR_READY';
+                userSession._qrWasGenerated = true;
                 userSession.qrGeneratedAt = new Date();
                 // WhatsApp QR codes typically expire in ~60 seconds
                 userSession.qrExpiresAt = new Date(Date.now() + 60 * 1000);
@@ -139,8 +142,16 @@ class SessionManager {
                 logger.info({ connectionId, qr_length: qr.length }, '[WCA] QR_GENERATED');
             }
             if (connection === 'connecting') {
-                userSession.status = 'AUTHENTICATING';
-                logger.info({ connectionId }, '[WCA] SESSION_AUTHENTICATING');
+                // Only set AUTHENTICATING if QR was previously generated (user scanned it)
+                // Otherwise this is just the initial socket boot phase — keep INITIALIZING
+                if (userSession._qrWasGenerated) {
+                    userSession.status = 'AUTHENTICATING';
+                    logger.info({ connectionId }, '[WCA] SESSION_AUTHENTICATING (QR was scanned)');
+                }
+                else {
+                    // Socket is booting up, QR hasn't been generated yet
+                    logger.info({ connectionId }, '[WCA] SESSION_CONNECTING (awaiting QR generation)');
+                }
             }
             if (connection === 'open') {
                 userSession.status = 'CONNECTED';
@@ -149,12 +160,23 @@ class SessionManager {
                 userSession.qrGeneratedAt = null;
                 userSession.qrExpiresAt = null;
                 userSession.pairingCode = null;
+                userSession._qrWasGenerated = false;
                 userSession.userJid = sock.user?.id || null;
                 userSession.userName = sock.user?.name || 'WhatsApp Account';
                 userSession.phoneNumber = sock.user?.id?.split('@')[0]?.split(':')[0] || null;
                 userSession.lastActive = new Date();
                 userSession.retryCount = 0;
-                logger.info({ connectionId, phone: userSession.phoneNumber }, '[WCA] SESSION_AUTHENTICATED');
+                // Fetch profile picture
+                try {
+                    const ppUrl = await sock.profilePictureUrl(sock.user?.id, 'image');
+                    userSession.profilePictureUrl = ppUrl || null;
+                    logger.info({ connectionId, hasProfilePic: Boolean(ppUrl) }, '[WCA] PROFILE_PICTURE_FETCHED');
+                }
+                catch (ppErr) {
+                    userSession.profilePictureUrl = null;
+                    logger.debug({ connectionId, err: ppErr }, '[WCA] PROFILE_PICTURE_NOT_AVAILABLE');
+                }
+                logger.info({ connectionId, phone: userSession.phoneNumber, name: userSession.userName }, '[WCA] SESSION_AUTHENTICATED');
             }
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;

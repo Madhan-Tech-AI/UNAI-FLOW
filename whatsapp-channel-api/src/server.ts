@@ -128,6 +128,7 @@ app.get('/v1/whatsapp/:connectionId/status', async (req: Request, res: Response)
       jid: session.userJid,
       name: session.userName,
       phone: session.phoneNumber,
+      profilePictureUrl: session.profilePictureUrl,
     },
     whatsapp: {
       state: session.status.toLowerCase(),
@@ -136,6 +137,7 @@ app.get('/v1/whatsapp/:connectionId/status', async (req: Request, res: Response)
         channel_id: (req.query.channel_id as string) || '',
         phone: session.phoneNumber,
         name: session.userName,
+        profilePictureUrl: session.profilePictureUrl,
       },
     },
   });

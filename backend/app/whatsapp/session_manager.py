@@ -101,20 +101,22 @@ class SessionManager:
         ).eq("id", session_id).execute()
 
     def update_session_connection_details(
-        self, session_id: str, phone_number: str
+        self, session_id: str, phone_number: str, profile_picture_url: str = None
     ) -> None:
         logger.info(
             f"[WA] DB_CONNECTION_DETAILS id={session_id[:8]}... "
-            f"phone={'***' + phone_number[-4:] if phone_number and len(phone_number) > 4 else 'unknown'}"
+            f"phone={'***' + phone_number[-4:] if phone_number and len(phone_number) > 4 else 'unknown'} "
+            f"has_profile_pic={bool(profile_picture_url)}"
         )
-        self.sb.table("whatsapp_sessions").update(
-            {
-                "status": "CONNECTED",
-                "phone_number": phone_number,
-                "last_connected_at": "now()",
-                "updated_at": "now()",
-            }
-        ).eq("id", session_id).execute()
+        update_data = {
+            "status": "CONNECTED",
+            "phone_number": phone_number,
+            "last_connected_at": "now()",
+            "updated_at": "now()",
+        }
+        if profile_picture_url:
+            update_data["profile_picture_url"] = profile_picture_url
+        self.sb.table("whatsapp_sessions").update(update_data).eq("id", session_id).execute()
 
     def update_session_qr(
         self,

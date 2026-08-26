@@ -208,7 +208,7 @@ class WhatsAppWebProvider(WhatsAppProvider):
         response = await self._make_request(
             "GET",
             f"/v1/whatsapp/{session_identifier}/status",
-            timeout=8.0,
+            timeout=15.0,
             max_retries=0,
         )
         response.raise_for_status()
@@ -224,7 +224,7 @@ class WhatsAppWebProvider(WhatsAppProvider):
         response = await self._make_request(
             "GET",
             f"/v1/whatsapp/{session_identifier}/status",
-            timeout=8.0,
+            timeout=15.0,
             max_retries=0,
         )
         response.raise_for_status()
@@ -245,7 +245,7 @@ class WhatsAppWebProvider(WhatsAppProvider):
         response = await self._make_request(
             "GET",
             f"/v1/whatsapp/{session_identifier}/qr",
-            timeout=8.0,
+            timeout=15.0,
             max_retries=0,
         )
 

@@ -139,3 +139,7 @@ def root():
         "docs_url": "/docs",
         "openapi_url": "/openapi.json"
     }
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "unai-flow-backend"}

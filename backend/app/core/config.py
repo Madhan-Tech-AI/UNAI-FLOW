@@ -1,5 +1,5 @@
-import os
-from typing import List, Optional
+from typing import List, Optional, Union
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -34,7 +34,23 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 100
     
     # CORS
-    cors_origins: List[str] = ["*"]
+    cors_origins: Union[List[str], str] = ["*"]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        if isinstance(v, str):
+            v_clean = v.strip()
+            if v_clean.startswith("[") and v_clean.endswith("]"):
+                import json
+                try:
+                    return json.loads(v_clean)
+                except Exception:
+                    pass
+            if v_clean == "*":
+                return ["*"]
+            return [i.strip() for i in v_clean.split(",") if i.strip()]
+        return v
 
     model_config = SettingsConfigDict(
         env_file=".env",

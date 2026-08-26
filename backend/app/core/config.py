@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # WhatsApp Channel API (WCA Engine URL & Key)
     whatsapp_provider: str = "whatsapp_web"
     whatsapp_provider_config: str = ""
-    wca_api_url: str = "http://localhost:3001"
+    wca_api_url: str = "https://unai-whatsapp-channelapi.onrender.com"
     wca_api_url_cloud: str = "https://unai-whatsapp-channelapi.onrender.com"
     wca_api_key: str = ""
     

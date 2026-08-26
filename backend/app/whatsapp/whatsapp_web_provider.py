@@ -40,7 +40,7 @@ class WhatsAppWebProvider(WhatsAppProvider):
 
         for url in candidate_urls:
             try:
-                async with httpx.AsyncClient(timeout=8.0) as client:
+                async with httpx.AsyncClient(timeout=15.0) as client:
                     r = await client.get(f"{url}/health")
                     if r.status_code == 200:
                         data = r.json()
@@ -71,7 +71,7 @@ class WhatsAppWebProvider(WhatsAppProvider):
         url = await self.resolve_gateway()
         if url:
             try:
-                async with httpx.AsyncClient(timeout=8.0) as client:
+                async with httpx.AsyncClient(timeout=15.0) as client:
                     r = await client.get(f"{url}/health")
                     if r.status_code == 200:
                         data = r.json()
@@ -159,12 +159,20 @@ class WhatsAppWebProvider(WhatsAppProvider):
     async def connect(self, session_identifier: str) -> Dict[str, Any]:
         """POST /v1/whatsapp/connect — creates or resumes a session on the gateway."""
         logger.info(f"[WA] GATEWAY_SESSION_CREATE session_id={session_identifier} request=sent")
+        # Send both field names for compatibility:
+        #   - "connection_id": required by production Python WCA (Pydantic model)
+        #   - "connectionId": accepted by local TypeScript WCA
+        #   - "session_identifier": legacy field (kept for forward compatibility)
         response = await self._make_request(
             "POST",
             "/v1/whatsapp/connect",
             timeout=35.0,
             max_retries=3,
-            json={"session_identifier": session_identifier},
+            json={
+                "connection_id": session_identifier,
+                "connectionId": session_identifier,
+                "session_identifier": session_identifier,
+            },
         )
         response.raise_for_status()
         data = response.json()

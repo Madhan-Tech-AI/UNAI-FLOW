@@ -236,6 +236,7 @@ class ConnectionManager:
         # Track gateway reachability separately
         gateway_reachable = False
         gateway_error = None
+        full_status: Dict[str, Any] = {}
 
         # Ask provider for real status
         try:
@@ -314,7 +315,7 @@ class ConnectionManager:
             result["gateway_error"] = gateway_error
 
         # If QR is ready or we are waiting for scan, fetch the pairing data
-        if session["status"] in [SessionStatus.WAITING_FOR_SCAN.value, SessionStatus.INITIALIZING.value, "QR_READY"] or full_status.get("hasQR"):
+        if full_status.get("hasQR") or session["status"] in [SessionStatus.WAITING_FOR_SCAN.value, "QR_READY"]:
             try:
                 pairing_data = await self.provider.get_pairing_data(session_identifier)
                 if pairing_data.get("type") == "qr":

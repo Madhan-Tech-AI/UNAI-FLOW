@@ -36,7 +36,7 @@ async def _warmup_wca():
     import httpx
     try:
         from app.core.config import settings
-        url = f"{settings.wca_api_url}/health"
+        url = f"{settings.wca_api_url.rstrip('/')}/health"
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(url)
             logger.info(f"[STARTUP] WCA warm-up: {r.status_code}")

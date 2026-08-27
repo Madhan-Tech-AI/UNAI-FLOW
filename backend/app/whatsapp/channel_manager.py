@@ -94,17 +94,44 @@ class ChannelManager:
         return res.data or []
 
     def select_channel(self, user_id: str, channel_id: str) -> bool:
-        # Verify ownership
+        # Verify ownership across both Supabase UUID 'id' and WhatsApp 'channel_id'
         channels = self.get_user_channels(user_id)
-        if not any(c["id"] == channel_id for c in channels):
+        target = None
+        for c in channels:
+            if c.get("id") == channel_id or c.get("channel_id") == channel_id:
+                target = c
+                break
+
+        if not target:
+            # If not in DB yet, check if user has an active session and auto-insert/select
+            sessions = self.session_manager.get_sessions_for_user(user_id)
+            connected = [s for s in sessions if s.get("status") in ("CONNECTED", "READY")]
+            if connected:
+                sess_id = connected[0]["id"]
+                # Deselect others
+                session_ids = [s["id"] for s in sessions]
+                if session_ids:
+                    self.sb.table("channels").update({"is_selected": False}).in_("whatsapp_session_id", session_ids).execute()
+
+                data = {
+                    "whatsapp_session_id": sess_id,
+                    "channel_id": channel_id,
+                    "name": "WhatsApp Channel",
+                    "is_selected": True,
+                    "role": "ADMIN"
+                }
+                res = self.sb.table("channels").insert(data).execute()
+                return bool(res.data and len(res.data) > 0)
+
             raise ValueError("Channel not found or unauthorized")
-            
-        # Deselect all for the same user (or just the same session depending on requirements)
-        session_ids = list(set(c["whatsapp_session_id"] for c in channels))
-        self.sb.table("channels").update({"is_selected": False}).in_("whatsapp_session_id", session_ids).execute()
-        
-        # Select the target channel
-        res = self.sb.table("channels").update({"is_selected": True}).eq("id", channel_id).execute()
+
+        # Deselect all for the user's sessions
+        session_ids = list(set(c["whatsapp_session_id"] for c in channels if "whatsapp_session_id" in c))
+        if session_ids:
+            self.sb.table("channels").update({"is_selected": False}).in_("whatsapp_session_id", session_ids).execute()
+
+        # Select the target channel using its primary key
+        res = self.sb.table("channels").update({"is_selected": True}).eq("id", target["id"]).execute()
         return len(res.data) > 0
 
     def delete_user_channels(self, user_id: str) -> None:

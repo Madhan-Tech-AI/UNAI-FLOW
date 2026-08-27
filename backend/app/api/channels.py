@@ -7,6 +7,8 @@ from app.whatsapp.whatsapp_web_provider import WhatsAppWebProvider
 from app.whatsapp.publisher import Publisher
 from app.core.config import settings
 import logging
+import httpx
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +35,13 @@ class PublishRequest(BaseModel):
 
 class DirectPublishRequest(BaseModel):
     session_identifier: str
-    channel_jid: str  # The @newsletter JID
+    channel_jid: str  # The @newsletter JID or invite code
     type: str = "text"
     text: Optional[str] = None
     caption: Optional[str] = None
     media_url: Optional[str] = None
+    channel_name: Optional[str] = None
+    channel_link: Optional[str] = None
 
 
 @router.get("")
@@ -94,18 +98,56 @@ async def resolve_channel(req: ResolveChannelRequest, user_id: str = Depends(get
     Extracts the official JID, title, description, subscriber count, and admin/owner role.
     Falls back to URL-based extraction if the socket resolution fails.
     """
-    import re
 
     logger.info(f"[WA] CHANNEL_RESOLVE_REQUEST session_id={req.session_identifier} input={req.link_or_code}")
     channel = await provider.resolve_channel(req.session_identifier, req.link_or_code)
 
     if not channel:
-        # Fallback: extract invite code from URL and return a basic channel object
+        # Fallback: extract invite code from URL and try scraping public preview
         raw = (req.link_or_code or "").strip()
         m = re.search(r'(?:whatsapp\.com/channel/)?([a-zA-Z0-9_-]{15,35})', raw)
         invite_code = m.group(1) if m else raw
 
-        if invite_code and len(invite_code) >= 10:
+        if not invite_code or len(invite_code) < 10:
+            raise HTTPException(
+                status_code=404,
+                detail="Could not resolve WhatsApp channel from the provided link or invite code. Please verify the URL."
+            )
+
+        # Try scraping public WhatsApp channel preview page for real metadata
+        try:
+            preview_url = f"https://www.whatsapp.com/channel/{invite_code}"
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.get(preview_url, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                })
+                if resp.status_code == 200:
+                    html = resp.text
+                    name_match = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html)
+                    name = name_match.group(1).strip() if name_match else ""
+
+                    pic_match = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', html)
+                    picture_url = pic_match.group(1).strip() if pic_match else ""
+
+                    desc_match = re.search(r'<meta\s+property="og:description"\s+content="([^"]+)"', html)
+                    description = desc_match.group(1).strip() if desc_match else ""
+
+                    if name and name.lower() not in ("whatsapp", "whatsapp channel"):
+                        logger.info(f"[WA] CHANNEL_RESOLVE_PUBLIC_PREVIEW invite_code={invite_code} name={name}")
+                        channel = {
+                            "id": invite_code,
+                            "name": name,
+                            "link": f"https://whatsapp.com/channel/{invite_code}",
+                            "role": "admin",
+                            "subscribers_count": 0,
+                            "verified": False,
+                            "description": description,
+                            "pictureUrl": picture_url,
+                        }
+        except Exception as e:
+            logger.warning(f"[WA] CHANNEL_RESOLVE_PUBLIC_PREVIEW_FAILED invite_code={invite_code} error={e}")
+
+        if not channel:
             logger.info(f"[WA] CHANNEL_RESOLVE_FALLBACK session_id={req.session_identifier} invite_code={invite_code}")
             channel = {
                 "id": invite_code,
@@ -117,11 +159,6 @@ async def resolve_channel(req: ResolveChannelRequest, user_id: str = Depends(get
                 "description": "",
                 "pictureUrl": "",
             }
-        else:
-            raise HTTPException(
-                status_code=404,
-                detail="Could not resolve WhatsApp channel from the provided link or invite code. Please verify the URL."
-            )
 
     return {"success": True, "data": channel}
 
@@ -162,19 +199,29 @@ async def publish_direct(req: DirectPublishRequest, user_id: str = Depends(get_c
     )
     try:
         body = req.text or req.caption or ""
+        ch_name = req.channel_name or ""
+        ch_link = req.channel_link or ""
 
         if req.type == "text":
-            result = await provider.publish_text(req.session_identifier, req.channel_jid, body)
+            result = await provider.publish_text(
+                req.session_identifier, req.channel_jid, body,
+                channel_name=ch_name, channel_link=ch_link
+            )
         elif req.type == "image" and req.media_url:
             result = await provider.publish_image(
-                req.session_identifier, req.channel_jid, req.media_url, req.caption or ""
+                req.session_identifier, req.channel_jid, req.media_url, req.caption or "",
+                channel_name=ch_name, channel_link=ch_link
             )
         elif req.type == "video" and req.media_url:
             result = await provider.publish_video(
-                req.session_identifier, req.channel_jid, req.media_url, req.caption or ""
+                req.session_identifier, req.channel_jid, req.media_url, req.caption or "",
+                channel_name=ch_name, channel_link=ch_link
             )
         else:
-            result = await provider.publish_text(req.session_identifier, req.channel_jid, body)
+            result = await provider.publish_text(
+                req.session_identifier, req.channel_jid, body,
+                channel_name=ch_name, channel_link=ch_link
+            )
 
         logger.info(
             f"[WA] PUBLISH_DIRECT_SUCCESS session_id={req.session_identifier} "

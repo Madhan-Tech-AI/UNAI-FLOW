@@ -1,6 +1,7 @@
 import hashlib
 import time
 import asyncio
+import httpx
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, Header, HTTPException, Response, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -221,42 +222,72 @@ async def v1_resolve_channel(connection_id: str, req: ResolveChannelRequest):
     input_str = req.link or req.code or req.channelId or req.channel_link or ""
     if not input_str:
         raise HTTPException(status_code=400, detail="Provide a channel link or invite code")
-    engine = session_manager.get(connection_id)
-    if not engine or not engine.is_ready:
-        # Fallback resolve directly from invite code / URL
-        import re
-        m = re.search(r'(?:whatsapp\.com/channel/)?([a-zA-Z0-9_-]{15,35})', input_str)
-        code = m.group(1) if m else input_str
-        return {
-            "success": True,
-            "channel": {
-                "id": code,
-                "name": "WhatsApp Channel",
-                "link": f"https://whatsapp.com/channel/{code}",
-                "role": "admin",
-                "subscribers_count": 0,
-                "verified": False,
-                "description": "",
-                "pictureUrl": "",
-            }
-        }
-    
-    # If engine is connected, get channels
-    channels_res = await engine.get_user_channels()
-    channels = channels_res.get("channels", [])
-    for ch in channels:
-        if ch.get("id") == input_str or ch.get("link") == input_str or input_str in (ch.get("link") or ""):
-            return {"success": True, "channel": ch}
-            
+
     import re
     m = re.search(r'(?:whatsapp\.com/channel/)?([a-zA-Z0-9_-]{15,35})', input_str)
-    code = m.group(1) if m else input_str
+    invite_code = m.group(1) if m else input_str
+
+    engine = session_manager.get(connection_id)
+
+    # Strategy 1: If engine is connected, resolve via Playwright (real metadata)
+    if engine and engine.is_ready:
+        # First try matching from discovered channels
+        channels_res = await engine.get_user_channels()
+        channels = channels_res.get("channels", [])
+        for ch in channels:
+            if ch.get("id") == input_str or ch.get("link") == input_str or invite_code in (ch.get("link") or "") or invite_code in (ch.get("id") or ""):
+                return {"success": True, "channel": ch}
+
+        # Try resolving via navigating to the channel in WhatsApp Web
+        resolved = await engine.resolve_channel_metadata(input_str)
+        if resolved and resolved.get("name") and resolved["name"] != "WhatsApp Channel":
+            return {"success": True, "channel": resolved}
+
+    # Strategy 2: Scrape public WhatsApp channel preview page for metadata
+    try:
+        preview_url = f"https://www.whatsapp.com/channel/{invite_code}"
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(preview_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            })
+            if resp.status_code == 200:
+                html = resp.text
+                # Extract channel name from og:title or page title
+                name_match = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html)
+                name = name_match.group(1).strip() if name_match else ""
+
+                # Extract picture from og:image
+                pic_match = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', html)
+                picture_url = pic_match.group(1).strip() if pic_match else ""
+
+                # Extract description from og:description
+                desc_match = re.search(r'<meta\s+property="og:description"\s+content="([^"]+)"', html)
+                description = desc_match.group(1).strip() if desc_match else ""
+
+                if name and name.lower() not in ("whatsapp", "whatsapp channel"):
+                    return {
+                        "success": True,
+                        "channel": {
+                            "id": invite_code,
+                            "name": name,
+                            "link": f"https://whatsapp.com/channel/{invite_code}",
+                            "role": "admin",
+                            "subscribers_count": 0,
+                            "verified": False,
+                            "description": description,
+                            "pictureUrl": picture_url,
+                        }
+                    }
+    except Exception:
+        pass  # Fall through to basic fallback
+
+    # Strategy 3: Minimal fallback
     return {
         "success": True,
         "channel": {
-            "id": code,
+            "id": invite_code,
             "name": "WhatsApp Channel",
-            "link": f"https://whatsapp.com/channel/{code}",
+            "link": f"https://whatsapp.com/channel/{invite_code}",
             "role": "admin",
             "subscribers_count": 0,
             "verified": False,

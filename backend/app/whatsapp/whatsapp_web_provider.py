@@ -327,10 +327,16 @@ class WhatsAppWebProvider(WhatsAppProvider):
     # ── Publishing ──
 
     async def publish_text(
-        self, session_identifier: str, channel_id: str, body: str
+        self, session_identifier: str, channel_id: str, body: str,
+        channel_name: str = "", channel_link: str = ""
     ) -> Dict[str, Any]:
-        logger.info(f"[WA] PUBLISH_TEXT session_id={session_identifier} channel_id={channel_id}")
-        payload = {"type": "text", "text": body}
+        logger.info(f"[WA] PUBLISH_TEXT session_id={session_identifier} channel_id={channel_id} channel_name={channel_name}")
+        payload = {
+            "type": "text",
+            "text": body,
+            "channelName": channel_name,
+            "channelLink": channel_link,
+        }
         response = await self._make_request(
             "POST",
             f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
@@ -345,10 +351,17 @@ class WhatsAppWebProvider(WhatsAppProvider):
         return result
 
     async def publish_image(
-        self, session_identifier: str, channel_id: str, media_url: str, caption: str
+        self, session_identifier: str, channel_id: str, media_url: str, caption: str,
+        channel_name: str = "", channel_link: str = ""
     ) -> Dict[str, Any]:
         logger.info(f"[WA] PUBLISH_IMAGE session_id={session_identifier} channel_id={channel_id}")
-        payload = {"type": "image", "mediaUrl": media_url, "caption": caption}
+        payload = {
+            "type": "image",
+            "mediaUrl": media_url,
+            "caption": caption,
+            "channelName": channel_name,
+            "channelLink": channel_link,
+        }
         response = await self._make_request(
             "POST",
             f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
@@ -358,10 +371,17 @@ class WhatsAppWebProvider(WhatsAppProvider):
         return response.json()
 
     async def publish_video(
-        self, session_identifier: str, channel_id: str, media_url: str, caption: str
+        self, session_identifier: str, channel_id: str, media_url: str, caption: str,
+        channel_name: str = "", channel_link: str = ""
     ) -> Dict[str, Any]:
         logger.info(f"[WA] PUBLISH_VIDEO session_id={session_identifier} channel_id={channel_id}")
-        payload = {"type": "video", "mediaUrl": media_url, "caption": caption}
+        payload = {
+            "type": "video",
+            "mediaUrl": media_url,
+            "caption": caption,
+            "channelName": channel_name,
+            "channelLink": channel_link,
+        }
         response = await self._make_request(
             "POST",
             f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
@@ -371,10 +391,16 @@ class WhatsAppWebProvider(WhatsAppProvider):
         return response.json()
 
     async def publish_link(
-        self, session_identifier: str, channel_id: str, url: str, caption: str
+        self, session_identifier: str, channel_id: str, url: str, caption: str,
+        channel_name: str = "", channel_link: str = ""
     ) -> Dict[str, Any]:
         logger.info(f"[WA] PUBLISH_LINK session_id={session_identifier} channel_id={channel_id}")
-        payload = {"type": "text", "text": f"{caption}\n{url}"}
+        payload = {
+            "type": "text",
+            "text": f"{caption}\n{url}",
+            "channelName": channel_name,
+            "channelLink": channel_link,
+        }
         response = await self._make_request(
             "POST",
             f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",

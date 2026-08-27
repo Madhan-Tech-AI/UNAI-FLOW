@@ -700,6 +700,114 @@ class WhatsAppEngine:
     async def get_qr_image(self) -> Optional[bytes]:
         return self.qr_png_bytes
 
+    async def resolve_channel_metadata(self, invite_code_or_link: str) -> Optional[Dict[str, Any]]:
+        """
+        Resolve a WhatsApp Channel's real metadata (name, picture, description, subscribers)
+        by navigating to the channel page in WhatsApp Web.
+        Returns None if the engine is not connected or resolution fails.
+        """
+        if not self.is_ready or not self.page:
+            return None
+
+        import re
+        # Extract invite code from URL if needed
+        m = re.search(r'(?:whatsapp\.com/channel/)?([a-zA-Z0-9_-]{15,35})', invite_code_or_link)
+        invite_code = m.group(1) if m else invite_code_or_link.strip()
+        channel_url = f"https://whatsapp.com/channel/{invite_code}"
+
+        async with self._lock:
+            try:
+                logger.info(f"🔍 Resolving channel metadata via WhatsApp Web: {channel_url}")
+
+                # Navigate to the channel
+                await self.page.goto(channel_url, wait_until="domcontentloaded", timeout=20000)
+                await asyncio.sleep(3)
+
+                # Scrape metadata from the channel page
+                metadata = await self.page.evaluate("""
+                    () => {
+                        const result = { name: '', pictureUrl: '', description: '', subscribers_count: 0, jid: '' };
+
+                        // Channel name from header
+                        const headerTitle = document.querySelector(
+                            'div[data-testid="conversation-info-header"] span[dir="auto"], ' +
+                            'header span[title], ' +
+                            'div[data-testid="conversation-header"] span[title], ' +
+                            'span.x1rg5ohu[title]'
+                        );
+                        if (headerTitle) {
+                            result.name = (headerTitle.getAttribute('title') || headerTitle.innerText || '').trim();
+                        }
+
+                        // Profile picture
+                        const avatar = document.querySelector(
+                            'div[data-testid="conversation-info-header"] img, ' +
+                            'header img[draggable="false"], ' +
+                            'div[data-testid="chat-avatar"] img, ' +
+                            'img[data-testid="user-avatar"], ' +
+                            'div[data-testid="conversation-header"] img'
+                        );
+                        if (avatar && avatar.src && !avatar.src.includes('default') && !avatar.src.includes('data:')) {
+                            result.pictureUrl = avatar.src;
+                        }
+
+                        // Subscriber/follower count
+                        const subTexts = Array.from(document.querySelectorAll('span[dir="auto"], span'));
+                        for (const el of subTexts) {
+                            const txt = (el.innerText || '').toLowerCase();
+                            const match = txt.match(/([\d,.]+[kKmM]?)\s*(subscribers?|followers?)/);
+                            if (match) {
+                                let num = match[1].replace(/,/g, '');
+                                if (num.toLowerCase().endsWith('k')) num = String(parseFloat(num) * 1000);
+                                if (num.toLowerCase().endsWith('m')) num = String(parseFloat(num) * 1000000);
+                                result.subscribers_count = parseInt(num) || 0;
+                                break;
+                            }
+                        }
+
+                        // Description
+                        const descEl = document.querySelector(
+                            'div[data-testid="conversation-info-header"] span[class*="selectable-text"], ' +
+                            'section span.selectable-text'
+                        );
+                        if (descEl) {
+                            result.description = (descEl.innerText || '').trim();
+                        }
+
+                        return result;
+                    }
+                """)
+
+                # Navigate back to main chat list
+                await self.page.goto("https://web.whatsapp.com/", wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(1)
+
+                channel_name = metadata.get("name", "").strip()
+                if not channel_name:
+                    logger.warning(f"⚠️ Could not resolve channel name from WhatsApp Web for {invite_code}")
+                    return None
+
+                logger.info(f"✅ Resolved channel: name='{channel_name}', subscribers={metadata.get('subscribers_count', 0)}")
+                return {
+                    "id": invite_code,
+                    "name": channel_name,
+                    "link": channel_url,
+                    "role": "admin",
+                    "subscribers_count": metadata.get("subscribers_count", 0),
+                    "verified": False,
+                    "description": metadata.get("description", ""),
+                    "pictureUrl": metadata.get("pictureUrl", ""),
+                }
+
+            except Exception as e:
+                logger.error(f"❌ Failed to resolve channel metadata: {e}")
+                # Try to navigate back to main page
+                try:
+                    await self.page.goto("https://web.whatsapp.com/", wait_until="domcontentloaded", timeout=10000)
+                except Exception:
+                    pass
+                return None
+
     async def get_user_channels(self) -> Dict[str, Any]:
         """
         Discovers all WhatsApp Channels owned or administered by the connected WhatsApp account.

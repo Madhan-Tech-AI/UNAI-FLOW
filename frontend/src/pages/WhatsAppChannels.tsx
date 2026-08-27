@@ -832,6 +832,8 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
           channel_jid: channelJid,
           type: 'text',
           text: publishText,
+          channel_name: selectedChannel.name || selectedChannel.subject || '',
+          channel_link: selectedChannel.link || `https://whatsapp.com/channel/${channelJid}`,
         }),
       });
       console.log('%c[UNAI-WA] PUBLISH_SUCCESS', 'color:#16a34a;font-weight:bold', res);

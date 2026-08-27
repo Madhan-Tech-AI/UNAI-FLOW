@@ -4,8 +4,19 @@ import asyncio
 import google.generativeai as genai
 from lib.supabase_client import supabase
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-genai_model = genai.GenerativeModel('gemini-flash-latest')
+_genai_configured = False
+_genai_model = None
+
+def _get_model():
+    global _genai_configured, _genai_model
+    if not _genai_configured:
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if api_key:
+            genai.configure(api_key=api_key)
+        _genai_configured = True
+    if _genai_model is None:
+        _genai_model = genai.GenerativeModel('gemini-2.0-flash')
+    return _genai_model
 
 with open(os.path.join(os.path.dirname(__file__), '../config/platform_rules.json'), 'r') as f:
     RULES = json.load(f)
@@ -17,7 +28,7 @@ async def _generate_single_variant(automation_id: str, platform: str, raw_conten
 
     prompt = f"{rule['instructions']}\n\nTone: {tone}\n\nContent:\n{raw_content}"
     try:
-        response = await genai_model.generate_content_async(prompt)
+        response = await _get_model().generate_content_async(prompt)
         generated_text = response.text.strip()
 
         char_count = len(generated_text)

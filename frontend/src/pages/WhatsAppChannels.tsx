@@ -4,22 +4,25 @@ import {
   CheckCircle2,
   ShieldCheck,
   RefreshCw,
-  Plus,
   MessageCircle,
   AlertTriangle,
   XCircle,
-  Wifi,
-  WifiOff,
   Clock,
-  Link2,
-  Phone,
+  ExternalLink,
+  Copy,
+  Check,
+  BadgeCheck,
+  Crown,
+  Users,
+  Info,
+  Sparkles,
 } from 'lucide-react';
 import { fetchApi, API_BASE_URL } from '../lib/apiClient';
 import { supabase } from '../lib/supabaseClient';
 
 // ── Constants ──
-const POLL_INTERVAL_MS = 2000; // Snappy 2s polling to match localhost responsiveness
-const MAX_POLL_COUNT = 300;     // 10 minutes max connection window
+const POLL_INTERVAL_MS = 2000;
+const MAX_POLL_COUNT = 300;
 
 // ── Types ──
 type ViewMode = 'list' | 'connecting' | 'dashboard';
@@ -50,7 +53,67 @@ interface ConnectedAccount {
   webhookUrl?: string;
 }
 
-// ── Production-Safe Diagnostic Logger ──
+interface WhatsAppChannelItem {
+  id: string;
+  channel_id: string;
+  name: string;
+  link?: string;
+  role?: 'owner' | 'admin' | 'subscriber' | 'guest' | string;
+  subscribers_count?: number | null;
+  followers?: number | null;
+  verified?: boolean;
+  can_publish?: boolean;
+  picture_url?: string | null;
+  pictureUrl?: string | null;
+  description?: string;
+  is_selected?: boolean;
+  selected?: boolean;
+  synced_at?: string;
+}
+
+// ── Helpers ──
+function formatSubscribers(count?: number | null): string {
+  if (count === null || count === undefined || count < 0) {
+    return 'Subscribers unavailable';
+  }
+  if (count === 0) {
+    return '0 subscribers';
+  }
+  if (count >= 1000000) {
+    return `${(count / 1000000).toFixed(1).replace(/\.0$/, '')}M subscribers`;
+  }
+  if (count >= 1000) {
+    return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}K subscribers`;
+  }
+  return `${count.toLocaleString()} subscribers`;
+}
+
+function formatRelativeTime(dateStr?: string | null): string {
+  if (!dateStr) return 'Just now';
+  try {
+    const diffMs = Date.now() - new Date(dateStr).getTime();
+    const diffSec = Math.max(0, Math.floor(diffMs / 1000));
+    if (diffSec < 10) return 'Just now';
+    if (diffSec < 60) return `${diffSec}s ago`;
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return new Date(dateStr).toLocaleDateString();
+  } catch {
+    return 'Recently';
+  }
+}
+
+function getSafeImageUrl(url?: string | null): string {
+  if (!url) return '';
+  if (url.includes('pps.whatsapp.net') || url.includes('mmg.whatsapp.net')) {
+    return `${API_BASE_URL}/api/channels/picture-proxy?url=${encodeURIComponent(url)}`;
+  }
+  return url;
+}
+
+// ── Diagnostic Logger ──
 const log = (tag: string, data: any) => {
   const prefix = `%c[UNAI-WA] ${tag}`;
   const style = tag.includes('ERROR') || tag.includes('FAILED') ? 'color:#ef4444;font-weight:bold'
@@ -71,33 +134,25 @@ export default function WhatsAppChannels() {
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [qrExpiresIn, setQrExpiresIn] = useState(30);
   const [waError, setWaError] = useState('');
-  const [waErrorCode, setWaErrorCode] = useState('');
   const [gatewayHealth, setGatewayHealth] = useState<GatewayHealth | null>(null);
-  const [channelName, setChannelName] = useState('');
 
   // ── Connected Account State ──
   const [account, setAccount] = useState<ConnectedAccount | null>(null);
-  const [showToken, setShowToken] = useState(false);
-  const [existingSessions, setExistingSessions] = useState<any[]>([]);
 
   // ── Refs ──
   const sessionRef = useRef<string | null>(null);
   const pollCountRef = useRef(0);
   const isPollingRef = useRef(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const realtimeChannelRef = useRef<any>(null);
 
-  // ── Cleanup ──
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       stopPolling();
       stopQrTimer();
-      stopQrAutoRefresh();
       unsubscribeRealtime();
     };
   }, []);
@@ -112,23 +167,21 @@ export default function WhatsAppChannels() {
       clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
     }
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
     isPollingRef.current = false;
   }, []);
 
   const stopQrTimer = useCallback(() => {
-    if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null; }
-  }, []);
-
-  const stopQrAutoRefresh = useCallback(() => {
-    if (qrRefreshRef.current) { clearInterval(qrRefreshRef.current); qrRefreshRef.current = null; }
+    if (qrTimerRef.current) {
+      clearInterval(qrTimerRef.current);
+      qrTimerRef.current = null;
+    }
   }, []);
 
   const unsubscribeRealtime = useCallback(() => {
-    if (realtimeChannelRef.current) { supabase.removeChannel(realtimeChannelRef.current); realtimeChannelRef.current = null; }
+    if (realtimeChannelRef.current) {
+      supabase.removeChannel(realtimeChannelRef.current);
+      realtimeChannelRef.current = null;
+    }
   }, []);
 
   // ── Load existing sessions ──
@@ -137,7 +190,6 @@ export default function WhatsAppChannels() {
       const res = await fetchApi('/api/whatsapp/sessions');
       const data = res?.data || [];
 
-      setExistingSessions(data);
       const connected = data.find((s: any) => s.status === 'CONNECTED' || s.status === 'READY');
       if (connected) {
         sessionRef.current = connected.session_identifier;
@@ -155,7 +207,6 @@ export default function WhatsAppChannels() {
         setViewMode('dashboard');
         log('LOADED', { status: 'CONNECTED', session: connected.session_identifier });
       } else {
-        // Only reset to list view if we didn't already have an active account in session
         if (!sessionRef.current) {
           setAccount(null);
           setViewMode('list');
@@ -174,12 +225,10 @@ export default function WhatsAppChannels() {
     try {
       const res = await fetchApi('/api/whatsapp/gateway/health');
       if (mountedRef.current) setGatewayHealth(res);
-      log('HEALTH', res);
       return res;
     } catch {
       const fallback: GatewayHealth = { ok: false, error: 'Gateway unreachable' };
       if (mountedRef.current) setGatewayHealth(fallback);
-      log('HEALTH.ERROR', fallback);
       return fallback;
     }
   };
@@ -190,7 +239,10 @@ export default function WhatsAppChannels() {
     setQrExpiresIn(30);
     qrTimerRef.current = setInterval(() => {
       setQrExpiresIn((prev) => {
-        if (prev <= 1) { stopQrTimer(); return 0; }
+        if (prev <= 1) {
+          stopQrTimer();
+          return 0;
+        }
         return prev - 1;
       });
     }, 1000);
@@ -201,17 +253,14 @@ export default function WhatsAppChannels() {
   // ── Poll Status ──
   const pollStatus = useCallback(async () => {
     if (!sessionRef.current || !mountedRef.current) return;
-    if (isPollingRef.current) return; // Prevent concurrent overlapping requests
+    if (isPollingRef.current) return;
 
     isPollingRef.current = true;
     pollCountRef.current += 1;
     if (pollCountRef.current > MAX_POLL_COUNT) {
       stopPolling();
-      stopQrAutoRefresh();
       setWaState('ERROR');
       setWaError('Connection timed out. Please try again.');
-      setWaErrorCode('TIMEOUT');
-      log('SESSION_FAILED', { reason: 'TIMEOUT', polls: pollCountRef.current });
       isPollingRef.current = false;
       return;
     }
@@ -226,28 +275,12 @@ export default function WhatsAppChannels() {
       if (!data) return;
 
       const newStatus = data.status as SessionStatus;
-      
-      log('STATUS_POLL', {
-        status: newStatus,
-        hasPairing: Boolean(data.pairing),
-        pollCount: pollCountRef.current,
-        sessionId: sessionRef.current,
-      });
+      setWaState(newStatus);
 
-      setWaState((prev) => {
-        if (newStatus !== prev) {
-          log('STATUS_CHANGED', { from: prev, to: newStatus });
-        }
-        return newStatus;
-      });
-
-      // Surface gateway errors if any
       if (data.gateway_error && !data.gateway_reachable) {
         setWaError(`Gateway: ${data.gateway_error}`);
-        log('GATEWAY_ERROR', data.gateway_error);
       }
 
-      // Handle QR delivery unconditionally whenever pairing data is present
       if (data.pairing) {
         setQrCode(data.pairing);
         setWaState((prev) => {
@@ -257,30 +290,18 @@ export default function WhatsAppChannels() {
           return prev;
         });
         startQrTimer();
-        log('QR_AVAILABLE', { type: 'qr', length: data.pairing.length });
-      } else if (newStatus === 'INITIALIZING' || newStatus === 'WAITING_FOR_SCAN') {
-        log('QR_204_NOT_READY', { status: newStatus });
       }
 
-      // Handle intermediate scan/authenticating state
-      if (newStatus === 'AUTHENTICATING' || newStatus === 'SYNCING') {
-        log('AUTHENTICATING', { session: sessionRef.current, status: newStatus });
-        // Keep polling actively — do NOT terminate or timeout
-      }
-
-      // Handle final authentication / ready
       if (newStatus === 'CONNECTED' || newStatus === 'READY' || newStatus === 'AUTHENTICATED') {
         isTerminal = true;
         stopPolling();
         stopQrTimer();
-        stopQrAutoRefresh();
 
         const userInfo = data.session || {};
         const phone = userInfo.phone_number;
         const profilePictureUrl = userInfo.profile_picture_url ||
           data.session?.profile_picture_url ||
           (data as any)?.userInfo?.profilePictureUrl;
-        log('AUTHENTICATED', { phone, profilePictureUrl: Boolean(profilePictureUrl), session: sessionRef.current });
 
         setAccount({
           phone: phone,
@@ -294,32 +315,21 @@ export default function WhatsAppChannels() {
           webhookUrl: `${API_BASE_URL}/webhooks/whatsapp`,
         });
 
-        log('CONNECTED', {
-          id: phone,
-          name: userInfo.display_name,
-          session: sessionRef.current,
-        });
-
-        // Transition to dashboard smoothly
         setTimeout(() => {
           if (mountedRef.current) setViewMode('dashboard');
-        }, 1200);
+        }, 1000);
       }
 
-      // Handle terminal errors
       if (newStatus === 'ERROR') {
         isTerminal = true;
         stopPolling();
         stopQrTimer();
-        stopQrAutoRefresh();
         setWaError(data.error || data.gateway_error || 'Connection failed.');
-        log('SESSION_FAILED', { error: data.error || data.gateway_error });
       }
     } catch (e: any) {
       log('POLL_ERROR', e.message);
     } finally {
       isPollingRef.current = false;
-      // Schedule next poll cleanly only if not terminal and still active
       if (mountedRef.current && sessionRef.current && !isTerminal) {
         if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
         pollTimerRef.current = setTimeout(() => {
@@ -327,7 +337,7 @@ export default function WhatsAppChannels() {
         }, POLL_INTERVAL_MS);
       }
     }
-  }, [startQrTimer, stopPolling, stopQrTimer, stopQrAutoRefresh]);
+  }, [startQrTimer, stopPolling, stopQrTimer]);
 
   useEffect(() => {
     pollStatusRef.current = pollStatus;
@@ -350,12 +360,8 @@ export default function WhatsAppChannels() {
         if (!mountedRef.current) return;
         const newStatus = payload.new?.status;
         if (newStatus) {
-          log('REALTIME', { status: newStatus });
           setWaState(newStatus);
-          if (['CONNECTED', 'READY', 'AUTHENTICATED', 'AUTHENTICATING'].includes(newStatus)) {
-            pollStatusRef.current?.();
-          }
-          if (newStatus === 'WAITING_FOR_SCAN') {
+          if (['CONNECTED', 'READY', 'AUTHENTICATED', 'AUTHENTICATING', 'WAITING_FOR_SCAN'].includes(newStatus)) {
             pollStatusRef.current?.();
           }
         }
@@ -368,24 +374,17 @@ export default function WhatsAppChannels() {
   const handleStartConnection = async () => {
     stopPolling();
     stopQrTimer();
-    stopQrAutoRefresh();
-    pollCountRef.current = 0; // Only reset counter for brand-new connection attempt!
+    pollCountRef.current = 0;
 
     setViewMode('connecting');
     setWaState('INITIALIZING');
     setQrCode(null);
     setWaError('');
-    setWaErrorCode('');
-
-    log('API_BASE_URL', { url: API_BASE_URL });
-    log('SESSION_CREATE', { channelName });
 
     const health = await checkGatewayHealth();
     if (!health.ok) {
       setWaState('ERROR');
-      setWaError(`WhatsApp gateway unavailable. ${health.error || 'Start the gateway service.'}`);
-      setWaErrorCode('WHATSAPP_GATEWAY_UNAVAILABLE');
-      log('SESSION_FAILED', { code: 'GATEWAY_UNAVAILABLE' });
+      setWaError(`WhatsApp gateway unavailable. ${health.error || 'Please ensure the gateway service is running.'}`);
       return;
     }
 
@@ -396,12 +395,10 @@ export default function WhatsAppChannels() {
       });
 
       const data = res.data;
-      log('SESSION_ID', { sessionId: data?.session_identifier, initialStatus: data?.status });
-
-      if (!data) { setWaState('ERROR'); setWaError('No response.'); return; }
+      if (!data) { setWaState('ERROR'); setWaError('No response received from server.'); return; }
 
       if (data.code === 'WHATSAPP_GATEWAY_UNAVAILABLE') {
-        setWaState('ERROR'); setWaError(data.error); setWaErrorCode(data.code);
+        setWaState('ERROR'); setWaError(data.error);
         return;
       }
 
@@ -413,19 +410,16 @@ export default function WhatsAppChannels() {
         return;
       }
 
-      // Subscribe + start single polling loop
       if (sessionRef.current) subscribeRealtime(sessionRef.current);
       startPolling();
 
     } catch (e: any) {
       setWaState('ERROR');
       setWaError(e.message || 'Connection failed.');
-      log('SESSION_FAILED', { error: e.message });
     }
   };
 
   const handleRefreshQR = async () => {
-    log('QR_POLL', { manual: true, session: sessionRef.current });
     setQrCode(null);
     stopQrTimer();
     try {
@@ -440,7 +434,7 @@ export default function WhatsAppChannels() {
   };
 
   const handleDisconnect = async () => {
-    if (!confirm('Disconnect WhatsApp session?')) return;
+    if (!confirm('Are you sure you want to disconnect this WhatsApp account? All linked channel authorizations will be suspended.')) return;
     try {
       if (sessionRef.current) {
         await fetchApi('/api/whatsapp/disconnect', {
@@ -448,176 +442,183 @@ export default function WhatsAppChannels() {
           body: JSON.stringify({ session_identifier: sessionRef.current }),
         });
       }
-      log('DISCONNECTED', { session: sessionRef.current });
       setAccount(null);
       setViewMode('list');
       setWaState('DISCONNECTED');
       sessionRef.current = null;
       loadExistingSessions();
     } catch {
-      alert('Failed to disconnect.');
+      alert('Failed to disconnect session.');
     }
-  };
-
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    log('COPIED', { label });
-  };
-
-  // ── Helpers ──
-  const getStatusDisplay = (status: SessionStatus) => {
-    const map: Record<string, { label: string; color: string; icon: any; code: number }> = {
-      CREATING: { label: 'Creating...', color: '#6b7280', icon: Loader2, code: 0 },
-      INITIALIZING: { label: 'Preparing QR code...', color: '#3b82f6', icon: Loader2, code: 1 },
-      WAITING_FOR_SCAN: { label: 'Scan QR Code', color: '#25D366', icon: MessageCircle, code: 3 },
-      PAIRING: { label: 'Pairing...', color: '#f59e0b', icon: Loader2, code: 2 },
-      AUTHENTICATING: { label: 'Authenticating...', color: '#f59e0b', icon: Loader2, code: 4 },
-      AUTHENTICATED: { label: 'Authenticated!', color: '#16a34a', icon: CheckCircle2, code: 4 },
-      SYNCING: { label: 'Syncing...', color: '#3b82f6', icon: Loader2, code: 2 },
-      READY: { label: 'Connected', color: '#16a34a', icon: CheckCircle2, code: 5 },
-      CONNECTED: { label: 'Connected', color: '#16a34a', icon: CheckCircle2, code: 5 },
-      DISCONNECTED: { label: 'Disconnected', color: '#ef4444', icon: WifiOff, code: 0 },
-      RECONNECTING: { label: 'Reconnecting...', color: '#f59e0b', icon: RefreshCw, code: 2 },
-      EXPIRED: { label: 'QR Expired', color: '#f59e0b', icon: Clock, code: 0 },
-      ERROR: { label: 'Error', color: '#ef4444', icon: XCircle, code: 0 },
-    };
-    return map[status] || map.ERROR;
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center" style={{ minHeight: '60vh' }}>
-        <Loader2 size={32} className="animate-spin text-primary" />
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={36} className="animate-spin text-emerald-500" />
+          <p className="text-sm font-medium text-slate-500">Loading WhatsApp Channels...</p>
+        </div>
       </div>
     );
   }
 
   // ═══════════════════════════════════════════════════════
-  // VIEW: Connected Dashboard (like Whapi.cloud)
+  // VIEW: Connected Dashboard (Redesigned SaaS Experience)
   // ═══════════════════════════════════════════════════════
   if (viewMode === 'dashboard' && account) {
-    return <DashboardView
-      account={account}
-      gatewayHealth={gatewayHealth}
-      onDisconnect={handleDisconnect}
-      onRefresh={() => { log('REFRESH_STATUS', {}); checkGatewayHealth(); loadExistingSessions(); }}
-      copyToClipboard={copyToClipboard}
-      showToken={showToken}
-      setShowToken={setShowToken}
-    />;
+    return (
+      <DashboardView
+        account={account}
+        gatewayHealth={gatewayHealth}
+        onDisconnect={handleDisconnect}
+        onRefresh={() => {
+          checkGatewayHealth();
+          loadExistingSessions();
+        }}
+      />
+    );
   }
 
   // ═══════════════════════════════════════════════════════
-  // VIEW: Connecting (QR Code / Status)
+  // VIEW: Connecting / QR Scanner
   // ═══════════════════════════════════════════════════════
   if (viewMode === 'connecting') {
-    const display = getStatusDisplay(waState);
-    const StatusIcon = display.icon;
-
     return (
-      <div style={{ maxWidth: '500px', margin: '0 auto', padding: '2rem 1.5rem' }}>
-        <button onClick={() => { setViewMode('list'); stopPolling(); stopQrTimer(); stopQrAutoRefresh(); unsubscribeRealtime(); }}
-          className="text-sm text-secondary hover:text-main mb-4 flex items-center gap-1">
-          ← Back
+      <div className="max-w-md mx-auto py-10 px-4">
+        <button
+          onClick={() => {
+            setViewMode('list');
+            stopPolling();
+            stopQrTimer();
+            unsubscribeRealtime();
+          }}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-800 mb-6 transition-colors"
+        >
+          ← Back to overview
         </button>
 
-        <div className="card p-6">
-          <h2 className="text-xl font-bold text-center mb-1">Connect WhatsApp</h2>
-          <p className="text-sm text-secondary text-center mb-5">
-            {channelName || 'WhatsApp Channel'}
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-6 sm:p-8 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-4 border border-emerald-100">
+            <MessageCircle size={26} />
+          </div>
+
+          <h2 className="text-xl font-bold text-slate-900 mb-1">Link WhatsApp Account</h2>
+          <p className="text-xs text-slate-500 mb-6">
+            Scan the QR code to grant UNAI Flow secure publishing access to your WhatsApp Channels.
           </p>
 
-          {/* Gateway Status */}
-          <div className="flex items-center justify-center gap-2 mb-4 p-2 rounded-lg" style={{
-            backgroundColor: gatewayHealth?.ok ? '#f0fdf4' : '#fef2f2',
-            border: `1px solid ${gatewayHealth?.ok ? '#bbf7d0' : '#fecaca'}`,
-          }}>
-            {gatewayHealth?.ok ? <Wifi size={14} style={{ color: '#16a34a' }} /> : <WifiOff size={14} style={{ color: '#ef4444' }} />}
-            <span className="text-xs">Gateway: <strong>{gatewayHealth?.ok ? 'Online' : 'Offline'}</strong></span>
+          {/* Gateway Status Badge */}
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium mb-6 bg-slate-50 border border-slate-200">
+            {gatewayHealth?.ok ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-slate-700">WCA Gateway Online</span>
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                <span className="text-slate-700">Gateway Connecting...</span>
+              </>
+            )}
           </div>
 
-          {/* Status Badge */}
-          <div className="flex items-center justify-center gap-2 mb-4" style={{ color: display.color }}>
-            <StatusIcon size={16} className={['CREATING', 'INITIALIZING', 'PAIRING', 'SYNCING', 'RECONNECTING'].includes(waState) ? 'animate-spin' : ''} />
-            <span className="text-sm font-semibold">{display.label}</span>
-          </div>
-
-          {/* INITIALIZING */}
+          {/* Initializing / Generating QR */}
           {(waState === 'INITIALIZING' || waState === 'CREATING') && (
-            <div className="text-center py-8">
-              <Loader2 size={40} className="animate-spin mx-auto mb-4" style={{ color: '#25D366' }} />
-              <p className="text-sm text-gray-600">Generating QR code...</p>
-              <p className="text-xs text-gray-400 mt-1">This may take up to 30 seconds for cold starts.</p>
+            <div className="py-12 flex flex-col items-center justify-center">
+              <Loader2 size={40} className="animate-spin text-emerald-500 mb-4" />
+              <p className="text-sm font-semibold text-slate-800">Generating Secure QR Code...</p>
+              <p className="text-xs text-slate-400 mt-1 max-w-xs">Initializing WhatsApp Web socket session.</p>
             </div>
           )}
 
-          {/* QR CODE */}
+          {/* QR Code Ready for Scan */}
           {waState === 'WAITING_FOR_SCAN' && (
             <div className="flex flex-col items-center">
-              <p className="text-xs text-gray-500 mb-3">
-                Open WhatsApp → Settings → Linked Devices → Link a Device
-              </p>
-
-              <div className="p-3 rounded-xl mb-3" style={{
-                backgroundColor: '#fff', border: '2px solid #e5e7eb',
-                width: 240, height: 240, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
+              <div className="p-3 bg-white rounded-2xl border-2 border-slate-100 shadow-inner mb-4">
                 {qrCode ? (
-                  <img src={qrCode} alt="QR Code" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  <img src={qrCode} alt="WhatsApp QR Code" className="w-56 h-56 object-contain rounded-lg" />
                 ) : (
-                  <div className="text-center">
-                    <Loader2 className="animate-spin mx-auto mb-2" style={{ color: '#25D366' }} />
-                    <p className="text-xs text-gray-400">Loading QR...</p>
+                  <div className="w-56 h-56 flex flex-col items-center justify-center bg-slate-50 rounded-lg">
+                    <Loader2 className="animate-spin text-emerald-500 mb-2" size={28} />
+                    <span className="text-xs text-slate-400">Rendering QR Code...</span>
                   </div>
                 )}
               </div>
 
-              {/* Timer */}
-              <div className="flex items-center gap-1 mb-3">
-                <Clock size={12} style={{ color: qrExpiresIn < 10 ? '#ef4444' : '#6b7280' }} />
-                <span className="text-xs" style={{ color: qrExpiresIn < 10 ? '#ef4444' : '#6b7280' }}>
-                  Refreshes in {qrExpiresIn}s
-                </span>
+              <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-4 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
+                <Clock size={13} className={qrExpiresIn < 10 ? 'text-rose-500' : 'text-slate-400'} />
+                <span>Code expires in <strong className={qrExpiresIn < 10 ? 'text-rose-600' : 'text-slate-700'}>{qrExpiresIn}s</strong></span>
               </div>
 
-              <button onClick={handleRefreshQR} className="text-xs px-3 py-1.5 rounded border hover:bg-gray-50 flex items-center gap-1">
-                <RefreshCw size={12} /> Refresh QR
+              <div className="text-left w-full bg-slate-50/80 rounded-xl p-3.5 border border-slate-100 text-xs text-slate-600 space-y-1.5 mb-5">
+                <p className="font-semibold text-slate-800 flex items-center gap-1.5">
+                  <Info size={13} className="text-emerald-600" /> How to connect:
+                </p>
+                <ol className="list-decimal list-inside space-y-1 text-slate-500 pl-0.5">
+                  <li>Open WhatsApp on your phone</li>
+                  <li>Go to <strong>Settings</strong> → <strong>Linked Devices</strong></li>
+                  <li>Tap <strong>Link a Device</strong> and point your camera at this QR code</li>
+                </ol>
+              </div>
+
+              <button
+                onClick={handleRefreshQR}
+                className="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors"
+              >
+                <RefreshCw size={12} /> Regenerate QR Code
               </button>
             </div>
           )}
 
-          {/* AUTHENTICATING / AUTHENTICATED / SYNCING */}
+          {/* Authenticating */}
           {(waState === 'AUTHENTICATING' || waState === 'AUTHENTICATED' || waState === 'SYNCING') && (
-            <div className="text-center py-8">
-              <CheckCircle2 size={48} className="mx-auto mb-3" style={{ color: '#25D366' }} />
-              <p className="font-bold text-lg mb-1">QR Code Scanned!</p>
-              <p className="text-sm text-gray-600">Authenticating & synchronizing session with WhatsApp...</p>
-              <Loader2 size={20} className="animate-spin mx-auto mt-3" style={{ color: '#25D366' }} />
+            <div className="py-12 flex flex-col items-center justify-center">
+              <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mb-4">
+                <CheckCircle2 size={32} />
+              </div>
+              <h3 className="text-base font-bold text-slate-900 mb-1">QR Code Scanned!</h3>
+              <p className="text-xs text-slate-500 max-w-xs mb-4">
+                Authenticating session and discovering your authorized WhatsApp Channels...
+              </p>
+              <Loader2 size={20} className="animate-spin text-emerald-600" />
             </div>
           )}
 
-          {/* EXPIRED */}
+          {/* Expired */}
           {waState === 'EXPIRED' && (
-            <div className="text-center py-6">
-              <AlertTriangle size={40} className="mx-auto mb-3" style={{ color: '#f59e0b' }} />
-              <p className="font-medium mb-3">QR code expired</p>
-              <button onClick={handleRefreshQR} className="px-4 py-2 text-white rounded text-sm" style={{ backgroundColor: '#25D366' }}>
-                Generate New QR
+            <div className="py-8">
+              <AlertTriangle size={36} className="text-amber-500 mx-auto mb-3" />
+              <h3 className="text-base font-bold text-slate-900 mb-1">QR Code Expired</h3>
+              <p className="text-xs text-slate-500 mb-4">The pairing session expired for security reasons.</p>
+              <button
+                onClick={handleRefreshQR}
+                className="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors"
+              >
+                Generate New Code
               </button>
             </div>
           )}
 
-          {/* ERROR */}
+          {/* Error */}
           {waState === 'ERROR' && (
-            <div className="text-center py-6">
-              <XCircle size={40} className="mx-auto mb-3" style={{ color: '#ef4444' }} />
-              <p className="font-medium text-red-600 mb-1">
-                {waErrorCode === 'WHATSAPP_GATEWAY_UNAVAILABLE' ? 'Gateway Unavailable' : waErrorCode === 'TIMEOUT' ? 'Connection Timed Out' : 'Connection Failed'}
-              </p>
-              <p className="text-xs text-gray-500 mb-4">{waError}</p>
+            <div className="py-8">
+              <XCircle size={36} className="text-rose-500 mx-auto mb-3" />
+              <h3 className="text-base font-bold text-slate-900 mb-1">Connection Failed</h3>
+              <p className="text-xs text-slate-500 mb-4 max-w-xs mx-auto">{waError || 'Could not complete pairing.'}</p>
               <div className="flex gap-2 justify-center">
-                <button onClick={handleStartConnection} className="px-4 py-2 text-white rounded text-sm" style={{ backgroundColor: '#25D366' }}>Retry</button>
-                <button onClick={() => setViewMode('list')} className="px-4 py-2 border rounded text-sm">Cancel</button>
+                <button
+                  onClick={handleStartConnection}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors"
+                >
+                  Try Again
+                </button>
+                <button
+                  onClick={() => setViewMode('list')}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           )}
@@ -627,453 +628,512 @@ export default function WhatsAppChannels() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // VIEW: Channel List (Default)
+  // VIEW: Setup / Connect WhatsApp View
   // ═══════════════════════════════════════════════════════
   return (
-    <div style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem 1.5rem' }}>
-      <div className="flex items-center justify-between mb-6">
+    <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6">
+      {/* Page Header */}
+      <div className="mb-8">
+        <div className="flex items-center gap-2 mb-1.5">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">WhatsApp Channels</h1>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
+            v2.4 Live
+          </span>
+        </div>
+        <p className="text-sm text-slate-500 max-w-2xl">
+          Connect your WhatsApp account to automatically discover and publish AI-generated marketing campaigns to your managed Channels.
+        </p>
+      </div>
+
+      {/* Security Info Card */}
+      <div className="bg-gradient-to-r from-emerald-500/5 via-teal-500/5 to-emerald-500/5 rounded-2xl p-4 border border-emerald-100 mb-8 flex items-start gap-3.5">
+        <div className="p-2 rounded-xl bg-emerald-100/80 text-emerald-700 shrink-0 mt-0.5">
+          <ShieldCheck size={18} />
+        </div>
         <div>
-          <h1 className="text-2xl font-bold text-main">WhatsApp Channels</h1>
-          <p className="text-sm text-secondary mt-1">Connect your WhatsApp account to publish to Channels.</p>
+          <h4 className="text-sm font-bold text-slate-900">Authorized Ownership Only</h4>
+          <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+            UNAI Flow strictly enforces server-side ownership verification. Only WhatsApp Channels where your connected WhatsApp account has proven <strong>Admin</strong> or <strong>Owner</strong> roles are accessible for automation.
+          </p>
         </div>
       </div>
 
-      {/* Security Banner */}
-      <div className="card flex items-center gap-3 p-4 mb-6" style={{ backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }}>
-        <ShieldCheck size={20} style={{ color: '#16a34a', flexShrink: 0 }} />
-        <div>
-          <p className="text-sm font-semibold text-main">End-to-End Encrypted</p>
-          <p className="text-xs text-secondary">All sessions are encrypted at rest with AES-256.</p>
+      {/* Connect Card */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6 sm:p-8 text-center max-w-lg mx-auto">
+        <div className="w-14 h-14 rounded-2xl bg-emerald-500 text-white flex items-center justify-center mx-auto mb-4 shadow-md shadow-emerald-500/20">
+          <MessageCircle size={30} />
         </div>
-      </div>
 
-      {/* Existing Connected Sessions */}
-      {existingSessions.filter(s => s.status === 'CONNECTED' || s.status === 'READY').map((session) => (
-        <div key={session.id} className="card p-5 mb-4 cursor-pointer hover:shadow-md transition-shadow"
-          style={{ borderLeft: '4px solid #25D366' }}
-          onClick={() => {
-            sessionRef.current = session.session_identifier;
-            setAccount({
-              phone: session.phone_number,
-              name: session.phone_number ? `+${session.phone_number}` : 'WhatsApp Account',
-              profilePictureUrl: session.profile_picture_url || undefined,
-              sessionId: session.id,
-              sessionIdentifier: session.session_identifier,
-              connectedAt: session.last_connected_at || session.updated_at,
-              apiUrl: `${window.location.origin}/api/whatsapp/v1`,
-              apiToken: `whp_live_${session.session_identifier?.slice(5, 21)}`,
-              webhookUrl: `${window.location.origin}/webhooks/whatsapp`,
-            });
-            setViewMode('dashboard');
-          }}>
-          <div className="flex items-center gap-4">
-            {session.profile_picture_url ? (
-              <img src={session.profile_picture_url} alt="Profile" style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover', border: '2px solid #bbf7d0' }} />
-            ) : (
-              <div style={{ width: 44, height: 44, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <MessageCircle size={22} style={{ color: '#25D366' }} />
-              </div>
-            )}
-            <div className="flex-1">
-              <div className="flex items-center gap-2">
-                <span className="font-bold">{session.phone_number ? `+${session.phone_number}` : 'WhatsApp Channel'}</span>
-                <span className="chip chip-success" style={{ fontSize: 10 }}><CheckCircle2 size={10} /> Connected</span>
-              </div>
-              <p className="text-xs text-secondary mt-0.5">{session.session_identifier}</p>
-            </div>
-            <span className="text-xs text-secondary">View Dashboard →</span>
-          </div>
-        </div>
-      ))}
+        <h3 className="text-lg font-bold text-slate-900 mb-1">Connect Your WhatsApp Account</h3>
+        <p className="text-xs text-slate-500 mb-6 max-w-sm mx-auto">
+          Scan the QR code with WhatsApp on your smartphone to automatically link all your managed WhatsApp Channels.
+        </p>
 
-      {/* New Channel Card */}
-      <div className="card p-6" style={{ borderStyle: 'dashed', borderColor: '#25D366', backgroundColor: '#fafffe' }}>
-        <h3 className="font-bold mb-3 flex items-center gap-2">
-          <Plus size={18} style={{ color: '#25D366' }} /> New WhatsApp Channel
-        </h3>
-        <div className="mb-3">
-          <label className="block text-sm font-medium mb-1">Channel Name</label>
-          <input type="text" className="w-full px-3 py-2 border rounded-lg text-sm"
-            placeholder="My WhatsApp Channel"
-            value={channelName} onChange={(e) => setChannelName(e.target.value)} />
-        </div>
         <button
-          className="w-full py-2.5 text-white rounded-lg font-medium flex items-center justify-center gap-2"
-          style={{ backgroundColor: '#25D366' }}
-          onClick={() => {
-            checkGatewayHealth().then(() => handleStartConnection());
-          }}>
-          <MessageCircle size={18} /> Create & Connect
+          onClick={handleStartConnection}
+          className="w-full py-3 px-4 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] transition-all shadow-sm flex items-center justify-center gap-2"
+        >
+          <Sparkles size={16} /> Link WhatsApp Account
         </button>
+
+        <div className="flex items-center justify-center gap-4 mt-6 text-xs text-slate-400">
+          <span className="flex items-center gap-1">
+            <Check size={13} className="text-emerald-500" /> Automatic Discovery
+          </span>
+          <span>•</span>
+          <span className="flex items-center gap-1">
+            <Check size={13} className="text-emerald-500" /> Verified Channels Only
+          </span>
+        </div>
       </div>
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════════════
+// DashboardView Component (SaaS Management & Real-Time Sync)
 // ═══════════════════════════════════════════════════════
-// DashboardView Component (Simplified: Direct Channel Management)
-// ═══════════════════════════════════════════════════════
-function DashboardView({ account, onDisconnect, onRefresh }: {
-  account: any;
-  gatewayHealth?: any;
+function DashboardView({
+  account,
+  onDisconnect,
+  onRefresh,
+}: {
+  account: ConnectedAccount;
+  gatewayHealth?: GatewayHealth | null;
   onDisconnect: () => void;
   onRefresh: () => void;
-  copyToClipboard?: (text: string, label: string) => void;
-  showToken?: boolean;
-  setShowToken?: (v: boolean) => void;
 }) {
-  const [channels, setChannels] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem(`wa_channels_${account?.sessionIdentifier}`);
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [channels, setChannels] = useState<WhatsAppChannelItem[]>([]);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [loadingChannels, setLoadingChannels] = useState(false);
-  const [channelLinkInput, setChannelLinkInput] = useState('');
-  const [resolvingLink, setResolvingLink] = useState(false);
-  const [resolveError, setResolveError] = useState('');
+  const [lastSyncedAt, setLastSyncedAt] = useState<string>(new Date().toISOString());
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedSession, setCopiedSession] = useState(false);
+  const [selectingChannelId, setSelectingChannelId] = useState<string | null>(null);
 
-  const saveChannelsList = (updated: any[]) => {
-    setChannels(updated);
-    try {
-      localStorage.setItem(`wa_channels_${account?.sessionIdentifier}`, JSON.stringify(updated));
-    } catch {}
-  };
-
-  const loadPersistedAndDiscoverChannels = async () => {
+  const fetchChannels = async () => {
+    if (!account?.sessionIdentifier) return;
     setLoadingChannels(true);
     try {
-      // 1. Load from DB first for instant display
-      const dbRes = await fetchApi('/api/channels/user-channels');
-      if (dbRes?.data && dbRes.data.length > 0) {
-        const mapped = dbRes.data.map((c: any) => ({
-          id: c.channel_id || c.id,
-          name: c.name || 'WhatsApp Channel',
-          role: c.role || 'ADMIN',
-          pictureUrl: c.picture_url,
-          subscribers_count: c.followers || 0,
-          description: c.description || '',
-          isSelected: c.is_selected || false
-        }));
-        saveChannelsList(mapped);
-        const sel = mapped.find((m: any) => m.isSelected);
-        if (sel) setSelectedChannelId(sel.id);
-        else if (mapped.length > 0) setSelectedChannelId(mapped[0].id);
-      }
+      // 1. Fetch live discovered channels from provider
+      const discoverRes = await fetchApi(`/api/channels/discover?session_identifier=${account.sessionIdentifier}`);
+      const rawChannels = discoverRes?.data || [];
 
-      // 2. Discover / sync with gateway in background
-      if (account?.sessionIdentifier) {
-        const res = await fetchApi(`/api/channels/discover?session_identifier=${account.sessionIdentifier}`);
-        const data = res?.data || [];
-        if (data.length > 0) {
-          saveChannelsList(data);
-          if (!selectedChannelId) setSelectedChannelId(data[0].id);
+      if (rawChannels.length > 0) {
+        const mapped: WhatsAppChannelItem[] = rawChannels.map((c: any) => ({
+          id: c.id || c.channel_id,
+          channel_id: c.channel_id || c.id,
+          name: c.name || c.channel_name || 'WhatsApp Channel',
+          link: c.link || c.channel_link || `https://whatsapp.com/channel/${c.id || c.channel_id}`,
+          role: (c.role || 'admin').toLowerCase(),
+          subscribers_count: c.subscribers_count !== undefined ? c.subscribers_count : (c.followers !== undefined ? c.followers : null),
+          verified: Boolean(c.verified),
+          can_publish: c.can_publish !== undefined ? c.can_publish : (c.role === 'owner' || c.role === 'admin'),
+          picture_url: c.picture_url || c.pictureUrl || null,
+          pictureUrl: c.pictureUrl || c.picture_url || null,
+          description: c.description || '',
+          is_selected: Boolean(c.is_selected || c.selected),
+          selected: Boolean(c.selected || c.is_selected),
+          synced_at: c.synced_at || new Date().toISOString(),
+        }));
+
+        setChannels(mapped);
+        setLastSyncedAt(new Date().toISOString());
+
+        const activeSelected = mapped.find(m => m.is_selected || m.selected);
+        if (activeSelected) {
+          setSelectedChannelId(activeSelected.id);
+        } else if (mapped.length > 0 && !selectedChannelId) {
+          setSelectedChannelId(mapped[0].id);
+        }
+      } else {
+        // Fallback to cached DB channels
+        const dbRes = await fetchApi('/api/channels/user-channels');
+        if (dbRes?.data) {
+          const mapped: WhatsAppChannelItem[] = dbRes.data.map((c: any) => ({
+            id: c.channel_id || c.id,
+            channel_id: c.channel_id || c.id,
+            name: c.name || c.channel_name || 'WhatsApp Channel',
+            link: c.link || c.channel_link || `https://whatsapp.com/channel/${c.channel_id || c.id}`,
+            role: (c.role || 'admin').toLowerCase(),
+            subscribers_count: c.subscribers_count !== undefined ? c.subscribers_count : (c.followers !== undefined ? c.followers : null),
+            verified: Boolean(c.verified),
+            can_publish: c.role === 'owner' || c.role === 'admin',
+            picture_url: c.picture_url || c.pictureUrl || null,
+            pictureUrl: c.pictureUrl || c.picture_url || null,
+            description: c.description || '',
+            is_selected: Boolean(c.is_selected || c.selected),
+            selected: Boolean(c.selected || c.is_selected),
+            synced_at: c.synced_at || new Date().toISOString(),
+          }));
+          setChannels(mapped);
+          setLastSyncedAt(new Date().toISOString());
+          const sel = mapped.find(m => m.is_selected || m.selected);
+          if (sel) setSelectedChannelId(sel.id);
         }
       }
-    } catch (e: any) {
-      console.error('[UNAI-WA] CHANNELS_LOAD_ERROR', e);
+    } catch (err) {
+      console.error('[UNAI-WA] Channels fetch error:', err);
     } finally {
       setLoadingChannels(false);
     }
   };
 
   useEffect(() => {
-    loadPersistedAndDiscoverChannels();
+    fetchChannels();
   }, [account?.sessionIdentifier]);
 
-  const discoverChannels = async () => {
-    if (!account?.sessionIdentifier) return;
-    setLoadingChannels(true);
-    console.log('%c[UNAI-WA] CHANNELS_REFRESH', 'color:#25D366;font-weight:bold', { session: account.sessionIdentifier });
-    try {
-      // 1. Fetch latest channels from DB
-      const dbRes = await fetchApi('/api/channels/user-channels');
-      if (dbRes?.data && dbRes.data.length > 0) {
-        const mapped = dbRes.data.map((c: any) => ({
-          id: c.channel_id || c.id,
-          name: c.name || c.channel_name || 'WhatsApp Channel',
-          role: c.role || 'ADMIN',
-          pictureUrl: c.picture_url || c.pictureUrl,
-          subscribers_count: c.followers || c.subscribers_count || 0,
-          description: c.description || '',
-          isSelected: c.is_selected || c.selected || false
-        }));
-        saveChannelsList(mapped);
-        const sel = mapped.find((m: any) => m.isSelected);
-        if (sel) setSelectedChannelId(sel.id);
-        else if (!selectedChannelId && mapped.length > 0) setSelectedChannelId(mapped[0].id);
-      }
+  const handleSelectChannel = async (channel: WhatsAppChannelItem) => {
+    const chId = channel.id || channel.channel_id;
+    if (selectedChannelId === chId) return;
 
-      // 2. Discover from gateway
-      const res = await fetchApi(`/api/channels/discover?session_identifier=${account.sessionIdentifier}`);
-      const data = res?.data || [];
-      if (data.length > 0) {
-        saveChannelsList(data);
-        if (!selectedChannelId) setSelectedChannelId(data[0].id);
-      }
-    } catch (e: any) {
-      console.error('[UNAI-WA] CHANNELS_ERROR', e);
-    } finally {
-      setLoadingChannels(false);
-    }
-  };
-
-  const handleLinkChannel = async () => {
-    const input = channelLinkInput.trim();
-    if (!input) return;
-    setResolvingLink(true);
-    setResolveError('');
-
-    log('CHANNEL_RESOLVE_REQUEST', { input, session: account.sessionIdentifier, apiBase: API_BASE_URL });
-    try {
-      const res = await fetchApi('/api/channels/resolve', {
-        method: 'POST',
-        body: JSON.stringify({
-          session_identifier: account.sessionIdentifier,
-          link_or_code: input,
-        }),
-      });
-
-      const newCh = res?.data;
-      if (newCh) {
-        log('CHANNEL_RESOLVE_SUCCESS', newCh);
-        const existingWithoutThis = channels.filter(c => c.id !== newCh.id);
-        const updated = [newCh, ...existingWithoutThis];
-        saveChannelsList(updated);
-        setSelectedChannelId(newCh.id);
-        setChannelLinkInput('');
-      } else {
-        setResolveError('Channel not found. Please verify the URL or invite code.');
-      }
-    } catch (e: any) {
-      log('CHANNEL_RESOLVE_FAILED', { error: e.message });
-      setResolveError(e.message || 'Failed to link channel. Make sure your WhatsApp account has access.');
-    } finally {
-      setResolvingLink(false);
-    }
-  };
-
-  const handleSelectChannel = async (ch: any) => {
-    const chId = ch.id || ch.jid || ch.channel_id;
+    setSelectingChannelId(chId);
     setSelectedChannelId(chId);
+
     try {
-      if (ch.id && typeof ch.id === 'string' && !ch.id.includes('@')) {
-        await fetchApi(`/api/channels/${ch.id}/select`, { method: 'POST' });
-      }
+      await fetchApi(`/api/channels/${chId}/select`, { method: 'POST' });
+      setChannels(prev => prev.map(c => ({
+        ...c,
+        is_selected: c.id === chId || c.channel_id === chId,
+        selected: c.id === chId || c.channel_id === chId,
+      })));
     } catch (e) {
-      console.log('Channel select local update');
+      console.error('Channel selection error:', e);
+    } finally {
+      setSelectingChannelId(null);
     }
   };
 
-  const getProfileImageUrl = (url?: string) => {
-    if (!url) return '';
-    if (url.includes('pps.whatsapp.net') || url.includes('mmg.whatsapp.net')) {
-      return `${API_BASE_URL}/api/channels/picture-proxy?url=${encodeURIComponent(url)}`;
-    }
-    return url;
+  const copySessionId = () => {
+    if (!account?.sessionIdentifier) return;
+    navigator.clipboard.writeText(account.sessionIdentifier);
+    setCopiedSession(true);
+    setTimeout(() => setCopiedSession(false), 2000);
+  };
+
+  const copyChannelId = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(id);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   return (
-    <div style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem 1.5rem' }}>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+    <div className="max-w-5xl mx-auto py-8 px-4 sm:px-6">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-main">WhatsApp Channel</h1>
-          <p className="text-sm text-secondary mt-1">Channel ID: {account.sessionIdentifier}</p>
+          <div className="flex items-center gap-2 mb-1">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">WhatsApp Channels</h1>
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Connected
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500">
+            Manage, verify, and publish AI-generated campaigns to your authorized WhatsApp Channels.
+          </p>
         </div>
-        <div className="flex gap-2">
-          <button className="btn-secondary" onClick={() => { onRefresh(); discoverChannels(); }}>
-            <RefreshCw size={15} /> <span>Refresh</span>
+
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => {
+              onRefresh();
+              fetchChannels();
+            }}
+            disabled={loadingChannels}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={loadingChannels ? 'animate-spin text-emerald-600' : 'text-slate-500'} />
+            <span>{loadingChannels ? 'Syncing Channels...' : 'Sync Channels'}</span>
           </button>
-          <button className="btn-secondary" style={{ color: '#ef4444', borderColor: '#fecaca' }} onClick={onDisconnect}>
+
+          <button
+            onClick={onDisconnect}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-600 bg-rose-50/80 border border-rose-200/80 hover:bg-rose-100/80 transition-all"
+          >
             Disconnect
           </button>
         </div>
       </div>
 
-      {/* Connected Account Status Banner */}
-      <div className="card p-4 mb-6" style={{ backgroundColor: '#ffffff', borderLeft: '4px solid #25D366' }}>
-        <div className="flex items-center gap-3">
-          {account.profilePictureUrl ? (
-            <img
-              src={getProfileImageUrl(account.profilePictureUrl)}
-              alt="Profile"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-              style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover', border: '2px solid #bbf7d0' }}
-            />
-          ) : (
-            <div style={{ width: 48, height: 48, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <MessageCircle size={24} style={{ color: '#25D366' }} />
-            </div>
-          )}
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-lg text-main">{account.phone ? `+${account.phone}` : (account.name || 'WhatsApp Account')}</span>
-              <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>● Online</span>
-            </div>
-            {account.phone && (
-              <div className="flex items-center gap-1 text-sm text-secondary mt-0.5">
-                <Phone size={13} /> <span>+{account.phone}</span>
+      {/* ── Connected Account Banner ── */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6 mb-8 relative overflow-hidden">
+        <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-emerald-500" />
+        
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
+          {/* Account Profile Details */}
+          <div className="flex items-center gap-4">
+            <div className="relative">
+              {account.profilePictureUrl ? (
+                <img
+                  src={getSafeImageUrl(account.profilePictureUrl)}
+                  alt="WhatsApp Profile"
+                  className="w-14 h-14 rounded-2xl object-cover border-2 border-emerald-100 shadow-sm"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                    const fallback = (e.target as HTMLElement).nextElementSibling as HTMLElement;
+                    if (fallback) fallback.style.display = 'flex';
+                  }}
+                />
+              ) : null}
+              <div
+                className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-600 text-white flex items-center justify-center shadow-sm"
+                style={{ display: account.profilePictureUrl ? 'none' : 'flex' }}
+              >
+                <MessageCircle size={28} />
               </div>
-            )}
-            <p className="text-xs text-muted mt-1">
-              Connected {account.connectedAt ? new Date(account.connectedAt).toLocaleString() : 'just now'}
-            </p>
+              <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 border-2 border-white" />
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-base text-slate-900">
+                  {account.phone ? `+${account.phone}` : (account.name || 'WhatsApp Account')}
+                </span>
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60">
+                  ● Online & Ready
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-y-1 gap-x-3 text-xs text-slate-500 mt-1">
+                <button
+                  onClick={copySessionId}
+                  className="inline-flex items-center gap-1 font-mono text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 px-2 py-0.5 rounded border border-slate-200 transition-colors"
+                  title="Click to copy Session Identifier"
+                >
+                  <span>{account.sessionIdentifier?.slice(0, 16)}...</span>
+                  {copiedSession ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+                </button>
+
+                <span>•</span>
+                <span>Connected {account.connectedAt ? new Date(account.connectedAt).toLocaleDateString() : 'Active'}</span>
+                <span>•</span>
+                <span className="text-slate-400">Last synced: {formatRelativeTime(lastSyncedAt)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Metrics */}
+          <div className="flex items-center gap-3 self-start md:self-auto border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
+            <div className="px-4 py-2 bg-slate-50 rounded-xl border border-slate-100 text-center">
+              <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">Authorized</span>
+              <span className="text-base font-bold text-slate-900">{channels.length} {channels.length === 1 ? 'Channel' : 'Channels'}</span>
+            </div>
+            <div className="px-4 py-2 bg-emerald-50/60 rounded-xl border border-emerald-100 text-center">
+              <span className="text-[11px] font-medium text-emerald-600 block uppercase tracking-wider">Role</span>
+              <span className="text-base font-bold text-emerald-800">Admin/Owner</span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Link Channel by URL or Invite Code */}
-      <div className="card p-5 mb-6" style={{ backgroundColor: '#fafffe', border: '1px solid #bbf7d0' }}>
-        <h4 className="font-bold text-sm text-main mb-1 flex items-center gap-2">
-          <Link2 size={16} style={{ color: '#25D366' }} /> Link Channel by Invite Link or Code
-        </h4>
-        <p className="text-xs text-secondary mb-3">
-          Paste your channel's public link (e.g. <code>https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M</code>) to import and publish to it immediately.
-        </p>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            className="flex-1 px-3 py-2 border rounded-lg text-sm bg-white"
-            placeholder="https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M"
-            value={channelLinkInput}
-            onChange={(e) => setChannelLinkInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleLinkChannel(); }}
-          />
-          <button
-            onClick={handleLinkChannel}
-            disabled={resolvingLink || !channelLinkInput.trim()}
-            className="px-4 py-2 text-white rounded-lg text-sm font-medium flex items-center gap-1.5 disabled:opacity-50"
-            style={{ backgroundColor: '#25D366' }}>
-            {resolvingLink ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-            <span>+ Link Channel</span>
-          </button>
-        </div>
-        {resolveError && (
-          <p className="text-xs text-red-600 mt-2">{resolveError}</p>
-        )}
-      </div>
-
-      {/* Your WhatsApp Channels List */}
-      <div className="card p-5">
+      {/* ── Channels List Section ── */}
+      <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-bold text-main">Your WhatsApp Channels</h3>
-          <button
-            onClick={discoverChannels}
-            disabled={loadingChannels}
-            className="px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-50 flex items-center gap-1.5 font-medium"
-            style={{ borderColor: '#e2e8f0' }}
-          >
-            <RefreshCw size={12} className={loadingChannels ? 'animate-spin' : ''} />
-            <span>{loadingChannels ? 'Discovering...' : 'Auto-Discover'}</span>
-          </button>
-        </div>
-
-        {loadingChannels && channels.length === 0 ? (
-          <div className="text-center py-8">
-            <Loader2 size={28} className="animate-spin mx-auto mb-2" style={{ color: '#25D366' }} />
-            <p className="text-sm text-gray-500">Discovering your WhatsApp Channels...</p>
-          </div>
-        ) : channels.length === 0 ? (
-          <div className="text-center py-8">
-            <MessageCircle size={36} className="mx-auto mb-3" style={{ color: '#cbd5e1' }} />
-            <p className="text-sm text-gray-600 font-medium mb-1">No channels linked yet.</p>
-            <p className="text-xs text-gray-400 max-w-md mx-auto">
-              Paste your channel link above or click "Auto-Discover" to automatically load channels you administer.
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <span>Your WhatsApp Channels</span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+                {channels.length}
+              </span>
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Channels automatically discovered through your authenticated WhatsApp account.
             </p>
           </div>
-        ) : (
+        </div>
+
+        {/* Loading Skeletons */}
+        {loadingChannels && channels.length === 0 && (
           <div className="space-y-3">
-            {channels.map((ch: any, idx: number) => {
-              const chId = ch.id || ch.jid || ch.channel_id || `channel_${idx}`;
-              const isSelected = selectedChannelId === chId;
-              const picUrl = getProfileImageUrl(ch.pictureUrl || ch.picture_url || ch.picture);
+            {[1, 2].map((n) => (
+              <div key={n} className="bg-white rounded-2xl border border-slate-200/80 p-5 flex items-center gap-4 animate-pulse">
+                <div className="w-14 h-14 rounded-2xl bg-slate-100 shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 bg-slate-100 rounded w-1/3" />
+                  <div className="h-3 bg-slate-100 rounded w-1/4" />
+                </div>
+                <div className="w-24 h-8 bg-slate-100 rounded-xl" />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Empty State */}
+        {!loadingChannels && channels.length === 0 && (
+          <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-slate-50 text-slate-400 flex items-center justify-center mx-auto mb-3 border border-slate-200">
+              <Users size={26} />
+            </div>
+            <h3 className="text-base font-bold text-slate-900 mb-1">No Manageable Channels Found</h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto mb-6 leading-relaxed">
+              We couldn't find any WhatsApp Channels where your connected account (+{account.phone || 'account'}) is an <strong>Admin</strong> or <strong>Owner</strong>.
+              Once you create or are assigned admin permissions on a channel in WhatsApp, click below to sync.
+            </p>
+            <button
+              onClick={fetchChannels}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-sm"
+            >
+              <RefreshCw size={13} /> Re-Scan WhatsApp Channels
+            </button>
+          </div>
+        )}
+
+        {/* Channels Grid / List */}
+        {channels.length > 0 && (
+          <div className="space-y-3.5">
+            {channels.map((channel) => {
+              const isSelected = selectedChannelId === channel.id || selectedChannelId === channel.channel_id;
+              const isSelecting = selectingChannelId === channel.id || selectingChannelId === channel.channel_id;
+              const isOwner = channel.role === 'owner';
+              const isAdmin = channel.role === 'admin' || isOwner;
+              const avatarSrc = getSafeImageUrl(channel.pictureUrl || channel.picture_url);
 
               return (
                 <div
-                  key={chId}
-                  className="flex items-center gap-3.5 p-3.5 rounded-xl border transition-all"
-                  style={{
-                    borderColor: isSelected ? '#25D366' : '#e2e8f0',
-                    backgroundColor: isSelected ? '#f0fdf4' : '#ffffff',
-                    boxShadow: isSelected ? '0 1px 3px rgba(37,211,102,0.1)' : 'none',
-                  }}
-                  onClick={() => handleSelectChannel(ch)}
+                  key={channel.id || channel.channel_id}
+                  onClick={() => handleSelectChannel(channel)}
+                  className={`group relative bg-white rounded-2xl border transition-all duration-200 cursor-pointer p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                    isSelected
+                      ? 'border-emerald-500 shadow-sm bg-gradient-to-r from-emerald-50/40 via-white to-white ring-1 ring-emerald-500/30'
+                      : 'border-slate-200/90 hover:border-slate-300 hover:shadow-sm'
+                  }`}
                 >
-                  {picUrl ? (
-                    <img
-                      src={picUrl}
-                      alt={ch.name || 'Channel'}
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                        const fallback = (e.target as HTMLImageElement).nextElementSibling as HTMLElement;
-                        if (fallback) fallback.style.display = 'flex';
-                      }}
-                      style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1px solid #dcfce7' }}
-                    />
-                  ) : null}
-                  <div
-                    style={{
-                      width: 44,
-                      height: 44,
-                      borderRadius: '50%',
-                      backgroundColor: '#dcfce7',
-                      display: picUrl ? 'none' : 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                    }}
-                  >
-                    <MessageCircle size={20} style={{ color: '#25D366' }} />
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-sm text-main truncate">{ch.name || ch.subject || 'WhatsApp Channel'}</span>
-                      {ch.role && (
-                        <span
-                          className="chip"
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 700,
-                            padding: '2px 6px',
-                            backgroundColor: '#dcfce7',
-                            color: '#166534',
-                            borderRadius: '4px',
+                  {/* Left Column: Avatar & Metadata */}
+                  <div className="flex items-start sm:items-center gap-4 min-w-0">
+                    {/* Channel Avatar */}
+                    <div className="relative shrink-0">
+                      {avatarSrc ? (
+                        <img
+                          src={avatarSrc}
+                          alt={channel.name}
+                          className="w-14 h-14 rounded-2xl object-cover border border-slate-100 shadow-sm group-hover:scale-[1.02] transition-transform"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                            const fallback = (e.target as HTMLElement).nextElementSibling as HTMLElement;
+                            if (fallback) fallback.style.display = 'flex';
                           }}
-                        >
-                          {String(ch.role).toUpperCase()}
+                        />
+                      ) : null}
+                      <div
+                        className="w-14 h-14 rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 flex items-center justify-center font-bold text-lg border border-slate-200"
+                        style={{ display: avatarSrc ? 'none' : 'flex' }}
+                      >
+                        {channel.name?.slice(0, 1).toUpperCase() || 'W'}
+                      </div>
+                    </div>
+
+                    {/* Channel Title & Details */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <span className="font-bold text-base text-slate-900 group-hover:text-emerald-700 transition-colors truncate">
+                          {channel.name}
                         </span>
+
+                        {/* Role Badge */}
+                        {isOwner ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200">
+                            <Crown size={11} /> Owner
+                          </span>
+                        ) : isAdmin ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <Check size={11} /> Admin
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                            {channel.role}
+                          </span>
+                        )}
+
+                        {/* Verified Badge */}
+                        {channel.verified && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200">
+                            <BadgeCheck size={12} className="text-sky-600" /> Verified
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Channel ID & Subscriber Count */}
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                        <button
+                          onClick={(e) => copyChannelId(channel.id || channel.channel_id, e)}
+                          className="inline-flex items-center gap-1 font-mono text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 px-1.5 py-0.5 rounded transition-colors"
+                          title="Copy Channel ID"
+                        >
+                          <span>{channel.id || channel.channel_id}</span>
+                          {copiedId === (channel.id || channel.channel_id) ? (
+                            <Check size={11} className="text-emerald-600" />
+                          ) : (
+                            <Copy size={11} />
+                          )}
+                        </button>
+
+                        <span>•</span>
+                        <span className="font-medium text-slate-700">
+                          {formatSubscribers(channel.subscribers_count ?? channel.followers)}
+                        </span>
+
+                        {channel.description && (
+                          <>
+                            <span>•</span>
+                            <span className="text-slate-400 truncate max-w-xs">{channel.description}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Actions */}
+                  <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                    {channel.link && (
+                      <a
+                        href={channel.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 hover:text-slate-900 transition-colors border border-slate-200"
+                        title="Open public channel on WhatsApp"
+                      >
+                        <span>View</span>
+                        <ExternalLink size={12} />
+                      </a>
+                    )}
+
+                    <button
+                      disabled={isSelecting}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSelectChannel(channel);
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                        isSelected
+                          ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-500/20'
+                          : 'bg-white text-slate-700 border border-slate-200 group-hover:border-emerald-400 group-hover:text-emerald-700'
+                      }`}
+                    >
+                      {isSelecting ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : isSelected ? (
+                        <>
+                          <CheckCircle2 size={13} />
+                          <span>Selected</span>
+                        </>
+                      ) : (
+                        <span>Select</span>
                       )}
-                    </div>
-                    <div className="text-xs text-secondary truncate mt-0.5">
-                      {ch.id || ch.jid || ch.channel_id}
-                    </div>
+                    </button>
                   </div>
-
-                  <div className="text-xs text-secondary font-medium mr-2">
-                    {ch.subscribers_count || ch.followers || 0} subscribers
-                  </div>
-
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleSelectChannel(ch); }}
-                    className="text-xs font-semibold px-2.5 py-1 rounded"
-                    style={{
-                      color: isSelected ? '#16a34a' : '#25D366',
-                      backgroundColor: isSelected ? '#dcfce7' : 'transparent',
-                    }}
-                  >
-                    {isSelected ? '✓ Selected' : 'Select →'}
-                  </button>
                 </div>
               );
             })}
           </div>
         )}
+      </div>
+
+      {/* Footer Info */}
+      <div className="bg-slate-50 rounded-xl p-4 border border-slate-200/60 text-center text-xs text-slate-500">
+        All published messages through UNAI Flow are securely dispatched directly to your authorized WhatsApp Channels.
       </div>
     </div>
   );

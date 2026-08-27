@@ -32,7 +32,7 @@ class ChannelManager:
     async def sync_channels(self, user_id: str, session_identifier: str) -> Dict[str, Any]:
         """
         Fetches channels from the provider and upserts them into Supabase tables
-        (both whatsapp_channels and channels).
+        (both whatsapp_channels and channels) with ownership verification.
         """
         session = self.session_manager.get_session(user_id, session_identifier)
         if not session or session["status"] not in ("CONNECTED", "READY"):
@@ -66,8 +66,14 @@ class ChannelManager:
                 ch_name = ch.get("name") or "WhatsApp Channel"
                 ch_link = ch.get("link") or f"https://whatsapp.com/channel/{ch_id}"
                 ch_role = (ch.get("role") or "admin").lower()
-                ch_subs = int(ch.get("subscribers_count") or ch.get("followers") or 0)
-                ch_pic = ch.get("pictureUrl") or ch.get("picture") or ch.get("picture_url") or ""
+                ch_subs = ch.get("subscribers_count")
+                if ch_subs is not None:
+                    try:
+                        ch_subs = int(ch_subs)
+                    except (ValueError, TypeError):
+                        ch_subs = None
+
+                ch_pic = ch.get("pictureUrl") or ch.get("picture") or ch.get("picture_url") or None
                 ch_desc = ch.get("description") or ""
 
                 # Table 1: whatsapp_channels (official schema)
@@ -78,13 +84,15 @@ class ChannelManager:
                         "channel_name": ch_name,
                         "channel_link": ch_link,
                         "role": ch_role if ch_role in ("admin", "owner", "subscriber", "guest") else "admin",
-                        "subscribers_count": ch_subs,
+                        "subscribers_count": ch_subs if ch_subs is not None else 0,
                         "verified": bool(ch.get("verified", False)),
                         "newsletter_jid": ch_id if "@newsletter" in ch_id else None,
                         "name": ch_name,
+                        "synced_at": "now()",
                         "metadata": {
-                            "picture_url": ch_pic,
+                            "picture_url": ch_pic or "",
                             "description": ch_desc,
+                            "subscribers_count_exact": ch_subs,
                         }
                     }
                     self.sb.table("whatsapp_channels").upsert(wa_ch_data, on_conflict="connection_id,channel_id").execute()
@@ -98,8 +106,8 @@ class ChannelManager:
                         "channel_id": ch_id,
                         "name": ch_name,
                         "description": ch_desc,
-                        "picture_url": ch_pic,
-                        "followers": ch_subs,
+                        "picture_url": ch_pic or "",
+                        "followers": ch_subs if ch_subs is not None else 0,
                         "role": ch_role.upper()
                     }
                     existing = self.sb.table("channels").select("id").eq("whatsapp_session_id", session["id"]).eq("channel_id", ch_id).execute()
@@ -187,7 +195,7 @@ class ChannelManager:
         return channel_data
 
     def get_user_channels(self, user_id: str) -> List[Dict[str, Any]]:
-        """Fetch all channels belonging to the user from whatsapp_channels or channels."""
+        """Fetch all channels belonging strictly to the user's authenticated WhatsApp account."""
         sessions = self.session_manager.get_sessions_for_user(user_id)
         if not sessions:
             return []
@@ -204,20 +212,27 @@ class ChannelManager:
                 if wa_res.data:
                     for ch in wa_res.data:
                         ch_id = ch["channel_id"]
+                        meta = ch.get("metadata") if isinstance(ch.get("metadata"), dict) else {}
+                        exact_subs = meta.get("subscribers_count_exact")
+                        if exact_subs is None:
+                            exact_subs = ch.get("subscribers_count")
+
                         channels_map[ch_id] = {
                             "id": ch_id,
                             "channel_id": ch_id,
                             "name": ch.get("channel_name") or ch.get("name") or "WhatsApp Channel",
                             "channel_name": ch.get("channel_name") or ch.get("name") or "WhatsApp Channel",
                             "link": ch.get("channel_link") or f"https://whatsapp.com/channel/{ch_id}",
-                            "role": ch.get("role", "admin"),
-                            "subscribers_count": ch.get("subscribers_count", 0),
-                            "followers": ch.get("subscribers_count", 0),
-                            "picture_url": ch.get("metadata", {}).get("picture_url") if isinstance(ch.get("metadata"), dict) else "",
-                            "pictureUrl": ch.get("metadata", {}).get("picture_url") if isinstance(ch.get("metadata"), dict) else "",
-                            "description": ch.get("metadata", {}).get("description") if isinstance(ch.get("metadata"), dict) else "",
+                            "role": (ch.get("role") or "admin").lower(),
+                            "subscribers_count": exact_subs,
+                            "followers": exact_subs,
+                            "verified": bool(ch.get("verified", False)),
+                            "picture_url": meta.get("picture_url") or "",
+                            "pictureUrl": meta.get("picture_url") or "",
+                            "description": meta.get("description") or "",
                             "is_selected": bool(ch.get("selected", False)),
                             "selected": bool(ch.get("selected", False)),
+                            "synced_at": ch.get("synced_at") or ch.get("updated_at"),
                         }
             except Exception as e:
                 logger.debug(f"[WA] query whatsapp_channels note: {e}")
@@ -236,14 +251,16 @@ class ChannelManager:
                                 "name": ch.get("name", "WhatsApp Channel"),
                                 "channel_name": ch.get("name", "WhatsApp Channel"),
                                 "link": f"https://whatsapp.com/channel/{ch_id}",
-                                "role": ch.get("role", "ADMIN"),
-                                "subscribers_count": ch.get("followers", 0),
-                                "followers": ch.get("followers", 0),
+                                "role": (ch.get("role") or "ADMIN").lower(),
+                                "subscribers_count": ch.get("followers"),
+                                "followers": ch.get("followers"),
+                                "verified": False,
                                 "picture_url": ch.get("picture_url", ""),
                                 "pictureUrl": ch.get("picture_url", ""),
                                 "description": ch.get("description", ""),
                                 "is_selected": bool(ch.get("is_selected", False)),
                                 "selected": bool(ch.get("is_selected", False)),
+                                "synced_at": ch.get("updated_at"),
                             }
             except Exception as e:
                 logger.debug(f"[WA] query channels note: {e}")
@@ -259,7 +276,15 @@ class ChannelManager:
         return self.get_user_channels(user_id)
 
     def select_channel(self, user_id: str, channel_id: str) -> bool:
-        """Select a channel as the primary target for automations."""
+        """
+        Select a channel as the primary target for automations.
+        CRITICAL SECURITY: Verifies that channel_id belongs strictly to the user's authorized channels.
+        """
+        user_channels = self.get_user_channels(user_id)
+        authorized = any(c.get("id") == channel_id or c.get("channel_id") == channel_id for c in user_channels)
+        if not authorized:
+            raise ValueError(f"Unauthorized: Channel '{channel_id}' is not manageable by your connected WhatsApp account.")
+
         sessions = self.session_manager.get_sessions_for_user(user_id)
         session_ids = [s["id"] for s in sessions]
         session_identifiers = [s["session_identifier"] for s in sessions if s.get("session_identifier")]

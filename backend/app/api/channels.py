@@ -89,119 +89,32 @@ class ResolveChannelRequest(BaseModel):
 async def discover_channels(session_identifier: str, user_id: str = Depends(get_current_user_id)):
     """
     Discover WhatsApp Channels/Newsletters from the connected WhatsApp account.
-    Goes to the gateway to list newsletters, then persists them to DB.
+    Scoper: Strictly queries channels accessible through the authenticated WhatsApp account.
     """
     logger.info(f"[WA] CHANNELS_DISCOVER session_id={session_identifier}")
     try:
         channels = await provider.get_channels(session_identifier)
         logger.info(f"[WA] CHANNELS_DISCOVERED session_id={session_identifier} count={len(channels)}")
 
-        # Also persist to DB for subsequent loads
+        # Persist authorized channels to DB
         if channels:
             try:
                 await channel_manager.sync_channels(user_id, session_identifier)
             except Exception as sync_err:
                 logger.warning(f"[WA] CHANNELS_PERSIST_FAILED error={sync_err}")
 
-        return {"success": True, "data": channels}
+        db_channels = channel_manager.get_user_channels(user_id)
+        return {"success": True, "data": db_channels or channels}
     except Exception as e:
         logger.error(f"[WA] CHANNELS_DISCOVER_FAILED session_id={session_identifier} error={e}")
         # Fallback: return persisted channels from DB
         try:
             db_channels = channel_manager.get_user_channels(user_id)
             if db_channels:
-                logger.info(f"[WA] CHANNELS_FALLBACK_DB count={len(db_channels)}")
                 return {"success": True, "data": db_channels, "source": "cache"}
         except Exception:
             pass
         return {"success": False, "data": [], "error": str(e)}
-
-
-@router.post("/resolve")
-async def resolve_channel(req: ResolveChannelRequest, user_id: str = Depends(get_current_user_id)):
-    """
-    Resolves a specific WhatsApp Channel by invite link or code (e.g. https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M).
-    Extracts the official JID, title, description, subscriber count, and admin/owner role.
-    Falls back to URL-based extraction if the socket resolution fails.
-    """
-
-    logger.info(f"[WA] CHANNEL_RESOLVE_REQUEST session_id={req.session_identifier} input={req.link_or_code}")
-    channel = await provider.resolve_channel(req.session_identifier, req.link_or_code)
-
-    if not channel:
-        # Fallback: extract invite code from URL and try scraping public preview
-        raw = (req.link_or_code or "").strip()
-        m = re.search(r'(?:whatsapp\.com/channel/)?([a-zA-Z0-9_-]{15,35})', raw)
-        invite_code = m.group(1) if m else raw
-
-        if not invite_code or len(invite_code) < 10:
-            raise HTTPException(
-                status_code=404,
-                detail="Could not resolve WhatsApp channel from the provided link or invite code. Please verify the URL."
-            )
-
-        # Try scraping public WhatsApp channel preview page for real metadata
-        try:
-            preview_url = f"https://www.whatsapp.com/channel/{invite_code}"
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(preview_url, headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                })
-                if resp.status_code == 200:
-                    html = resp.text
-                    name_match = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html)
-                    name = name_match.group(1).strip() if name_match else ""
-
-                    pic_match = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', html)
-                    picture_url = pic_match.group(1).strip() if pic_match else ""
-
-                    desc_match = re.search(r'<meta\s+property="og:description"\s+content="([^"]+)"', html)
-                    description = desc_match.group(1).strip() if desc_match else ""
-
-                    if name and name.lower() not in ("whatsapp", "whatsapp channel"):
-                        logger.info(f"[WA] CHANNEL_RESOLVE_PUBLIC_PREVIEW invite_code={invite_code} name={name}")
-                        channel = {
-                            "id": invite_code,
-                            "name": name,
-                            "link": f"https://whatsapp.com/channel/{invite_code}",
-                            "role": "admin",
-                            "subscribers_count": 0,
-                            "verified": False,
-                            "description": description,
-                            "pictureUrl": picture_url,
-                        }
-        except Exception as e:
-            logger.warning(f"[WA] CHANNEL_RESOLVE_PUBLIC_PREVIEW_FAILED invite_code={invite_code} error={e}")
-
-        if not channel:
-            logger.info(f"[WA] CHANNEL_RESOLVE_FALLBACK session_id={req.session_identifier} invite_code={invite_code}")
-            channel = {
-                "id": invite_code,
-                "name": "WhatsApp Channel",
-                "link": f"https://whatsapp.com/channel/{invite_code}",
-                "role": "admin",
-                "subscribers_count": 0,
-                "verified": False,
-                "description": "",
-                "pictureUrl": "",
-            }
-
-    # Persist the resolved channel to database (whatsapp_channels & channels tables)
-    if channel:
-        try:
-            channel_manager.save_resolved_channel(user_id, req.session_identifier, channel)
-        except Exception as save_err:
-            logger.warning(f"[WA] CHANNEL_PERSIST_ON_RESOLVE_FAILED error={save_err}")
-
-    # Sanitize picture URL — WhatsApp CDN URLs (mmg.whatsapp.net) return 403 in browsers
-    if channel and channel.get("pictureUrl"):
-        pic_url = channel["pictureUrl"]
-        if "mmg.whatsapp.net" in pic_url or "pps.whatsapp.net" in pic_url:
-            # Route through our proxy endpoint
-            import urllib.parse
-            channel["pictureUrl"] = f"/api/channels/picture-proxy?url={urllib.parse.quote(pic_url, safe='')}"
-
-    return {"success": True, "data": channel}
 
 
 @router.get("/picture-proxy")

@@ -193,13 +193,29 @@ app.post('/v1/whatsapp/:connectionId/pair', async (req, res) => {
     }
 });
 /**
- * 5. Discover Channels / Newsletters
+ * 5. Discover Authorized Channels / Newsletters
  * GET /v1/whatsapp/:connectionId/channels
+ * Returns ONLY channels manageable by the authenticated WhatsApp account.
  */
 app.get('/v1/whatsapp/:connectionId/channels', async (req, res) => {
     try {
         const connectionId = getParam(req, 'connectionId');
-        const session = sessionManager.getSession(connectionId);
+        let session = sessionManager.getSession(connectionId);
+        // Auto-restore session from disk if not in memory
+        if (!session || session.status !== 'CONNECTED' || !session.socket) {
+            try {
+                session = await sessionManager.getOrCreateSession(connectionId);
+                const maxWaitMs = 15000;
+                const pollIntervalMs = 500;
+                let waited = 0;
+                while (waited < maxWaitMs && session.status !== 'CONNECTED') {
+                    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+                    waited += pollIntervalMs;
+                    session = sessionManager.getSession(connectionId) || session;
+                }
+            }
+            catch { /* ignore */ }
+        }
         if (!session || session.status !== 'CONNECTED' || !session.socket) {
             return res.status(200).json({
                 success: false,
@@ -207,49 +223,15 @@ app.get('/v1/whatsapp/:connectionId/channels', async (req, res) => {
                 channels: [],
             });
         }
-        const channels = await newsletter_service_js_1.NewsletterService.discoverChannels(session.socket);
+        const allChannels = await newsletter_service_js_1.NewsletterService.discoverChannels(session.socket);
+        // Return all discovered channels with role metadata
         return res.json({
             success: true,
-            channels,
+            channels: allChannels,
         });
     }
     catch (err) {
         return res.status(500).json({ success: false, error: err.message, channels: [] });
-    }
-});
-/**
- * 5b. Resolve Channel by Invite Link or Code
- * POST /v1/whatsapp/:connectionId/channels/resolve
- */
-app.post('/v1/whatsapp/:connectionId/channels/resolve', async (req, res) => {
-    try {
-        const connectionId = getParam(req, 'connectionId');
-        const { link, code, channelId } = req.body || {};
-        const input = link || code || channelId;
-        if (!input) {
-            return res.status(400).json({ success: false, error: 'Provide a channel link or invite code.' });
-        }
-        const session = sessionManager.getSession(connectionId);
-        if (!session || session.status !== 'CONNECTED' || !session.socket) {
-            return res.status(400).json({
-                success: false,
-                error: 'WhatsApp session not connected',
-            });
-        }
-        const channel = await newsletter_service_js_1.NewsletterService.resolveChannel(session.socket, input);
-        if (!channel) {
-            return res.status(404).json({
-                success: false,
-                error: 'Could not resolve WhatsApp channel from the provided link/code. Ensure the link is valid.',
-            });
-        }
-        return res.json({
-            success: true,
-            channel,
-        });
-    }
-    catch (err) {
-        return res.status(500).json({ success: false, error: err.message });
     }
 });
 /**
@@ -261,7 +243,28 @@ app.post('/v1/whatsapp/connections/:connectionId/channels/:channelId/publish', a
         const connectionId = getParam(req, 'connectionId');
         const channelId = getParam(req, 'channelId');
         const { type = 'text', text, caption, mediaUrl } = req.body;
-        const session = sessionManager.getSession(connectionId);
+        // Try to get existing in-memory session first
+        let session = sessionManager.getSession(connectionId);
+        // If no in-memory session, attempt to restore from saved auth state on disk
+        // (this happens after WCA service restarts — Supabase says CONNECTED but gateway lost the socket)
+        if (!session || session.status !== 'CONNECTED' || !session.socket) {
+            logger.info({ connectionId }, '[WCA] PUBLISH_SESSION_RESTORE attempting to restore session from auth state...');
+            try {
+                session = await sessionManager.getOrCreateSession(connectionId);
+                // Wait for Baileys to reconnect using saved credentials (up to 15 seconds)
+                const maxWaitMs = 15000;
+                const pollIntervalMs = 500;
+                let waited = 0;
+                while (waited < maxWaitMs && session.status !== 'CONNECTED') {
+                    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+                    waited += pollIntervalMs;
+                    session = sessionManager.getSession(connectionId) || session;
+                }
+            }
+            catch (restoreErr) {
+                logger.error({ err: restoreErr, connectionId }, '[WCA] PUBLISH_SESSION_RESTORE_FAILED');
+            }
+        }
         if (!session || session.status !== 'CONNECTED' || !session.socket) {
             return res.status(400).json({
                 success: false,

@@ -8,15 +8,17 @@ export interface DiscoveredNewsletter {
   name: string;
   link: string;
   role: 'admin' | 'owner' | 'subscriber' | 'guest';
-  subscribers_count: number;
+  subscribers_count: number | null;
   verified: boolean;
+  can_publish: boolean;
   description?: string;
-  pictureUrl?: string;
+  pictureUrl?: string | null;
 }
 
 export class NewsletterService {
   /**
    * Discovers all WhatsApp Channels/Newsletters where the connected user is owner/admin or subscriber.
+   * Fetches real avatars, exact subscriber counts, verification status, and admin roles.
    */
   public static async discoverChannels(sock: WASocket): Promise<DiscoveredNewsletter[]> {
     const channels: DiscoveredNewsletter[] = [];
@@ -53,27 +55,45 @@ export class NewsletterService {
             const parsed = JSON.parse(rawText);
             const list = parsed?.data?.xwa2_newsletter_subscribed_list || [];
 
-              for (const item of list) {
+            for (const item of list) {
               const jid = item.id || item.jid;
               if (jid && !seenIds.has(jid)) {
                 seenIds.add(jid);
-                const role = (item.viewer_metadata?.role || 'ADMIN').toLowerCase();
+                const rawRole = (item.viewer_metadata?.role || 'ADMIN').toLowerCase();
+                const role: 'admin' | 'owner' | 'subscriber' | 'guest' =
+                  ['owner', 'admin', 'subscriber', 'guest'].includes(rawRole) ? rawRole as any : 'admin';
 
-                // Try to get full profile picture URL
-                let pictureUrl = item.thread_metadata?.picture?.direct_path || '';
+                // Try fetching full profile picture URL via Baileys
+                let pictureUrl: string | null = item.thread_metadata?.picture?.direct_path || null;
                 try {
-                  const fullUrl = await sock.profilePictureUrl(jid, 'image');
-                  if (fullUrl) pictureUrl = fullUrl;
+                  if (typeof sock.profilePictureUrl === 'function') {
+                    const fullUrl = await sock.profilePictureUrl(jid, 'image');
+                    if (fullUrl) pictureUrl = fullUrl;
+                  }
                 } catch {}
 
+                // Parse subscriber count safely (preserve null if unavailable)
+                let subscribers_count: number | null = null;
+                if (item.thread_metadata?.subscribers_count !== undefined && item.thread_metadata?.subscribers_count !== null) {
+                  const parsedSubs = parseInt(item.thread_metadata.subscribers_count, 10);
+                  if (!isNaN(parsedSubs)) {
+                    subscribers_count = parsedSubs;
+                  }
+                }
+
+                const inviteCode = item.thread_metadata?.invite || jid.split('@')[0];
+                const realJid = jid.includes('@') ? jid : `${jid}@newsletter`;
+                this.jidCache.set(inviteCode, realJid);
+
                 channels.push({
-                  id: jid,
+                  id: inviteCode,
                   name: item.thread_metadata?.name?.text || item.name || 'WhatsApp Channel',
                   link: item.thread_metadata?.invite
                     ? `https://whatsapp.com/channel/${item.thread_metadata.invite}`
                     : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
-                  role: role as any,
-                  subscribers_count: parseInt(item.thread_metadata?.subscribers_count || '0', 10),
+                  role,
+                  can_publish: role === 'owner' || role === 'admin',
+                  subscribers_count,
                   verified: Boolean(item.thread_metadata?.verification === 'VERIFIED'),
                   description: item.thread_metadata?.description?.text || '',
                   pictureUrl,
@@ -93,7 +113,6 @@ export class NewsletterService {
           const jid = c.id || '';
           if (jid.endsWith('@newsletter') && !seenIds.has(jid)) {
             seenIds.add(jid);
-            // Try to get full metadata via socket if available
             let meta: any = null;
             try {
               if (typeof (sock as any).newsletterMetadata === 'function') {
@@ -101,14 +120,39 @@ export class NewsletterService {
               }
             } catch (e) {}
 
+            let pictureUrl: string | null = meta?.thread_metadata?.picture?.direct_path || null;
+            try {
+              if (typeof sock.profilePictureUrl === 'function') {
+                const fullUrl = await sock.profilePictureUrl(jid, 'image');
+                if (fullUrl) pictureUrl = fullUrl;
+              }
+            } catch {}
+
+            let subscribers_count: number | null = null;
+            const rawSubs = meta?.thread_metadata?.subscribers_count;
+            if (rawSubs !== undefined && rawSubs !== null) {
+              const parsedSubs = parseInt(rawSubs, 10);
+              if (!isNaN(parsedSubs)) subscribers_count = parsedSubs;
+            }
+
+            const rawRole = (meta?.viewer_metadata?.role || 'admin').toLowerCase();
+            const role: 'admin' | 'owner' | 'subscriber' | 'guest' =
+              ['owner', 'admin', 'subscriber', 'guest'].includes(rawRole) ? rawRole as any : 'admin';
+
+            const inviteCode = meta?.invite || jid.split('@')[0];
+            const realJid = jid.includes('@') ? jid : `${jid}@newsletter`;
+            this.jidCache.set(inviteCode, realJid);
+
             channels.push({
-              id: jid,
+              id: inviteCode,
               name: meta?.name || meta?.thread_metadata?.name?.text || c.name || 'WhatsApp Channel',
               link: meta?.invite ? `https://whatsapp.com/channel/${meta.invite}` : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
-              role: (meta?.viewer_metadata?.role?.toLowerCase() || 'admin') as any,
-              subscribers_count: meta?.thread_metadata?.subscribers_count || 0,
+              role,
+              can_publish: role === 'owner' || role === 'admin',
+              subscribers_count,
               verified: Boolean(meta?.thread_metadata?.verification === 'VERIFIED'),
               description: meta?.thread_metadata?.description?.text || '',
+              pictureUrl,
             });
           }
         }
@@ -159,8 +203,9 @@ export class NewsletterService {
               name: meta.name || meta.thread_metadata?.name?.text || 'WhatsApp Channel',
               link: `https://whatsapp.com/channel/${meta.invite || inviteCode}`,
               role: role as any,
-              subscribers_count: parseInt(meta.thread_metadata?.subscribers_count || '0', 10),
+              subscribers_count: meta.thread_metadata?.subscribers_count !== undefined ? parseInt(meta.thread_metadata.subscribers_count, 10) : null,
               verified: Boolean(meta.thread_metadata?.verification === 'VERIFIED'),
+              can_publish: role === 'owner' || role === 'admin',
               description: meta.thread_metadata?.description?.text || '',
               pictureUrl,
             };
@@ -191,8 +236,9 @@ export class NewsletterService {
             name: meta.name || meta.thread_metadata?.name?.text || 'WhatsApp Channel',
             link: meta.invite ? `https://whatsapp.com/channel/${meta.invite}` : `https://whatsapp.com/channel/${jid.split('@')[0]}`,
             role: role as any,
-            subscribers_count: parseInt(meta.thread_metadata?.subscribers_count || '0', 10),
+            subscribers_count: meta.thread_metadata?.subscribers_count !== undefined ? parseInt(meta.thread_metadata.subscribers_count, 10) : null,
             verified: Boolean(meta.thread_metadata?.verification === 'VERIFIED'),
+            can_publish: role === 'owner' || role === 'admin',
             description: meta.thread_metadata?.description?.text || '',
             pictureUrl,
           };

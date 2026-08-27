@@ -155,15 +155,15 @@ export default function WhatsAppChannels() {
         setViewMode('dashboard');
         log('LOADED', { status: 'CONNECTED', session: connected.session_identifier });
       } else {
-        setAccount(null);
-        setViewMode('list');
-        sessionRef.current = null;
-        log('LOADED', { status: 'NO_ACTIVE_SESSION' });
+        // Only reset to list view if we didn't already have an active account in session
+        if (!sessionRef.current) {
+          setAccount(null);
+          setViewMode('list');
+          log('LOADED', { status: 'NO_ACTIVE_SESSION' });
+        }
       }
     } catch (e) {
       console.error('Failed to load sessions:', e);
-      setAccount(null);
-      setViewMode('list');
     } finally {
       setLoading(false);
     }
@@ -788,11 +788,29 @@ function DashboardView({ account, onDisconnect, onRefresh }: {
   const discoverChannels = async () => {
     if (!account?.sessionIdentifier) return;
     setLoadingChannels(true);
-    console.log('%c[UNAI-WA] CHANNELS_DISCOVER', 'color:#25D366;font-weight:bold', { session: account.sessionIdentifier });
+    console.log('%c[UNAI-WA] CHANNELS_REFRESH', 'color:#25D366;font-weight:bold', { session: account.sessionIdentifier });
     try {
+      // 1. Fetch latest channels from DB
+      const dbRes = await fetchApi('/api/channels/user-channels');
+      if (dbRes?.data && dbRes.data.length > 0) {
+        const mapped = dbRes.data.map((c: any) => ({
+          id: c.channel_id || c.id,
+          name: c.name || c.channel_name || 'WhatsApp Channel',
+          role: c.role || 'ADMIN',
+          pictureUrl: c.picture_url || c.pictureUrl,
+          subscribers_count: c.followers || c.subscribers_count || 0,
+          description: c.description || '',
+          isSelected: c.is_selected || c.selected || false
+        }));
+        saveChannelsList(mapped);
+        const sel = mapped.find((m: any) => m.isSelected);
+        if (sel) setSelectedChannelId(sel.id);
+        else if (!selectedChannelId && mapped.length > 0) setSelectedChannelId(mapped[0].id);
+      }
+
+      // 2. Discover from gateway
       const res = await fetchApi(`/api/channels/discover?session_identifier=${account.sessionIdentifier}`);
       const data = res?.data || [];
-      console.log('%c[UNAI-WA] CHANNELS_FOUND', 'color:#25D366;font-weight:bold', { count: data.length, channels: data });
       if (data.length > 0) {
         saveChannelsList(data);
         if (!selectedChannelId) setSelectedChannelId(data[0].id);

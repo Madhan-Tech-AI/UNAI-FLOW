@@ -81,22 +81,8 @@ async def get_whatsapp_status(
 
 @router.get("/sessions")
 async def get_user_sessions(user_id: str = Depends(get_current_user_id)):
-    """Get all WhatsApp sessions belonging strictly to the authenticated user with real-time status."""
+    """Get all WhatsApp sessions belonging strictly to the authenticated user."""
     sessions = connection_manager.session_manager.get_sessions_for_user(user_id)
-    # Check gateway live status for CONNECTED sessions
-    for s in sessions:
-        if s.get("status") in ("CONNECTED", "READY"):
-            sess_id = s.get("session_identifier")
-            if sess_id:
-                try:
-                    gw_status = await provider.get_full_status(sess_id)
-                    gw_state = gw_status.get("status")
-                    if gw_state in ["QR_READY", "WAITING_FOR_SCAN", "DISCONNECTED"]:
-                        new_st = "WAITING_FOR_SCAN" if gw_state in ["QR_READY", "WAITING_FOR_SCAN"] else "DISCONNECTED"
-                        connection_manager.session_manager.update_session_status(s["id"], new_st)
-                        s["status"] = new_st
-                except Exception:
-                    pass
     return {"success": True, "data": sessions}
 
 

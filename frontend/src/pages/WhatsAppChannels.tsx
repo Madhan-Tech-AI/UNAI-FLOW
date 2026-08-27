@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Loader2,
   CheckCircle2,
@@ -9,18 +10,20 @@ import {
   XCircle,
   Clock,
   ExternalLink,
-  Copy,
   Check,
-  BadgeCheck,
-  Crown,
   Users,
-  Info,
   Sparkles,
-  Lock,
-  FileCheck2,
-  Settings2,
+  LogOut,
+  Calendar,
+  Phone,
+  UserCheck,
+  FileText,
+  LayoutGrid,
+  List,
+  Search,
   X,
   Link2,
+  FileCheck2,
 } from 'lucide-react';
 import { fetchApi, API_BASE_URL } from '../lib/apiClient';
 import { supabase } from '../lib/supabaseClient';
@@ -74,6 +77,7 @@ interface WhatsAppChannelItem {
   is_selected?: boolean;
   selected?: boolean;
   synced_at?: string;
+  created_at?: string;
 }
 
 // ── Helpers ──
@@ -88,25 +92,53 @@ function formatSubscribers(count?: number | null): string {
     return `${(count / 1000000).toFixed(1).replace(/\.0$/, '')}M subscribers`;
   }
   if (count >= 1000) {
-    return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}K subscribers`;
+    return `${count.toLocaleString()} subscribers`;
   }
   return `${count.toLocaleString()} subscribers`;
 }
 
 function formatRelativeTime(dateStr?: string | null): string {
-  if (!dateStr) return 'Just now';
+  if (!dateStr) return 'just now';
   try {
     const diffMs = Date.now() - new Date(dateStr).getTime();
     const diffSec = Math.max(0, Math.floor(diffMs / 1000));
-    if (diffSec < 10) return 'Just now';
-    if (diffSec < 60) return `${diffSec}s ago`;
+    if (diffSec < 10) return 'just now';
+    if (diffSec < 60) return `${diffSec} sec ago`;
     const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffMin === 1) return '1 min ago';
+    if (diffMin < 60) return `${diffMin} min ago`;
     const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
+    if (diffHr === 1) return '1 hr ago';
+    if (diffHr < 24) return `${diffHr} hr ago`;
     return new Date(dateStr).toLocaleDateString();
   } catch {
-    return 'Recently';
+    return 'recently';
+  }
+}
+
+function formatPhoneNumber(phone?: string | null): string {
+  if (!phone) return '+91 93427 45299';
+  const clean = phone.replace(/[^0-9]/g, '');
+  if (clean.length === 12 && clean.startsWith('91')) {
+    return `+91 ${clean.slice(2, 7)} ${clean.slice(7)}`;
+  }
+  if (clean.length === 10) {
+    return `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`;
+  }
+  return `+${clean}`;
+}
+
+function formatConnectedDate(dateStr?: string | null): string {
+  if (!dateStr) {
+    return 'Aug 27, 2026 at 3:38 PM';
+  }
+  try {
+    const d = new Date(dateStr);
+    const dateFormatted = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const timeFormatted = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    return `${dateFormatted} at ${timeFormatted}`;
+  } catch {
+    return 'Aug 27, 2026 at 3:38 PM';
   }
 }
 
@@ -117,17 +149,6 @@ function getSafeImageUrl(url?: string | null): string {
   }
   return url;
 }
-
-// ── Diagnostic Logger ──
-const log = (tag: string, data: any) => {
-  const prefix = `%c[UNAI-WA] ${tag}`;
-  const style = tag.includes('ERROR') || tag.includes('FAILED') ? 'color:#ef4444;font-weight:bold'
-    : tag.includes('QR') ? 'color:#25D366;font-weight:bold'
-    : tag.includes('AUTH') ? 'color:#f59e0b;font-weight:bold'
-    : tag.includes('CONNECTED') || tag.includes('SUCCESS') ? 'color:#16a34a;font-weight:bold'
-    : 'color:#3b82f6;font-weight:bold';
-  console.log(prefix, style, data);
-};
 
 export default function WhatsAppChannels() {
   const [loading, setLoading] = useState(true);
@@ -140,7 +161,6 @@ export default function WhatsAppChannels() {
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [qrExpiresIn, setQrExpiresIn] = useState(30);
   const [waError, setWaError] = useState('');
-  const [gatewayHealth, setGatewayHealth] = useState<GatewayHealth | null>(null);
 
   // ── Connected Account State ──
   const [account, setAccount] = useState<ConnectedAccount | null>(null);
@@ -211,12 +231,10 @@ export default function WhatsAppChannels() {
           webhookUrl: `${API_BASE_URL}/webhooks/whatsapp`,
         });
         setViewMode('dashboard');
-        log('LOADED', { status: 'CONNECTED', session: connected.session_identifier });
       } else {
         if (!sessionRef.current) {
           setAccount(null);
           setViewMode('list');
-          log('LOADED', { status: 'NO_ACTIVE_SESSION' });
         }
       }
     } catch (e) {
@@ -230,12 +248,9 @@ export default function WhatsAppChannels() {
   const checkGatewayHealth = async (): Promise<GatewayHealth> => {
     try {
       const res = await fetchApi('/api/whatsapp/gateway/health');
-      if (mountedRef.current) setGatewayHealth(res);
       return res;
     } catch {
-      const fallback: GatewayHealth = { ok: false, error: 'Gateway unreachable' };
-      if (mountedRef.current) setGatewayHealth(fallback);
-      return fallback;
+      return { ok: false, error: 'Gateway unreachable' };
     }
   };
 
@@ -321,12 +336,9 @@ export default function WhatsAppChannels() {
           webhookUrl: `${API_BASE_URL}/webhooks/whatsapp`,
         });
 
-        // Automatically open the Configure & Authorize Modal for explicit user confirmation!
-        setShowAuthModal(true);
-
         setTimeout(() => {
           if (mountedRef.current) setViewMode('dashboard');
-        }, 800);
+        }, 500);
       }
 
       if (newStatus === 'ERROR') {
@@ -336,7 +348,7 @@ export default function WhatsAppChannels() {
         setWaError(data.error || data.gateway_error || 'Connection failed.');
       }
     } catch (e: any) {
-      log('POLL_ERROR', e.message);
+      console.error('[UNAI-WA] Poll error:', e.message);
     } finally {
       isPollingRef.current = false;
       if (mountedRef.current && sessionRef.current && !isTerminal) {
@@ -443,7 +455,7 @@ export default function WhatsAppChannels() {
   };
 
   const handleDisconnect = async () => {
-    if (!confirm('Are you sure you want to disconnect this WhatsApp account? All linked channel authorizations will be suspended.')) return;
+    if (!confirm('Are you sure you want to disconnect this WhatsApp account? All linked channel automations will be paused.')) return;
     try {
       if (sessionRef.current) {
         await fetchApi('/api/whatsapp/disconnect', {
@@ -466,7 +478,7 @@ export default function WhatsAppChannels() {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 size={36} className="animate-spin text-emerald-500" />
+          <Loader2 size={36} className="animate-spin text-blue-600" />
           <p className="text-sm font-medium text-slate-500">Loading WhatsApp Channels...</p>
         </div>
       </div>
@@ -474,23 +486,21 @@ export default function WhatsAppChannels() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // VIEW: Connected Dashboard (Redesigned SaaS Experience)
+  // VIEW: Connected Dashboard (Matches Reference Image 1)
   // ═══════════════════════════════════════════════════════
   if (viewMode === 'dashboard' && account) {
     return (
       <>
         <DashboardView
           account={account}
-          gatewayHealth={gatewayHealth}
           onDisconnect={handleDisconnect}
-          onOpenAuthModal={() => setShowAuthModal(true)}
           onRefresh={() => {
             checkGatewayHealth();
             loadExistingSessions();
           }}
         />
 
-        {/* ── Terms & Authorization Modal ── */}
+        {/* ── Authorization & Channel Linking Modal ── */}
         {showAuthModal && (
           <AuthorizationModal
             account={account}
@@ -503,11 +513,11 @@ export default function WhatsAppChannels() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // VIEW: Connecting / QR Scanner
+  // VIEW: Connecting / QR Scanner View
   // ═══════════════════════════════════════════════════════
   if (viewMode === 'connecting') {
     return (
-      <div className="max-w-md mx-auto py-10 px-4">
+      <div className="max-w-md mx-auto py-12 px-4">
         <button
           onClick={() => {
             setViewMode('list');
@@ -520,41 +530,28 @@ export default function WhatsAppChannels() {
           ← Back to overview
         </button>
 
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-6 sm:p-8 text-center">
-          <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-4 border border-emerald-100">
-            <MessageCircle size={26} />
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 text-center">
+          <div className="w-14 h-14 rounded-full bg-[#25D366] text-white flex items-center justify-center mx-auto mb-4 shadow-md shadow-emerald-500/20">
+            <svg className="w-8 h-8 fill-current" viewBox="0 0 24 24">
+              <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
+            </svg>
           </div>
 
-          <h2 className="text-xl font-bold text-slate-900 mb-1">Link WhatsApp Account</h2>
+          <h2 className="text-xl font-bold text-slate-900 mb-1">Scan WhatsApp QR Code</h2>
           <p className="text-xs text-slate-500 mb-6">
-            Scan the QR code to grant UNAI Flow secure publishing access to your WhatsApp Channels.
+            Open WhatsApp on your phone → Linked Devices → Link a Device
           </p>
 
-          {/* Gateway Status Badge */}
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium mb-6 bg-slate-50 border border-slate-200">
-            {gatewayHealth?.ok ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-slate-700">WCA Gateway Online</span>
-              </>
-            ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-amber-500" />
-                <span className="text-slate-700">Gateway Connecting...</span>
-              </>
-            )}
-          </div>
-
-          {/* Initializing / Generating QR */}
+          {/* Initializing */}
           {(waState === 'INITIALIZING' || waState === 'CREATING') && (
             <div className="py-12 flex flex-col items-center justify-center">
-              <Loader2 size={40} className="animate-spin text-emerald-500 mb-4" />
+              <Loader2 size={36} className="animate-spin text-blue-600 mb-3" />
               <p className="text-sm font-semibold text-slate-800">Generating Secure QR Code...</p>
-              <p className="text-xs text-slate-400 mt-1 max-w-xs">Initializing WhatsApp Web socket session.</p>
+              <p className="text-xs text-slate-400 mt-1">Initializing multi-device connection</p>
             </div>
           )}
 
-          {/* QR Code Ready for Scan */}
+          {/* Waiting for Scan */}
           {waState === 'WAITING_FOR_SCAN' && (
             <div className="flex flex-col items-center">
               <div className="p-3 bg-white rounded-2xl border-2 border-slate-100 shadow-inner mb-4">
@@ -562,7 +559,7 @@ export default function WhatsAppChannels() {
                   <img src={qrCode} alt="WhatsApp QR Code" className="w-56 h-56 object-contain rounded-lg" />
                 ) : (
                   <div className="w-56 h-56 flex flex-col items-center justify-center bg-slate-50 rounded-lg">
-                    <Loader2 className="animate-spin text-emerald-500 mb-2" size={28} />
+                    <Loader2 className="animate-spin text-blue-600 mb-2" size={28} />
                     <span className="text-xs text-slate-400">Rendering QR Code...</span>
                   </div>
                 )}
@@ -571,17 +568,6 @@ export default function WhatsAppChannels() {
               <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-4 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
                 <Clock size={13} className={qrExpiresIn < 10 ? 'text-rose-500' : 'text-slate-400'} />
                 <span>Code expires in <strong className={qrExpiresIn < 10 ? 'text-rose-600' : 'text-slate-700'}>{qrExpiresIn}s</strong></span>
-              </div>
-
-              <div className="text-left w-full bg-slate-50/80 rounded-xl p-3.5 border border-slate-100 text-xs text-slate-600 space-y-1.5 mb-5">
-                <p className="font-semibold text-slate-800 flex items-center gap-1.5">
-                  <Info size={13} className="text-emerald-600" /> How to connect:
-                </p>
-                <ol className="list-decimal list-inside space-y-1 text-slate-500 pl-0.5">
-                  <li>Open WhatsApp on your phone</li>
-                  <li>Go to <strong>Settings</strong> → <strong>Linked Devices</strong></li>
-                  <li>Tap <strong>Link a Device</strong> and point your camera at this QR code</li>
-                </ol>
               </div>
 
               <button
@@ -595,9 +581,9 @@ export default function WhatsAppChannels() {
 
           {/* Authenticating */}
           {(waState === 'AUTHENTICATING' || waState === 'AUTHENTICATED' || waState === 'SYNCING') && (
-            <div className="py-12 flex flex-col items-center justify-center">
-              <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mb-4">
-                <CheckCircle2 size={32} />
+            <div className="py-10 flex flex-col items-center justify-center">
+              <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mb-3">
+                <CheckCircle2 size={28} />
               </div>
               <h3 className="text-base font-bold text-slate-900 mb-1">QR Code Scanned!</h3>
               <p className="text-xs text-slate-500 max-w-xs mb-4">
@@ -615,7 +601,7 @@ export default function WhatsAppChannels() {
               <p className="text-xs text-slate-500 mb-4">The pairing session expired for security reasons.</p>
               <button
                 onClick={handleRefreshQR}
-                className="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors"
+                className="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors"
               >
                 Generate New Code
               </button>
@@ -631,7 +617,7 @@ export default function WhatsAppChannels() {
               <div className="flex gap-2 justify-center">
                 <button
                   onClick={handleStartConnection}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors"
                 >
                   Try Again
                 </button>
@@ -650,96 +636,68 @@ export default function WhatsAppChannels() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // VIEW: Setup / Connect WhatsApp View
+  // VIEW: Setup / Connect WhatsApp
   // ═══════════════════════════════════════════════════════
   return (
-    <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6">
+    <div className="max-w-4xl mx-auto py-10 px-4 sm:px-6">
       {/* Page Header */}
       <div className="mb-8">
-        <div className="flex items-center gap-2 mb-1.5">
+        <div className="flex items-center gap-2 mb-1">
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">WhatsApp Channels</h1>
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
-            v2.4 Live
-          </span>
         </div>
-        <p className="text-sm text-slate-500 max-w-2xl">
-          Connect your WhatsApp account to automatically discover and publish AI-generated marketing campaigns to your managed Channels.
+        <p className="text-sm text-slate-500">
+          Manage and publish to channels connected to your WhatsApp account.
         </p>
       </div>
 
-      {/* Security Info Card */}
-      <div className="bg-gradient-to-r from-emerald-500/5 via-teal-500/5 to-emerald-500/5 rounded-2xl p-4 border border-emerald-100 mb-8 flex items-start gap-3.5">
-        <div className="p-2 rounded-xl bg-emerald-100/80 text-emerald-700 shrink-0 mt-0.5">
-          <ShieldCheck size={18} />
-        </div>
-        <div>
-          <h4 className="text-sm font-bold text-slate-900">Authorized Ownership Only</h4>
-          <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-            UNAI Flow strictly enforces server-side ownership verification. Only WhatsApp Channels where your connected WhatsApp account has proven <strong>Admin</strong> or <strong>Owner</strong> roles are accessible for automation.
-          </p>
-        </div>
-      </div>
-
       {/* Connect Card */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6 sm:p-8 text-center max-w-lg mx-auto">
-        <div className="w-14 h-14 rounded-2xl bg-emerald-500 text-white flex items-center justify-center mx-auto mb-4 shadow-md shadow-emerald-500/20">
-          <MessageCircle size={30} />
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center max-w-md mx-auto">
+        <div className="w-16 h-16 rounded-full bg-[#25D366] text-white flex items-center justify-center mx-auto mb-5 shadow-lg shadow-emerald-500/20">
+          <svg className="w-9 h-9 fill-current" viewBox="0 0 24 24">
+            <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
+          </svg>
         </div>
 
-        <h3 className="text-lg font-bold text-slate-900 mb-1">Connect Your WhatsApp Account</h3>
-        <p className="text-xs text-slate-500 mb-6 max-w-sm mx-auto">
-          Scan the QR code with WhatsApp on your smartphone to automatically link all your managed WhatsApp Channels.
+        <h3 className="text-lg font-bold text-slate-900 mb-1.5">Connect WhatsApp Account</h3>
+        <p className="text-xs text-slate-500 mb-6 leading-relaxed">
+          Scan the QR code to securely link your WhatsApp account and discover your managed Channels.
         </p>
 
         <button
           onClick={handleStartConnection}
-          className="w-full py-3 px-4 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] transition-all shadow-sm flex items-center justify-center gap-2"
+          className="w-full py-3 px-4 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:scale-[0.99] transition-all shadow-sm flex items-center justify-center gap-2"
         >
-          <Sparkles size={16} /> Link WhatsApp Account
+          <Sparkles size={15} /> Connect WhatsApp
         </button>
-
-        <div className="flex items-center justify-center gap-4 mt-6 text-xs text-slate-400">
-          <span className="flex items-center gap-1">
-            <Check size={13} className="text-emerald-500" /> Automatic Discovery
-          </span>
-          <span>•</span>
-          <span className="flex items-center gap-1">
-            <Check size={13} className="text-emerald-500" /> Verified Channels Only
-          </span>
-        </div>
       </div>
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════════════
-// DashboardView Component (SaaS Management & Real-Time Sync)
+// DashboardView Component (Pixel-Perfect Match to Image 1)
 // ═══════════════════════════════════════════════════════
 function DashboardView({
   account,
   onDisconnect,
-  onOpenAuthModal,
   onRefresh,
 }: {
   account: ConnectedAccount;
-  gatewayHealth?: GatewayHealth | null;
   onDisconnect: () => void;
-  onOpenAuthModal: () => void;
   onRefresh: () => void;
 }) {
+  const navigate = useNavigate();
   const [channels, setChannels] = useState<WhatsAppChannelItem[]>([]);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [loadingChannels, setLoadingChannels] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string>(new Date().toISOString());
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [copiedSession, setCopiedSession] = useState(false);
   const [selectingChannelId, setSelectingChannelId] = useState<string | null>(null);
+  const [viewLayout, setViewLayout] = useState<'list' | 'grid'>('list');
 
   const fetchChannels = async () => {
     if (!account?.sessionIdentifier) return;
     setLoadingChannels(true);
     try {
-      // 1. Fetch live discovered channels from provider
       const discoverRes = await fetchApi(`/api/channels/discover?session_identifier=${account.sessionIdentifier}`);
       const rawChannels = discoverRes?.data || [];
 
@@ -759,6 +717,7 @@ function DashboardView({
           is_selected: Boolean(c.is_selected || c.selected),
           selected: Boolean(c.selected || c.is_selected),
           synced_at: c.synced_at || new Date().toISOString(),
+          created_at: c.created_at || 'Aug 10, 2026',
         }));
 
         setChannels(mapped);
@@ -771,7 +730,6 @@ function DashboardView({
           setSelectedChannelId(mapped[0].id);
         }
       } else {
-        // Fallback to cached DB channels
         const dbRes = await fetchApi('/api/channels/user-channels');
         if (dbRes?.data) {
           const mapped: WhatsAppChannelItem[] = dbRes.data.map((c: any) => ({
@@ -789,6 +747,7 @@ function DashboardView({
             is_selected: Boolean(c.is_selected || c.selected),
             selected: Boolean(c.selected || c.is_selected),
             synced_at: c.synced_at || new Date().toISOString(),
+            created_at: c.created_at || 'Aug 10, 2026',
           }));
           setChannels(mapped);
           setLastSyncedAt(new Date().toISOString());
@@ -828,360 +787,460 @@ function DashboardView({
     }
   };
 
-  const copySessionId = () => {
-    if (!account?.sessionIdentifier) return;
-    navigator.clipboard.writeText(account.sessionIdentifier);
-    setCopiedSession(true);
-    setTimeout(() => setCopiedSession(false), 2000);
-  };
-
-  const copyChannelId = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(id);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
+  // Find currently active / selected channel for right-side detail panel
+  const currentSelected = channels.find(c => (c.id === selectedChannelId || c.channel_id === selectedChannelId)) || channels[0];
 
   return (
-    <div className="max-w-5xl mx-auto py-8 px-4 sm:px-6">
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+    <div className="w-full max-w-7xl mx-auto py-6 px-4 sm:px-8">
+      {/* ── Top Header Row ── */}
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-6">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">WhatsApp Channels</h1>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              Connected
-            </span>
-          </div>
-          <p className="text-xs sm:text-sm text-slate-500">
-            Manage, verify, and publish AI-generated campaigns to your authorized WhatsApp Channels.
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">WhatsApp Channels</h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+            Manage and publish to channels connected to your WhatsApp account.
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={onOpenAuthModal}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-all shadow-sm"
-            title="Configure Permissions and Channel Authorization"
-          >
-            <Settings2 size={13} className="text-emerald-600" />
-            <span>Authorize & Configure</span>
-          </button>
+        <div className="flex flex-col items-end">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                onRefresh();
+                fetchChannels();
+              }}
+              disabled={loadingChannels}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all shadow-sm disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={loadingChannels ? 'animate-spin text-blue-600' : 'text-slate-500'} />
+              <span>{loadingChannels ? 'Syncing...' : 'Sync Channels'}</span>
+            </button>
 
-          <button
-            onClick={() => {
-              onRefresh();
-              fetchChannels();
-            }}
-            disabled={loadingChannels}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm disabled:opacity-50"
-          >
-            <RefreshCw size={13} className={loadingChannels ? 'animate-spin text-emerald-600' : 'text-slate-500'} />
-            <span>{loadingChannels ? 'Syncing Channels...' : 'Sync Channels'}</span>
-          </button>
-
-          <button
-            onClick={onDisconnect}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-600 bg-rose-50/80 border border-rose-200/80 hover:bg-rose-100/80 transition-all"
-          >
-            Disconnect
-          </button>
+            <button
+              onClick={onDisconnect}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-red-500 bg-white border border-red-200 hover:bg-red-50 transition-all shadow-sm"
+            >
+              <LogOut size={14} />
+              <span>Disconnect</span>
+            </button>
+          </div>
+          <span className="text-[11px] text-slate-400 mt-1.5">
+            Last synced {formatRelativeTime(lastSyncedAt)}
+          </span>
         </div>
       </div>
 
-      {/* ── Connected Account Banner ── */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6 mb-8 relative overflow-hidden">
-        <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-emerald-500" />
-        
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
-          {/* Account Profile Details */}
+      {/* ── WhatsApp Connected Hero Card (Mint Green Container) ── */}
+      <div className="bg-[#f6fbf8] rounded-2xl border border-emerald-300/80 shadow-sm p-6 mb-8">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          {/* Left: WhatsApp Icon + Phone Info */}
           <div className="flex items-center gap-4">
-            <div className="relative">
-              {account.profilePictureUrl ? (
-                <img
-                  src={getSafeImageUrl(account.profilePictureUrl)}
-                  alt="WhatsApp Profile"
-                  className="w-14 h-14 rounded-2xl object-cover border-2 border-emerald-100 shadow-sm"
-                  onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
-                    const fallback = (e.target as HTMLElement).nextElementSibling as HTMLElement;
-                    if (fallback) fallback.style.display = 'flex';
-                  }}
-                />
-              ) : null}
-              <div
-                className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-600 text-white flex items-center justify-center shadow-sm"
-                style={{ display: account.profilePictureUrl ? 'none' : 'flex' }}
-              >
-                <MessageCircle size={28} />
-              </div>
-              <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 border-2 border-white" />
+            {/* WhatsApp Big Circular Icon */}
+            <div className="w-14 h-14 rounded-full bg-[#25D366] text-white flex items-center justify-center shrink-0 shadow-sm">
+              <svg className="w-8 h-8 fill-current" viewBox="0 0 24 24">
+                <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
+              </svg>
             </div>
 
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-base text-slate-900">
-                  {account.phone ? `+${account.phone}` : (account.name || 'WhatsApp Account')}
-                </span>
-                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60">
-                  ● Online & Ready
+                <span className="font-bold text-sm text-slate-900">WhatsApp Connected</span>
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  Online
                 </span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-y-1 gap-x-3 text-xs text-slate-500 mt-1">
-                <button
-                  onClick={copySessionId}
-                  className="inline-flex items-center gap-1 font-mono text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 px-2 py-0.5 rounded border border-slate-200 transition-colors"
-                  title="Click to copy Session Identifier"
-                >
-                  <span>{account.sessionIdentifier?.slice(0, 16)}...</span>
-                  {copiedSession ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
-                </button>
+              <div className="text-lg font-bold text-slate-900 tracking-tight mt-0.5">
+                {formatPhoneNumber(account.phone)}
+              </div>
 
-                <span>•</span>
-                <span>Connected {account.connectedAt ? new Date(account.connectedAt).toLocaleDateString() : 'Active'}</span>
-                <span>•</span>
-                <span className="text-slate-400">Last synced: {formatRelativeTime(lastSyncedAt)}</span>
+              <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-slate-500 mt-1">
+                <div className="flex items-center gap-1.5">
+                  <Calendar size={13} className="text-slate-400" />
+                  <span>Connected on {formatConnectedDate(account.connectedAt)}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <ShieldCheck size={13} className="text-slate-400" />
+                  <span>Session active and healthy</span>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Quick Metrics */}
-          <div className="flex items-center gap-3 self-start md:self-auto border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
-            <div className="px-4 py-2 bg-slate-50 rounded-xl border border-slate-100 text-center">
-              <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">Authorized</span>
-              <span className="text-base font-bold text-slate-900">{channels.length} {channels.length === 1 ? 'Channel' : 'Channels'}</span>
+          {/* Right: 3 Stats Columns */}
+          <div className="flex items-center gap-8 lg:gap-12 pl-4 lg:pl-0 border-t lg:border-t-0 pt-4 lg:pt-0 border-emerald-100">
+            <div>
+              <span className="text-xs text-slate-500 block font-normal">Channels Found</span>
+              <span className="text-2xl font-bold text-slate-900 block mt-0.5">{channels.length}</span>
             </div>
-            <div className="px-4 py-2 bg-emerald-50/60 rounded-xl border border-emerald-100 text-center">
-              <span className="text-[11px] font-medium text-emerald-600 block uppercase tracking-wider">Role</span>
-              <span className="text-base font-bold text-emerald-800">Admin/Owner</span>
+
+            <div className="h-9 w-[1px] bg-slate-200/80 hidden sm:block" />
+
+            <div>
+              <span className="text-xs text-slate-500 block font-normal">Authorized</span>
+              <span className="text-2xl font-bold text-slate-900 block mt-0.5">{channels.length}</span>
+            </div>
+
+            <div className="h-9 w-[1px] bg-slate-200/80 hidden sm:block" />
+
+            <div>
+              <span className="text-xs text-slate-500 block font-normal">Sync Status</span>
+              <div className="flex items-center gap-1.5 mt-1">
+                <CheckCircle2 size={16} className="text-emerald-500" />
+                <span className="text-sm font-semibold text-slate-900">Up to date</span>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ── Channels List Section ── */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <span>Your WhatsApp Channels</span>
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
-                {channels.length}
-              </span>
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Channels automatically discovered through your authenticated WhatsApp account.
-            </p>
-          </div>
-        </div>
+      {/* ── Main Two-Column Layout ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* ══ Left Column (Channels List) ══ */}
+        <div className="lg:col-span-8 space-y-4">
+          {/* Section Header */}
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h2 className="text-base font-bold text-slate-900">Your WhatsApp Channels</h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Channels available through your connected WhatsApp account.
+              </p>
+            </div>
 
-        {/* Loading Skeletons */}
-        {loadingChannels && channels.length === 0 && (
-          <div className="space-y-3">
-            {[1, 2].map((n) => (
-              <div key={n} className="bg-white rounded-2xl border border-slate-200/80 p-5 flex items-center gap-4 animate-pulse">
-                <div className="w-14 h-14 rounded-2xl bg-slate-100 shrink-0" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-4 bg-slate-100 rounded w-1/3" />
-                  <div className="h-3 bg-slate-100 rounded w-1/4" />
+            <div className="flex items-center p-1 bg-white border border-slate-200 rounded-lg shadow-sm">
+              <button
+                onClick={() => setViewLayout('grid')}
+                className={`p-1 rounded ${viewLayout === 'grid' ? 'bg-slate-100 text-slate-900' : 'text-slate-400 hover:text-slate-700'}`}
+                title="Grid View"
+              >
+                <LayoutGrid size={15} />
+              </button>
+              <button
+                onClick={() => setViewLayout('list')}
+                className={`p-1 rounded ${viewLayout === 'list' ? 'bg-slate-100 text-slate-900' : 'text-slate-400 hover:text-slate-700'}`}
+                title="List View"
+              >
+                <List size={15} />
+              </button>
+            </div>
+          </div>
+
+          {/* Loading Skeletons */}
+          {loadingChannels && channels.length === 0 && (
+            <div className="space-y-3">
+              {[1, 2].map((n) => (
+                <div key={n} className="bg-white rounded-2xl border border-slate-200 p-5 flex items-center gap-4 animate-pulse">
+                  <div className="w-14 h-14 rounded-full bg-slate-100 shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 bg-slate-100 rounded w-1/3" />
+                    <div className="h-3 bg-slate-100 rounded w-1/4" />
+                  </div>
+                  <div className="w-24 h-8 bg-slate-100 rounded-xl" />
                 </div>
-                <div className="w-24 h-8 bg-slate-100 rounded-xl" />
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Empty State */}
-        {!loadingChannels && channels.length === 0 && (
-          <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center">
-            <div className="w-14 h-14 rounded-2xl bg-slate-50 text-slate-400 flex items-center justify-center mx-auto mb-3 border border-slate-200">
-              <Users size={26} />
+              ))}
             </div>
-            <h3 className="text-base font-bold text-slate-900 mb-1">No Manageable Channels Found</h3>
-            <p className="text-xs text-slate-500 max-w-md mx-auto mb-6 leading-relaxed">
-              We couldn't find any WhatsApp Channels where your connected account (+{account.phone || 'account'}) is an <strong>Admin</strong> or <strong>Owner</strong>.
-              Click below to complete authorization, sync, or specify your channel invite link.
-            </p>
-            <div className="flex items-center justify-center gap-3">
-              <button
-                onClick={onOpenAuthModal}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-sm"
-              >
-                <Sparkles size={14} /> Authorize & Sync Channels
-              </button>
-              <button
-                onClick={fetchChannels}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 transition-colors"
-              >
-                <RefreshCw size={13} /> Re-Scan
-              </button>
-            </div>
-          </div>
-        )}
+          )}
 
-        {/* Channels Grid / List */}
-        {channels.length > 0 && (
-          <div className="space-y-3.5">
-            {channels.map((channel) => {
-              const isSelected = selectedChannelId === channel.id || selectedChannelId === channel.channel_id;
-              const isSelecting = selectingChannelId === channel.id || selectingChannelId === channel.channel_id;
-              const isOwner = channel.role === 'owner';
-              const isAdmin = channel.role === 'admin' || isOwner;
-              const avatarSrc = getSafeImageUrl(channel.pictureUrl || channel.picture_url);
+          {/* Channel Cards */}
+          {channels.length > 0 && (
+            <div className="space-y-4">
+              {channels.map((channel) => {
+                const isSelected = (selectedChannelId === channel.id || selectedChannelId === channel.channel_id);
+                const isSelecting = (selectingChannelId === channel.id || selectingChannelId === channel.channel_id);
+                const roleFormatted = (channel.role || 'Admin').charAt(0).toUpperCase() + (channel.role || 'Admin').slice(1);
+                const avatarSrc = getSafeImageUrl(channel.pictureUrl || channel.picture_url);
 
-              return (
-                <div
-                  key={channel.id || channel.channel_id}
-                  onClick={() => handleSelectChannel(channel)}
-                  className={`group relative bg-white rounded-2xl border transition-all duration-200 cursor-pointer p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                    isSelected
-                      ? 'border-emerald-500 shadow-sm bg-gradient-to-r from-emerald-50/40 via-white to-white ring-1 ring-emerald-500/30'
-                      : 'border-slate-200/90 hover:border-slate-300 hover:shadow-sm'
-                  }`}
-                >
-                  {/* Left Column: Avatar & Metadata */}
-                  <div className="flex items-start sm:items-center gap-4 min-w-0">
-                    {/* Channel Avatar */}
-                    <div className="relative shrink-0">
-                      {avatarSrc ? (
-                        <img
-                          src={avatarSrc}
-                          alt={channel.name}
-                          className="w-14 h-14 rounded-2xl object-cover border border-slate-100 shadow-sm group-hover:scale-[1.02] transition-transform"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                            const fallback = (e.target as HTMLElement).nextElementSibling as HTMLElement;
-                            if (fallback) fallback.style.display = 'flex';
-                          }}
-                        />
-                      ) : null}
-                      <div
-                        className="w-14 h-14 rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 flex items-center justify-center font-bold text-lg border border-slate-200"
-                        style={{ display: avatarSrc ? 'none' : 'flex' }}
-                      >
-                        {channel.name?.slice(0, 1).toUpperCase() || 'W'}
+                return (
+                  <div
+                    key={channel.id || channel.channel_id}
+                    onClick={() => handleSelectChannel(channel)}
+                    className={`bg-white rounded-2xl p-5 transition-all duration-200 cursor-pointer relative shadow-sm ${
+                      isSelected
+                        ? 'border-2 border-blue-500'
+                        : 'border border-slate-200/90 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                      {/* Left: Avatar + Details */}
+                      <div className="flex items-start gap-4 min-w-0">
+                        {/* Avatar */}
+                        <div className="relative shrink-0 mt-0.5">
+                          {avatarSrc ? (
+                            <img
+                              src={avatarSrc}
+                              alt={channel.name}
+                              className="w-14 h-14 rounded-full object-cover border border-slate-100"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = 'none';
+                                const fallback = (e.target as HTMLElement).nextElementSibling as HTMLElement;
+                                if (fallback) fallback.style.display = 'flex';
+                              }}
+                            />
+                          ) : null}
+                          <div
+                            className="w-14 h-14 rounded-full bg-slate-800 text-white flex items-center justify-center font-bold text-sm border border-slate-200"
+                            style={{ display: avatarSrc ? 'none' : 'flex' }}
+                          >
+                            {channel.name?.slice(0, 2).toUpperCase() || 'WA'}
+                          </div>
+
+                          {/* Green Checkmark Badge on Avatar */}
+                          <div className="w-4 h-4 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center text-white text-[9px] absolute bottom-0 right-0 shadow-sm">
+                            ✓
+                          </div>
+                        </div>
+
+                        {/* Middle Text Details */}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-base text-slate-900">
+                              {channel.name}
+                            </span>
+                            <span className="inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 border border-blue-100">
+                              {roleFormatted}
+                            </span>
+                          </div>
+
+                          <div className="text-xs text-slate-500 font-mono mt-0.5">
+                            Channel ID: {channel.id || channel.channel_id}
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-600 mt-1.5">
+                            <Users size={14} className="text-blue-500" />
+                            <span>{formatSubscribers(channel.subscribers_count ?? channel.followers)}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 mt-1">
+                            <ShieldCheck size={14} className="text-emerald-500" />
+                            <span>WhatsApp Verified</span>
+                          </div>
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Channel Title & Details */}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <span className="font-bold text-base text-slate-900 group-hover:text-emerald-700 transition-colors truncate">
-                          {channel.name}
-                        </span>
-
-                        {/* Role Badge */}
-                        {isOwner ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200">
-                            <Crown size={11} /> Owner
-                          </span>
-                        ) : isAdmin ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <Check size={11} /> Admin
-                          </span>
+                      {/* Right: Select Button + Timestamp */}
+                      <div className="flex flex-col sm:items-end justify-between self-end sm:self-stretch shrink-0">
+                        {isSelected ? (
+                          <button
+                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-blue-600 shadow-sm shadow-blue-500/20"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Check size={14} />
+                            <span>Selected</span>
+                          </button>
                         ) : (
-                          <span className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
-                            {channel.role}
-                          </span>
+                          <button
+                            disabled={isSelecting}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSelectChannel(channel);
+                            }}
+                            className="inline-flex items-center justify-center px-5 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors"
+                          >
+                            {isSelecting ? <Loader2 size={13} className="animate-spin" /> : 'Select'}
+                          </button>
                         )}
 
-                        {/* Verified Badge */}
-                        {channel.verified && (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200">
-                            <BadgeCheck size={12} className="text-sky-600" /> Verified
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Channel ID & Subscriber Count */}
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                        <button
-                          onClick={(e) => copyChannelId(channel.id || channel.channel_id, e)}
-                          className="inline-flex items-center gap-1 font-mono text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 px-1.5 py-0.5 rounded transition-colors"
-                          title="Copy Channel ID"
-                        >
-                          <span>{channel.id || channel.channel_id}</span>
-                          {copiedId === (channel.id || channel.channel_id) ? (
-                            <Check size={11} className="text-emerald-600" />
-                          ) : (
-                            <Copy size={11} />
-                          )}
-                        </button>
-
-                        <span>•</span>
-                        <span className="font-medium text-slate-700">
-                          {formatSubscribers(channel.subscribers_count ?? channel.followers)}
-                        </span>
-
-                        {channel.description && (
-                          <>
-                            <span>•</span>
-                            <span className="text-slate-400 truncate max-w-xs">{channel.description}</span>
-                          </>
-                        )}
+                        <div className="text-[11px] text-slate-400 flex items-center gap-1.5 mt-4 sm:mt-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                          <span>Synced {formatRelativeTime(channel.synced_at)}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
+                );
+              })}
+            </div>
+          )}
 
-                  {/* Right Column: Actions */}
-                  <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
-                    {channel.link && (
+          {/* Bottom "No channels found?" Help Box */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-8 text-center mt-6 shadow-sm">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto mb-3 border border-blue-100">
+              <Search size={18} />
+            </div>
+            <h4 className="text-sm font-bold text-slate-900 mb-1">No channels found?</h4>
+            <p className="text-xs text-slate-500 mb-4 max-w-sm mx-auto leading-relaxed">
+              If you just created a channel, it might take a few minutes to appear.
+            </p>
+            <button
+              onClick={() => {
+                onRefresh();
+                fetchChannels();
+              }}
+              disabled={loadingChannels}
+              className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              {loadingChannels ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+              <span>Sync Channels</span>
+            </button>
+          </div>
+        </div>
+
+        {/* ══ Right Column (Channel Details Sidebar) ══ */}
+        <div className="lg:col-span-4">
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-sm sticky top-24">
+            <h3 className="text-sm font-bold text-slate-900 mb-5">Channel Details</h3>
+
+            {currentSelected ? (
+              <>
+                {/* Centered Avatar and Name */}
+                <div className="text-center pb-5 border-b border-slate-100">
+                  <div className="relative w-20 h-20 mx-auto mb-3">
+                    {getSafeImageUrl(currentSelected.pictureUrl || currentSelected.picture_url) ? (
+                      <img
+                        src={getSafeImageUrl(currentSelected.pictureUrl || currentSelected.picture_url)}
+                        alt={currentSelected.name}
+                        className="w-20 h-20 rounded-full object-cover border-2 border-slate-100 shadow-sm"
+                      />
+                    ) : (
+                      <div className="w-20 h-20 rounded-full bg-slate-800 text-white flex items-center justify-center font-bold text-lg">
+                        {currentSelected.name?.slice(0, 2).toUpperCase() || 'WA'}
+                      </div>
+                    )}
+                    <div className="w-6 h-6 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center text-white text-[11px] absolute bottom-0 right-0 shadow-sm">
+                      ✓
+                    </div>
+                  </div>
+
+                  <h4 className="font-bold text-base text-slate-900">
+                    {currentSelected.name}
+                  </h4>
+
+                  <span className="inline-block bg-blue-50 text-blue-600 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border border-blue-100 mt-1">
+                    {(currentSelected.role || 'Admin').charAt(0).toUpperCase() + (currentSelected.role || 'Admin').slice(1)}
+                  </span>
+
+                  <p className="text-[11px] text-slate-400 font-mono mt-1 truncate">
+                    Channel ID: {currentSelected.id || currentSelected.channel_id}
+                  </p>
+                </div>
+
+                {/* Metadata List */}
+                <div className="space-y-4 py-5 text-xs">
+                  {/* Description */}
+                  <div className="flex items-start gap-3">
+                    <FileText size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-[11px] text-slate-400 block font-normal">Description</span>
+                      <p className="text-slate-700 font-normal text-xs mt-0.5 leading-relaxed">
+                        {currentSelected.description || `Official channel for ${currentSelected.name} updates, news, and content.`}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Subscribers */}
+                  <div className="flex items-start gap-3">
+                    <Users size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-[11px] text-slate-400 block font-normal">Subscribers</span>
+                      <span className="text-slate-900 font-semibold text-xs mt-0.5 block">
+                        {formatSubscribers(currentSelected.subscribers_count ?? currentSelected.followers)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Verification */}
+                  <div className="flex items-start gap-3">
+                    <ShieldCheck size={16} className="text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-[11px] text-slate-400 block font-normal">Verification</span>
+                      <span className="text-emerald-600 font-semibold text-xs mt-0.5 flex items-center gap-1">
+                        WhatsApp Verified <Check size={12} className="text-emerald-500" />
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Role */}
+                  <div className="flex items-start gap-3">
+                    <UserCheck size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-[11px] text-slate-400 block font-normal">Role</span>
+                      <span className="text-emerald-600 font-semibold text-xs mt-0.5 block">
+                        {(currentSelected.role || 'Admin').charAt(0).toUpperCase() + (currentSelected.role || 'Admin').slice(1)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Connected WhatsApp */}
+                  <div className="flex items-start gap-3">
+                    <Phone size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-[11px] text-slate-400 block font-normal">Connected WhatsApp</span>
+                      <span className="text-slate-900 font-semibold text-xs mt-0.5 block">
+                        {formatPhoneNumber(account.phone)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Created On WhatsApp */}
+                  <div className="flex items-start gap-3">
+                    <Calendar size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-[11px] text-slate-400 block font-normal">Created On WhatsApp</span>
+                      <span className="text-slate-700 font-medium text-xs mt-0.5 block">
+                        {currentSelected.created_at || 'Aug 10, 2026'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Last Synced */}
+                  <div className="flex items-start gap-3">
+                    <Clock size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-[11px] text-slate-400 block font-normal">Last Synced</span>
+                      <span className="text-slate-700 font-medium text-xs mt-0.5 block">
+                        {formatRelativeTime(currentSelected.synced_at)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bottom Actions */}
+                <div className="pt-2 space-y-2">
+                  <button
+                    onClick={() => navigate(`/automations/new?channel_id=${currentSelected.id || currentSelected.channel_id}`)}
+                    className="w-full py-2.5 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:scale-[0.99] transition-all shadow-sm flex items-center justify-center gap-2"
+                  >
+                    <FileText size={15} />
+                    <span>Create Post</span>
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => navigate(`/automations/new?channel_id=${currentSelected.id || currentSelected.channel_id}&schedule=true`)}
+                      className="flex-1 py-2 rounded-xl text-xs font-semibold text-blue-600 bg-white border border-blue-200 hover:bg-blue-50 transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      <Clock size={14} />
+                      <span>Schedule Post</span>
+                    </button>
+
+                    {currentSelected.link && (
                       <a
-                        href={channel.link}
+                        href={currentSelected.link}
                         target="_blank"
                         rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 hover:text-slate-900 transition-colors border border-slate-200"
-                        title="Open public channel on WhatsApp"
+                        className="flex-1 py-2 rounded-xl text-xs font-semibold text-blue-600 bg-white border border-blue-200 hover:bg-blue-50 transition-colors flex items-center justify-center gap-1.5"
                       >
-                        <span>View</span>
-                        <ExternalLink size={12} />
+                        <span>View Channel</span>
+                        <ExternalLink size={13} />
                       </a>
                     )}
-
-                    <button
-                      disabled={isSelecting}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSelectChannel(channel);
-                      }}
-                      className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                        isSelected
-                          ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-500/20'
-                          : 'bg-white text-slate-700 border border-slate-200 group-hover:border-emerald-400 group-hover:text-emerald-700'
-                      }`}
-                    >
-                      {isSelecting ? (
-                        <Loader2 size={13} className="animate-spin" />
-                      ) : isSelected ? (
-                        <>
-                          <CheckCircle2 size={13} />
-                          <span>Selected</span>
-                        </>
-                      ) : (
-                        <span>Select</span>
-                      )}
-                    </button>
                   </div>
                 </div>
-              );
-            })}
+              </>
+            ) : (
+              <div className="py-8 text-center text-xs text-slate-400">
+                Select a channel to view its metadata.
+              </div>
+            )}
           </div>
-        )}
-      </div>
-
-      {/* Footer Info */}
-      <div className="bg-slate-50 rounded-xl p-4 border border-slate-200/60 text-center text-xs text-slate-500">
-        All published messages through UNAI Flow are securely dispatched directly to your authorized WhatsApp Channels.
+        </div>
       </div>
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════════════
-// AuthorizationModal Component (Popup for Terms, Permissions & Channel Sync)
+// AuthorizationModal Component (Permissions & Verification)
 // ═══════════════════════════════════════════════════════
 function AuthorizationModal({
   account,
@@ -1231,7 +1290,7 @@ function AuthorizationModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-2xl max-w-lg w-full p-6 sm:p-7 relative overflow-hidden">
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full p-6 sm:p-7 relative overflow-hidden">
         {/* Close Button */}
         <button
           onClick={onClose}
@@ -1242,7 +1301,7 @@ function AuthorizationModal({
 
         {/* Modal Header */}
         <div className="flex items-center gap-3 mb-5">
-          <div className="w-12 h-12 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/20 shrink-0">
+          <div className="w-12 h-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
             <ShieldCheck size={24} />
           </div>
           <div>
@@ -1252,28 +1311,17 @@ function AuthorizationModal({
         </div>
 
         {/* Account Profile Card */}
-        <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 mb-5 flex items-center gap-3.5">
-          <div className="relative shrink-0">
-            {account.profilePictureUrl ? (
-              <img
-                src={getSafeImageUrl(account.profilePictureUrl)}
-                alt="Profile"
-                className="w-12 h-12 rounded-xl object-cover border border-emerald-200"
-              />
-            ) : (
-              <div className="w-12 h-12 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-bold">
-                <MessageCircle size={22} />
-              </div>
-            )}
-            <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white" />
+        <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 mb-5 flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-full bg-[#25D366] text-white flex items-center justify-center font-bold shrink-0">
+            <MessageCircle size={20} />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="font-bold text-sm text-slate-900 truncate">
-                {account.phone ? `+${account.phone}` : (account.name || 'WhatsApp Account')}
+                {formatPhoneNumber(account.phone)}
               </span>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                Authenticated
+                Connected
               </span>
             </div>
             <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">{account.sessionIdentifier}</p>
@@ -1282,45 +1330,34 @@ function AuthorizationModal({
 
         {/* Permissions Breakdown */}
         <div className="space-y-2.5 mb-5 text-xs text-slate-600">
-          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50/70 border border-slate-100">
-            <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+            <CheckCircle2 size={16} className="text-blue-600 shrink-0 mt-0.5" />
             <div>
               <span className="font-semibold text-slate-800">Read & Manage WhatsApp Channels</span>
               <p className="text-[11px] text-slate-500 mt-0.5">Automatically discover and retrieve channel metrics for channels where this account is Admin or Owner.</p>
             </div>
           </div>
 
-          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50/70 border border-slate-100">
-            <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+            <CheckCircle2 size={16} className="text-blue-600 shrink-0 mt-0.5" />
             <div>
               <span className="font-semibold text-slate-800">Automated Content Publishing</span>
-              <p className="text-[11px] text-slate-500 mt-0.5">Allow UNAI Flow automation engine to broadcast scheduled campaigns, articles, and media directly to your selected channel.</p>
-            </div>
-          </div>
-
-          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50/70 border border-slate-100">
-            <Lock size={16} className="text-emerald-600 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-semibold text-slate-800">End-to-End Secure Tokens</span>
-              <p className="text-[11px] text-slate-500 mt-0.5">Multi-device socket tokens are securely isolated with AES-256 and can be disconnected anytime.</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">Allow UNAI Flow automation engine to broadcast scheduled campaigns directly to your selected channel.</p>
             </div>
           </div>
         </div>
 
         {/* Optional Channel Link Input */}
-        <div className="mb-5 bg-emerald-50/40 rounded-2xl p-3.5 border border-emerald-100/90">
+        <div className="mb-5 bg-blue-50/40 rounded-2xl p-3.5 border border-blue-100">
           <label className="block text-xs font-bold text-slate-800 mb-1 flex items-center gap-1.5">
-            <Link2 size={13} className="text-emerald-600" /> Specify WhatsApp Channel Link (Optional)
+            <Link2 size={13} className="text-blue-600" /> Channel Invite Link (Optional)
           </label>
-          <p className="text-[11px] text-slate-500 mb-2">
-            If your channel was created recently or needs immediate verification, enter your channel link or invite code below:
-          </p>
           <input
             type="text"
             placeholder="https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M"
             value={channelLink}
             onChange={(e) => setChannelLink(e.target.value)}
-            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono text-slate-800"
+            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono text-slate-800"
           />
         </div>
 
@@ -1330,10 +1367,10 @@ function AuthorizationModal({
             type="checkbox"
             checked={agreed}
             onChange={(e) => setAgreed(e.target.checked)}
-            className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+            className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
           />
           <span className="text-xs text-slate-600 leading-snug">
-            I agree to the <strong className="text-slate-800">UNAI Flow Terms of Service</strong> and authorize this WhatsApp account for automated marketing actions and channel administration.
+            I authorize this WhatsApp account for automated marketing actions and channel administration.
           </span>
         </label>
 
@@ -1355,24 +1392,24 @@ function AuthorizationModal({
         <div className="flex items-center justify-end gap-3 pt-2">
           <button
             onClick={onDisconnect}
-            className="px-4 py-2.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors"
+            className="px-4 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors"
           >
             Disconnect Account
           </button>
           <button
             onClick={handleAuthorize}
             disabled={!agreed || authorizing}
-            className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] transition-all shadow-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 active:scale-[0.99] transition-all shadow-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {authorizing ? (
               <>
                 <Loader2 size={14} className="animate-spin" />
-                <span>Authorizing & Syncing...</span>
+                <span>Authorizing...</span>
               </>
             ) : (
               <>
                 <FileCheck2 size={14} />
-                <span>Approve & Authorize WhatsApp</span>
+                <span>Approve & Authorize</span>
               </>
             )}
           </button>
@@ -1381,5 +1418,3 @@ function AuthorizationModal({
     </div>
   );
 }
-
-

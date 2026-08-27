@@ -41,7 +41,7 @@ async def create_automation(automation: AutomationCreate, user: Dict[str, Any] =
         except Exception as e:
             print(f"Warning: Failed to upload media base64 to Supabase storage: {e}")
 
-    wa_channel_id = data.get("whatsapp_channel_id")
+    wa_channel_id = data.pop("whatsapp_channel_id", None)
     if wa_channel_id:
         try:
             supabase.table("channels").update({"is_selected": False}).neq("channel_id", "").execute()
@@ -52,12 +52,7 @@ async def create_automation(automation: AutomationCreate, user: Dict[str, Any] =
     try:
         res = supabase.table("automations").insert(data).execute()
     except Exception as e:
-        # If DB schema lacks whatsapp_channel_id column, fallback cleanly
-        if "whatsapp_channel_id" in data:
-            data_fallback = {k: v for k, v in data.items() if k != "whatsapp_channel_id"}
-            res = supabase.table("automations").insert(data_fallback).execute()
-        else:
-            raise e
+        raise e
 
     if not res.data:
         raise HTTPException(status_code=400, detail="Could not create automation")

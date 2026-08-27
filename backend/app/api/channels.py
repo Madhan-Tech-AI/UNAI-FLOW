@@ -50,6 +50,16 @@ async def get_channels(user_id: str = Depends(get_current_user_id)):
     return {"success": True, "data": channels}
 
 
+@router.get("/user-channels")
+async def get_user_connected_channels(user_id: str = Depends(get_current_user_id)):
+    """
+    Get all channels from the user's CONNECTED WhatsApp sessions.
+    Used by the New Automation page for channel selection.
+    """
+    channels = channel_manager.get_connected_channels(user_id)
+    return {"success": True, "data": channels}
+
+
 @router.post("/sync")
 async def sync_channels(req: SyncRequest, user_id: str = Depends(get_current_user_id)):
     result = await channel_manager.sync_channels(user_id, req.session_identifier)
@@ -79,15 +89,31 @@ class ResolveChannelRequest(BaseModel):
 async def discover_channels(session_identifier: str, user_id: str = Depends(get_current_user_id)):
     """
     Discover WhatsApp Channels/Newsletters from the connected WhatsApp account.
-    Goes directly to the gateway to list newsletters.
+    Goes to the gateway to list newsletters, then persists them to DB.
     """
     logger.info(f"[WA] CHANNELS_DISCOVER session_id={session_identifier}")
     try:
         channels = await provider.get_channels(session_identifier)
         logger.info(f"[WA] CHANNELS_DISCOVERED session_id={session_identifier} count={len(channels)}")
+
+        # Also persist to DB for subsequent loads
+        if channels:
+            try:
+                await channel_manager.sync_channels(user_id, session_identifier)
+            except Exception as sync_err:
+                logger.warning(f"[WA] CHANNELS_PERSIST_FAILED error={sync_err}")
+
         return {"success": True, "data": channels}
     except Exception as e:
         logger.error(f"[WA] CHANNELS_DISCOVER_FAILED session_id={session_identifier} error={e}")
+        # Fallback: return persisted channels from DB
+        try:
+            db_channels = channel_manager.get_user_channels(user_id)
+            if db_channels:
+                logger.info(f"[WA] CHANNELS_FALLBACK_DB count={len(db_channels)}")
+                return {"success": True, "data": db_channels, "source": "cache"}
+        except Exception:
+            pass
         return {"success": False, "data": [], "error": str(e)}
 
 

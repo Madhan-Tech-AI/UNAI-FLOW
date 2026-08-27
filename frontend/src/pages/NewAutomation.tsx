@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Layers, Zap, Loader2, Link2, UploadCloud, Camera, AtSign, Info } from 'lucide-react';
-import { fetchApi } from '../lib/apiClient';
+import { Sparkles, Layers, Zap, Loader2, Link2, UploadCloud, Camera, AtSign, Info, MessageCircle, RefreshCw, X, AlertCircle } from 'lucide-react';
+import { fetchApi, API_BASE_URL } from '../lib/apiClient';
 
 function Facebook({ size = 18, className = "" }: { size?: number; className?: string }) {
   return (
@@ -43,6 +43,13 @@ export default function NewAutomation() {
     whatsapp: false
   });
 
+  // WhatsApp Channel Selection State
+  const [waConnected, setWaConnected] = useState<boolean | null>(null);
+  const [waChannels, setWaChannels] = useState<any[]>([]);
+  const [selectedWaChannel, setSelectedWaChannel] = useState<any>(null);
+  const [isWaModalOpen, setIsWaModalOpen] = useState(false);
+  const [loadingWaChannels, setLoadingWaChannels] = useState(false);
+
   const tones = [
     { id: 'professional', label: 'Professional', icon: '💼', desc: 'Authoritative, polished, B2B' },
     { id: 'casual', label: 'Casual', icon: '😊', desc: 'Friendly, conversational' },
@@ -57,6 +64,67 @@ export default function NewAutomation() {
       reader.onload = () => resolve(reader.result as string);
       reader.onerror = error => reject(error);
     });
+  };
+
+  // Load WhatsApp channels from persistent DB / gateway
+  const loadWhatsAppChannels = async () => {
+    setLoadingWaChannels(true);
+    try {
+      const sessRes = await fetchApi('/api/whatsapp/sessions');
+      const sessions = sessRes?.data || [];
+      const connectedSession = sessions.find((s: any) => s.status === 'CONNECTED' || s.status === 'READY');
+
+      if (connectedSession) {
+        setWaConnected(true);
+        // Load user channels from DB first
+        const chRes = await fetchApi('/api/channels/user-channels');
+        let channelsList = chRes?.data || [];
+
+        if (channelsList.length === 0 && connectedSession.session_identifier) {
+          // If empty, try discover
+          const discRes = await fetchApi(`/api/channels/discover?session_identifier=${connectedSession.session_identifier}`);
+          channelsList = discRes?.data || [];
+        }
+
+        const mapped = channelsList.map((c: any) => ({
+          id: c.channel_id || c.id,
+          name: c.name || 'WhatsApp Channel',
+          role: c.role || 'ADMIN',
+          pictureUrl: c.picture_url || c.pictureUrl || c.picture,
+          subscribers_count: c.followers || c.subscribers_count || 0,
+          description: c.description || '',
+          isSelected: c.is_selected || false
+        }));
+
+        setWaChannels(mapped);
+        if (!selectedWaChannel && mapped.length > 0) {
+          const defaultSel = mapped.find((m: any) => m.isSelected) || mapped[0];
+          setSelectedWaChannel(defaultSel);
+        }
+      } else {
+        setWaConnected(false);
+      }
+    } catch (e) {
+      console.error('Error loading WhatsApp channels:', e);
+      setWaConnected(false);
+    } finally {
+      setLoadingWaChannels(false);
+    }
+  };
+
+  useEffect(() => {
+    loadWhatsAppChannels();
+  }, []);
+
+  const handleToggleWhatsApp = () => {
+    const nextVal = !platforms.whatsapp;
+    setPlatforms(prev => ({ ...prev, whatsapp: nextVal }));
+    if (nextVal) {
+      setIsWaModalOpen(true);
+      if (waChannels.length === 0) {
+        loadWhatsAppChannels();
+      }
+    }
   };
 
   const handleImportYoutube = async () => {
@@ -76,6 +144,9 @@ export default function NewAutomation() {
         setCtaLink(meta.url || youtubeUrl.trim());
         setContent(`🚀 *New Video Alert!*\n\n*${meta.title}*\n\n${meta.author ? `By ${meta.author}` : ''}\n\nWatch the complete breakdown now 👇\n${meta.url || youtubeUrl.trim()}`);
         setPlatforms(prev => ({ ...prev, whatsapp: true }));
+        if (!selectedWaChannel) {
+          setIsWaModalOpen(true);
+        }
 
         // Try downloading thumbnail as File
         if (meta.thumbnail_url) {
@@ -115,6 +186,10 @@ export default function NewAutomation() {
       return;
     }
 
+    if (platforms.whatsapp && waConnected && !selectedWaChannel && waChannels.length > 0) {
+      setSelectedWaChannel(waChannels[0]);
+    }
+
     try {
       let mediaBase64 = null;
       if (selectedFile) {
@@ -125,6 +200,8 @@ export default function NewAutomation() {
         }
       }
 
+      const waChannelIdToSave = platforms.whatsapp && selectedWaChannel ? (selectedWaChannel.id || selectedWaChannel.channel_id) : null;
+
       const automation = await fetchApi('/automations', {
         method: 'POST',
         body: JSON.stringify({
@@ -133,6 +210,7 @@ export default function NewAutomation() {
           tone,
           cta_link: ctaLink || null,
           target_platforms: targetPlatforms,
+          whatsapp_channel_id: waChannelIdToSave,
           schedule_type: 'now',
           media_url: mediaBase64
         })
@@ -147,7 +225,8 @@ export default function NewAutomation() {
           state: { 
             automationId: automation.id, 
             variants: response.variants,
-            mediaUrl: mediaBase64
+            mediaUrl: mediaBase64,
+            whatsappChannel: selectedWaChannel
           } 
         });
       } else {
@@ -161,7 +240,11 @@ export default function NewAutomation() {
   };
 
   const togglePlatform = (key: keyof typeof platforms) => {
-    setPlatforms(prev => ({ ...prev, [key]: !prev[key] }));
+    if (key === 'whatsapp') {
+      handleToggleWhatsApp();
+    } else {
+      setPlatforms(prev => ({ ...prev, [key]: !prev[key] }));
+    }
   };
 
   const addPromptHelper = (phrase: string) => {
@@ -429,36 +512,75 @@ export default function NewAutomation() {
 
             <div className="flex-col gap-3">
               {/* WhatsApp Card */}
-              <div
-                onClick={() => togglePlatform('whatsapp')}
-                className="flex items-center justify-between p-3.5 cursor-pointer"
-                style={{
-                  borderRadius: '12px',
-                  border: platforms.whatsapp ? '2px solid #25D366' : '1px solid var(--border)',
-                  backgroundColor: platforms.whatsapp ? '#f0fdf4' : '#ffffff',
-                  transition: 'all 0.2s',
-                  marginBottom: '12px'
-                }}
-              >
-                <div className="flex items-center gap-3">
-                  <span style={{ color: '#25D366', backgroundColor: '#dcfce7', padding: '8px', borderRadius: '10px' }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
-                    </svg>
-                  </span>
-                  <div>
-                    <h4 className="font-bold text-sm text-main">WhatsApp Channels</h4>
-                    <p className="text-xs text-secondary">Broadcast directly to followers</p>
+              <div className="flex flex-col gap-2 mb-2">
+                <div
+                  onClick={() => togglePlatform('whatsapp')}
+                  className="flex items-center justify-between p-3.5 cursor-pointer"
+                  style={{
+                    borderRadius: '12px',
+                    border: platforms.whatsapp ? '2px solid #25D366' : '1px solid var(--border)',
+                    backgroundColor: platforms.whatsapp ? '#f0fdf4' : '#ffffff',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span style={{ color: '#25D366', backgroundColor: '#dcfce7', padding: '8px', borderRadius: '10px' }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="font-bold text-sm text-main">WhatsApp Channels</h4>
+                      <p className="text-xs text-secondary">Broadcast directly to followers</p>
+                    </div>
                   </div>
+                  <input
+                    type="checkbox"
+                    checked={platforms.whatsapp}
+                    onChange={() => togglePlatform('whatsapp')}
+                    className="w-4 h-4 text-primary bg-gray-100 border-gray-300 rounded focus:ring-primary"
+                    onClick={e => e.stopPropagation()}
+                  />
                 </div>
-                <input
-                  type="checkbox"
-                  checked={platforms.whatsapp}
-                  onChange={() => togglePlatform('whatsapp')}
-                  className="w-4 h-4 text-primary bg-gray-100 border-gray-300 rounded focus:ring-primary"
-                  onClick={e => e.stopPropagation()}
-                />
+
+                {/* WhatsApp Channel Selection Info Banner */}
+                {platforms.whatsapp && (
+                  <div>
+                    {waConnected === false ? (
+                      <div className="p-2.5 rounded-xl text-xs flex items-center justify-between" style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}>
+                        <span>Connect WhatsApp to select channel</span>
+                        <button type="button" onClick={() => navigate('/whatsapp-channels')} className="font-bold underline ml-1">Connect →</button>
+                      </div>
+                    ) : (
+                      <div className="p-2.5 rounded-xl text-xs flex items-center justify-between" style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                        <div className="flex items-center gap-2 truncate">
+                          {selectedWaChannel?.pictureUrl ? (
+                            <img
+                              src={selectedWaChannel.pictureUrl.includes('whatsapp.net') ? `${API_BASE_URL}/api/channels/picture-proxy?url=${encodeURIComponent(selectedWaChannel.pictureUrl)}` : selectedWaChannel.pictureUrl}
+                              alt=""
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                              className="w-5 h-5 rounded-full object-cover border border-green-200"
+                            />
+                          ) : (
+                            <MessageCircle size={14} className="text-green-600" />
+                          )}
+                          <span className="truncate font-medium text-main">
+                            Channel: <strong className="text-green-800">{selectedWaChannel ? selectedWaChannel.name : 'Click to select channel'}</strong>
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setIsWaModalOpen(true); }}
+                          className="text-xs font-bold text-green-700 hover:underline flex-shrink-0 ml-2"
+                        >
+                          Change
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
+
               {/* Instagram Card */}
               <div
                 onClick={() => togglePlatform('instagram')}
@@ -560,6 +682,161 @@ export default function NewAutomation() {
         </div>
 
       </div>
+
+      {/* Select WhatsApp Channel Modal */}
+      {isWaModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" style={{ backdropFilter: 'blur(2px)' }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative">
+            <button
+              type="button"
+              onClick={() => setIsWaModalOpen(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100"
+            >
+              <X size={18} />
+            </button>
+            
+            <div className="flex items-center gap-2.5 mb-1">
+              <div className="w-9 h-9 rounded-xl bg-green-100 text-green-600 flex items-center justify-center">
+                <MessageCircle size={20} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-main">Select WhatsApp Channel</h3>
+              </div>
+            </div>
+            <p className="text-xs text-secondary mb-4">
+              Choose the target WhatsApp Channel for this automation campaign.
+            </p>
+
+            {/* If not connected */}
+            {waConnected === false && (
+              <div className="p-4 rounded-xl mb-4 text-center" style={{ backgroundColor: '#fef2f2', border: '1px solid #fee2e2' }}>
+                <AlertCircle size={26} className="text-red-500 mx-auto mb-2" />
+                <p className="text-sm font-semibold text-red-800 mb-1">WhatsApp Account Not Connected</p>
+                <p className="text-xs text-red-600 mb-3">Please connect your WhatsApp account to select channels and publish broadcasts.</p>
+                <button
+                  type="button"
+                  onClick={() => navigate('/whatsapp-channels')}
+                  className="btn-primary w-full text-xs font-bold"
+                  style={{ backgroundColor: '#25D366', borderColor: '#25D366' }}
+                >
+                  Connect WhatsApp Account →
+                </button>
+              </div>
+            )}
+
+            {/* If loading */}
+            {loadingWaChannels && (
+              <div className="py-8 text-center">
+                <Loader2 size={28} className="animate-spin text-green-600 mx-auto mb-2" />
+                <p className="text-xs text-secondary font-medium">Loading your WhatsApp channels...</p>
+              </div>
+            )}
+
+            {/* If connected and no channels */}
+            {waConnected && !loadingWaChannels && waChannels.length === 0 && (
+              <div className="py-6 text-center">
+                <MessageCircle size={36} className="text-gray-300 mx-auto mb-2" />
+                <p className="text-sm font-semibold text-main mb-1">No Channels Discovered</p>
+                <p className="text-xs text-secondary mb-4 max-w-xs mx-auto">We didn't find any WhatsApp channels linked to your account yet.</p>
+                <div className="flex gap-2 justify-center">
+                  <button
+                    type="button"
+                    onClick={loadWhatsAppChannels}
+                    className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                  >
+                    <RefreshCw size={12} /> Auto-Discover
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/whatsapp-channels')}
+                    className="btn-primary text-xs"
+                    style={{ backgroundColor: '#25D366', borderColor: '#25D366' }}
+                  >
+                    Link Channel Link →
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Channels list */}
+            {waConnected && !loadingWaChannels && waChannels.length > 0 && (
+              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 mb-5">
+                {waChannels.map((ch: any) => {
+                  const isSel = (selectedWaChannel?.id || selectedWaChannel?.channel_id) === (ch.id || ch.channel_id);
+                  const pic = ch.pictureUrl;
+                  const picUrl = pic ? (pic.includes('whatsapp.net') ? `${API_BASE_URL}/api/channels/picture-proxy?url=${encodeURIComponent(pic)}` : pic) : null;
+                  
+                  return (
+                    <div
+                      key={ch.id || ch.channel_id}
+                      onClick={() => setSelectedWaChannel(ch)}
+                      className="flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all"
+                      style={{
+                        borderColor: isSel ? '#25D366' : '#e2e8f0',
+                        backgroundColor: isSel ? '#f0fdf4' : '#ffffff',
+                        boxShadow: isSel ? '0 1px 3px rgba(37,211,102,0.15)' : 'none'
+                      }}
+                    >
+                      {picUrl ? (
+                        <img
+                          src={picUrl}
+                          alt=""
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                          className="w-10 h-10 rounded-full object-cover border border-gray-200"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full bg-green-100 text-green-600 flex items-center justify-center flex-shrink-0">
+                          <MessageCircle size={18} />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-sm text-main truncate">{ch.name}</span>
+                          {ch.role && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+                              {ch.role.toUpperCase()}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-secondary truncate">{ch.id || ch.channel_id}</p>
+                        <p className="text-[11px] text-muted">{ch.subscribers_count || 0} subscribers</p>
+                      </div>
+                      <div
+                        className="w-5 h-5 rounded-full border flex items-center justify-center flex-shrink-0"
+                        style={{
+                          borderColor: isSel ? '#25D366' : '#cbd5e1',
+                          backgroundColor: isSel ? '#25D366' : 'transparent'
+                        }}
+                      >
+                        {isSel && <div className="w-2 h-2 rounded-full bg-white" />}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => setIsWaModalOpen(false)}
+                className="btn-secondary text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsWaModalOpen(false)}
+                disabled={!selectedWaChannel}
+                className="btn-primary text-xs"
+                style={{ backgroundColor: '#25D366', borderColor: '#25D366' }}
+              >
+                Confirm Selection
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -38,38 +38,51 @@ class WhatsAppAdapter:
         session_id = session["id"]
         session_identifier = session["session_identifier"]
 
-        # 2. Get the selected channel (or first available)
-        channels_res = supabase.table("channels") \
-            .select("*") \
-            .eq("whatsapp_session_id", session_id) \
-            .execute()
+        # 2. Fetch automation to get whatsapp_channel_id and media_url
+        auto_res = supabase.table("automations").select("media_url, whatsapp_channel_id").eq("id", automation_id).execute()
+        automation_data = auto_res.data[0] if auto_res.data else {}
+        media_url = automation_data.get("media_url")
+        whatsapp_channel_id = automation_data.get("whatsapp_channel_id")
 
-        if not channels_res.data:
-            logger.warning(f"No channels found for session {session_id}, returning demo result.")
-            return {
-                "post_id": f"demo_wa_{uuid.uuid4().hex[:8]}",
-                "post_url": "https://whatsapp.com/channel/demo",
-                "demo": True
-            }
-
-        # Prefer selected channel, fallback to first
+        # 3. Determine target channel
         target = None
-        for ch in channels_res.data:
-            if ch.get("is_selected"):
-                target = ch
-                break
+        if whatsapp_channel_id:
+            # Use the explicitly selected channel from the automation
+            channels_res = supabase.table("channels") \
+                .select("*") \
+                .eq("whatsapp_session_id", session_id) \
+                .eq("channel_id", whatsapp_channel_id) \
+                .execute()
+            if channels_res.data:
+                target = channels_res.data[0]
+
         if not target:
-            target = channels_res.data[0]
+            # Fallback: use is_selected or first channel
+            channels_res = supabase.table("channels") \
+                .select("*") \
+                .eq("whatsapp_session_id", session_id) \
+                .execute()
+
+            if not channels_res.data:
+                logger.warning(f"No channels found for session {session_id}, returning demo result.")
+                return {
+                    "post_id": f"demo_wa_{uuid.uuid4().hex[:8]}",
+                    "post_url": "https://whatsapp.com/channel/demo",
+                    "demo": True
+                }
+
+            for ch in channels_res.data:
+                if ch.get("is_selected"):
+                    target = ch
+                    break
+            if not target:
+                target = channels_res.data[0]
 
         channel_id = target["channel_id"]
         channel_name = target.get("name", "WhatsApp Channel")
 
-        # 3. Publish via WhatsAppWebProvider → WCA service
+        # 4. Publish via WhatsAppWebProvider → WCA service
         try:
-            # Fetch automation to get media_url if any
-            auto_res = supabase.table("automations").select("media_url").eq("id", automation_id).execute()
-            media_url = auto_res.data[0].get("media_url") if auto_res.data else None
-
             if media_url and media_url.startswith("http"):
                 result = await _provider.publish_image(
                     session_identifier, channel_id, media_url, content
@@ -92,3 +105,4 @@ class WhatsAppAdapter:
         except Exception as e:
             logger.error(f"❌ WhatsApp publish failed: {e}")
             raise Exception(f"WhatsApp Channel publish failed: {str(e)}")
+

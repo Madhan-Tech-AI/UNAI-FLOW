@@ -8,6 +8,7 @@ class AutomationCreate(BaseModel):
     tone: str = "professional"
     cta_link: Optional[str] = None
     target_platforms: List[str]
+    whatsapp_channel_id: Optional[str] = None
     schedule_type: str = "now"
     scheduled_at: Optional[str] = None
 

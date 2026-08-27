@@ -45,8 +45,8 @@ class ChannelManager:
                     "channel_id": ch["id"],
                     "name": ch.get("name"),
                     "description": ch.get("description"),
-                    "picture_url": ch.get("picture"),
-                    "followers": ch.get("followers"),
+                    "picture_url": ch.get("pictureUrl") or ch.get("picture") or ch.get("picture_url"),
+                    "followers": ch.get("subscribers_count") or ch.get("followers") or 0,
                     "role": ch.get("role", "UNKNOWN")
                 }
                 
@@ -80,6 +80,19 @@ class ChannelManager:
         res = self.sb.table("channels").select("*").in_("whatsapp_session_id", session_ids).execute()
         return res.data
 
+    def get_connected_channels(self, user_id: str) -> List[Dict[str, Any]]:
+        """Get channels only from CONNECTED sessions — for automation channel selection."""
+        sessions = self.session_manager.get_sessions_for_user(user_id)
+        connected_session_ids = [
+            s["id"] for s in sessions
+            if s.get("status") in ("CONNECTED", "READY")
+        ]
+        if not connected_session_ids:
+            return []
+
+        res = self.sb.table("channels").select("*").in_("whatsapp_session_id", connected_session_ids).execute()
+        return res.data or []
+
     def select_channel(self, user_id: str, channel_id: str) -> bool:
         # Verify ownership
         channels = self.get_user_channels(user_id)
@@ -93,3 +106,11 @@ class ChannelManager:
         # Select the target channel
         res = self.sb.table("channels").update({"is_selected": True}).eq("id", channel_id).execute()
         return len(res.data) > 0
+
+    def delete_user_channels(self, user_id: str) -> None:
+        """Delete all channels associated with the user's WhatsApp sessions."""
+        sessions = self.session_manager.get_sessions_for_user(user_id)
+        session_ids = [s["id"] for s in sessions]
+        if session_ids:
+            self.sb.table("channels").delete().in_("whatsapp_session_id", session_ids).execute()
+

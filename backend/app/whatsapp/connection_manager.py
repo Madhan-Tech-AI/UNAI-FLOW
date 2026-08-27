@@ -7,6 +7,7 @@ gateway failures and logs every boundary with correlation IDs.
 """
 from typing import Dict, Any, Optional
 from .session_manager import SessionManager
+from .channel_manager import ChannelManager
 from .provider import WhatsAppProvider
 from .states import SessionStatus, is_valid_transition
 import traceback
@@ -34,6 +35,7 @@ class ConnectionManager:
     def __init__(self, provider: WhatsAppProvider):
         self.provider = provider
         self.session_manager = SessionManager()
+        self.channel_manager = ChannelManager(provider=provider)
 
     async def start_connection(
         self, user_id: str, session_identifier: Optional[str] = None
@@ -273,12 +275,18 @@ class ConnectionManager:
                             "user_id": user_id,
                             "platform": "whatsapp",
                             "platform_account_name": name or (f"+{phone}" if phone else "WhatsApp Account"),
-                            "platform_account_id": phone or session_identifier,
+                            "platform_account_id": session_identifier,
                             "status": "active",
-                            "updated_at": "now()",
                         }, on_conflict="user_id,platform").execute()
                     except Exception as pc_err:
                         logger.warning(f"[WA] PLATFORM_CONNECTIONS_UPSERT_NOTE error={pc_err}")
+
+                    # Auto-sync channels on successful connection
+                    try:
+                        logger.info(f"[WA] AUTO_SYNC_CHANNELS session_id={session_identifier}")
+                        asyncio.create_task(self._auto_sync_channels(user_id, session_identifier))
+                    except Exception as sync_err:
+                        logger.warning(f"[WA] AUTO_SYNC_CHANNELS_FAILED error={sync_err}")
                 else:
                     self.session_manager.update_session_status(
                         session["id"], provider_status_str
@@ -360,6 +368,12 @@ class ConnectionManager:
         except Exception as pc_del_err:
             logger.warning(f"[WA] PLATFORM_CONNECTIONS_DELETE_NOTE error={pc_del_err}")
 
+        # Clean up associated channels
+        try:
+            self.channel_manager.delete_user_channels(user_id)
+        except Exception as ch_del_err:
+            logger.warning(f"[WA] CHANNELS_DELETE_NOTE error={ch_del_err}")
+
         logger.info(f"[WA] DISCONNECT_COMPLETE session_id={session_identifier}")
 
         return {"success": True, "status": SessionStatus.DISCONNECTED.value}
@@ -367,3 +381,22 @@ class ConnectionManager:
     async def get_gateway_health(self) -> Dict[str, Any]:
         """Public method for the health endpoint."""
         return await self.provider.health_check()
+
+    async def _auto_sync_channels(self, user_id: str, session_identifier: str):
+        """Background task: sync channels after successful connection."""
+        try:
+            await asyncio.sleep(3)  # Small delay to let session fully stabilize
+            result = await self.channel_manager.sync_channels(user_id, session_identifier)
+            if result.get("success"):
+                logger.info(
+                    f"[WA] AUTO_SYNC_CHANNELS_COMPLETE session_id={session_identifier} "
+                    f"channels={len(result.get('channels', []))}"
+                )
+            else:
+                logger.warning(
+                    f"[WA] AUTO_SYNC_CHANNELS_PARTIAL session_id={session_identifier} "
+                    f"error={result.get('error')}"
+                )
+        except Exception as e:
+            logger.error(f"[WA] AUTO_SYNC_CHANNELS_ERROR session_id={session_identifier} error={e}")
+

@@ -18,6 +18,27 @@ def get_candidate_wca_urls() -> List[str]:
 async def get_connections(user: Dict[str, Any] = Depends(verify_jwt)):
     res = supabase.table("platform_connections").select("id, platform, platform_account_name, platform_account_id, status, connected_at").eq("user_id", user["user_id"]).execute()
     data = res.data or []
+
+    # Cross-check with active whatsapp_sessions for robust persistence
+    has_wa = any(c.get("platform") == "whatsapp" and c.get("status") == "active" for c in data)
+    if not has_wa:
+        try:
+            wa_res = supabase.table("whatsapp_sessions").select("*").eq("user_id", user["user_id"]).in_("status", ["CONNECTED", "READY"]).execute()
+            if wa_res.data and len(wa_res.data) > 0:
+                active_wa = wa_res.data[0]
+                phone = active_wa.get("phone_number")
+                name = f"+{phone}" if phone else "WhatsApp Account"
+                data.append({
+                    "id": active_wa["id"],
+                    "platform": "whatsapp",
+                    "platform_account_name": name,
+                    "platform_account_id": active_wa["session_identifier"],
+                    "status": "active",
+                    "connected_at": active_wa.get("last_connected_at") or active_wa.get("updated_at")
+                })
+        except Exception as e:
+            print(f"Note: error checking active whatsapp sessions: {e}")
+
     return {"connections": data}
 
 @router.post("/{platform}/start")
@@ -392,6 +413,25 @@ async def oauth_callback(platform: str, state: str, code: str = None):
 
 @router.delete("/{platform}")
 async def disconnect_platform(platform: str, user: Dict[str, Any] = Depends(verify_jwt)):
+    if platform == "whatsapp":
+        try:
+            from app.whatsapp.session_manager import SessionManager
+            from app.whatsapp.whatsapp_web_provider import WhatsAppWebProvider
+            from app.whatsapp.channel_manager import ChannelManager
+            sm = SessionManager()
+            sessions = sm.get_sessions_for_user(user["user_id"])
+            provider = WhatsAppWebProvider()
+            for s in sessions:
+                sm.update_session_status(s["id"], "DISCONNECTED")
+                try:
+                    await provider.disconnect(s["session_identifier"])
+                except Exception:
+                    pass
+            cm = ChannelManager(provider=provider)
+            cm.delete_user_channels(user["user_id"])
+        except Exception as e:
+            print(f"Note: Error during WhatsApp disconnect cleanup: {e}")
+
     for wca_url in get_candidate_wca_urls():
         try:
             async with httpx.AsyncClient(timeout=4.0) as client:

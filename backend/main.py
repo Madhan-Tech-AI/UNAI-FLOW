@@ -45,6 +45,13 @@ async def _warmup_wca():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure Supabase storage buckets exist
+    try:
+        from lib.supabase_client import ensure_storage_buckets
+        ensure_storage_buckets()
+    except Exception as e:
+        logger.warning(f"[STARTUP] Storage buckets check note: {e}")
+
     # Wake up WCA service (non-blocking)
     asyncio.create_task(_warmup_wca())
 

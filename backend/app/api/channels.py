@@ -186,6 +186,13 @@ async def resolve_channel(req: ResolveChannelRequest, user_id: str = Depends(get
                 "pictureUrl": "",
             }
 
+    # Persist the resolved channel to database (whatsapp_channels & channels tables)
+    if channel:
+        try:
+            channel_manager.save_resolved_channel(user_id, req.session_identifier, channel)
+        except Exception as save_err:
+            logger.warning(f"[WA] CHANNEL_PERSIST_ON_RESOLVE_FAILED error={save_err}")
+
     # Sanitize picture URL — WhatsApp CDN URLs (mmg.whatsapp.net) return 403 in browsers
     if channel and channel.get("pictureUrl"):
         pic_url = channel["pictureUrl"]

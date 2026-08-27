@@ -23,7 +23,7 @@ class WhatsAppAdapter:
         sessions_res = supabase.table("whatsapp_sessions") \
             .select("*") \
             .eq("user_id", user_id) \
-            .eq("status", "CONNECTED") \
+            .in_("status", ["CONNECTED", "READY"]) \
             .execute()
 
         if not sessions_res.data:
@@ -41,15 +41,70 @@ class WhatsAppAdapter:
         # 2. Fetch automation to get media_url
         auto_res = supabase.table("automations").select("media_url").eq("id", automation_id).execute()
         automation_data = auto_res.data[0] if auto_res.data else {}
-        media_url = automation_data.get("media_url")
+        raw_media_url = automation_data.get("media_url")
 
-        # 3. Determine target channel from channels table (is_selected flag is set during automation creation)
-        channels_res = supabase.table("channels") \
-            .select("*") \
-            .eq("whatsapp_session_id", session_id) \
-            .execute()
+        # Resolve media URL to public URL if base64 or storage path
+        media_url = None
+        if raw_media_url:
+            from services.media_manager import MediaManager
+            media_url = MediaManager.get_public_url(raw_media_url)
 
-        if not channels_res.data:
+        # 3. Determine target channel (check whatsapp_channels first, then channels table)
+        target = None
+
+        # Try whatsapp_channels table
+        try:
+            wch_res = supabase.table("whatsapp_channels") \
+                .select("*") \
+                .eq("connection_id", session_identifier) \
+                .execute()
+            if wch_res.data:
+                # Look for selected channel
+                for ch in wch_res.data:
+                    if ch.get("selected"):
+                        target = {
+                            "channel_id": ch["channel_id"],
+                            "name": ch.get("channel_name") or ch.get("name") or "WhatsApp Channel",
+                            "link": ch.get("channel_link") or f"https://whatsapp.com/channel/{ch['channel_id']}"
+                        }
+                        break
+                if not target and wch_res.data:
+                    first = wch_res.data[0]
+                    target = {
+                        "channel_id": first["channel_id"],
+                        "name": first.get("channel_name") or first.get("name") or "WhatsApp Channel",
+                        "link": first.get("channel_link") or f"https://whatsapp.com/channel/{first['channel_id']}"
+                    }
+        except Exception as e:
+            logger.debug(f"[WA] query whatsapp_channels in adapter note: {e}")
+
+        # Try channels table if not found
+        if not target:
+            try:
+                ch_res = supabase.table("channels") \
+                    .select("*") \
+                    .eq("whatsapp_session_id", session_id) \
+                    .execute()
+                if ch_res.data:
+                    for ch in ch_res.data:
+                        if ch.get("is_selected"):
+                            target = {
+                                "channel_id": ch["channel_id"],
+                                "name": ch.get("name", "WhatsApp Channel"),
+                                "link": f"https://whatsapp.com/channel/{ch['channel_id']}"
+                            }
+                            break
+                    if not target and ch_res.data:
+                        first = ch_res.data[0]
+                        target = {
+                            "channel_id": first["channel_id"],
+                            "name": first.get("name", "WhatsApp Channel"),
+                            "link": f"https://whatsapp.com/channel/{first['channel_id']}"
+                        }
+            except Exception as e:
+                logger.debug(f"[WA] query channels in adapter note: {e}")
+
+        if not target:
             logger.warning(f"No channels found for session {session_id}, returning demo result.")
             return {
                 "post_id": f"demo_wa_{uuid.uuid4().hex[:8]}",
@@ -57,34 +112,29 @@ class WhatsAppAdapter:
                 "demo": True
             }
 
-        target = None
-        for ch in channels_res.data:
-            if ch.get("is_selected"):
-                target = ch
-                break
-        if not target:
-            target = channels_res.data[0]
-
         channel_id = target["channel_id"]
         channel_name = target.get("name", "WhatsApp Channel")
+        channel_link = target.get("link", f"https://whatsapp.com/channel/{channel_id}")
 
         # 4. Publish via WhatsAppWebProvider → WCA service
         try:
             if media_url and media_url.startswith("http"):
                 result = await _provider.publish_image(
-                    session_identifier, channel_id, media_url, content
+                    session_identifier, channel_id, media_url, content,
+                    channel_name=channel_name, channel_link=channel_link
                 )
             else:
                 result = await _provider.publish_text(
-                    session_identifier, channel_id, content
+                    session_identifier, channel_id, content,
+                    channel_name=channel_name, channel_link=channel_link
                 )
 
-            post_id = result.get("messageId", f"wa_{uuid.uuid4().hex[:8]}")
+            post_id = result.get("postId") or result.get("messageId", f"wa_{uuid.uuid4().hex[:8]}")
             logger.info(f"✅ Published to WhatsApp Channel '{channel_name}' via WCA. messageId={post_id}")
 
             return {
                 "post_id": post_id,
-                "post_url": f"https://whatsapp.com/channel/{target.get('channel_id', '')}",
+                "post_url": channel_link,
                 "channel_name": channel_name,
                 "status": "success"
             }

@@ -1048,12 +1048,13 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
                     }}
                     onClick={() => { setSelectedChannel(ch); setActiveTab('publish'); }}>
                     {ch.pictureUrl ? (
-                      <img src={ch.pictureUrl} alt={ch.name || 'Channel'} style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1px solid #e5e7eb' }} />
-                    ) : (
-                      <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <MessageCircle size={16} style={{ color: '#25D366' }} />
-                      </div>
-                    )}
+                      <img src={ch.pictureUrl} alt={ch.name || 'Channel'}
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; const next = (e.target as HTMLImageElement).nextElementSibling as HTMLElement; if (next) next.style.display = 'flex'; }}
+                        style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1px solid #e5e7eb' }} />
+                    ) : null}
+                    <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: ch.pictureUrl ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <MessageCircle size={16} style={{ color: '#25D366' }} />
+                    </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-sm truncate">{ch.name || ch.subject || `Channel ${idx + 1}`}</span>
@@ -1089,12 +1090,13 @@ function DashboardView({ account, gatewayHealth, onDisconnect, onRefresh, copyTo
               {/* Selected Channel */}
               <div className="flex items-center gap-3 p-3 rounded-lg mb-4" style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0' }}>
                 {selectedChannel.pictureUrl ? (
-                  <img src={selectedChannel.pictureUrl} alt={selectedChannel.name || 'Channel'} style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '1px solid #bbf7d0' }} />
-                ) : (
-                  <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <MessageCircle size={16} style={{ color: '#25D366' }} />
-                  </div>
-                )}
+                  <img src={selectedChannel.pictureUrl} alt={selectedChannel.name || 'Channel'}
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; const next = (e.target as HTMLImageElement).nextElementSibling as HTMLElement; if (next) next.style.display = 'flex'; }}
+                    style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '1px solid #bbf7d0' }} />
+                ) : null}
+                <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: '#dcfce7', display: selectedChannel.pictureUrl ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <MessageCircle size={16} style={{ color: '#25D366' }} />
+                </div>
                 <div className="flex-1">
                   <div className="font-semibold text-sm">{selectedChannel.name || selectedChannel.subject || 'Channel'}</div>
                   <div className="text-xs text-gray-500">{selectedChannel.id || selectedChannel.jid}</div>

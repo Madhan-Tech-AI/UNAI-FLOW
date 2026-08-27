@@ -160,7 +160,51 @@ async def resolve_channel(req: ResolveChannelRequest, user_id: str = Depends(get
                 "pictureUrl": "",
             }
 
+    # Sanitize picture URL — WhatsApp CDN URLs (mmg.whatsapp.net) return 403 in browsers
+    if channel and channel.get("pictureUrl"):
+        pic_url = channel["pictureUrl"]
+        if "mmg.whatsapp.net" in pic_url or "pps.whatsapp.net" in pic_url:
+            # Route through our proxy endpoint
+            import urllib.parse
+            channel["pictureUrl"] = f"/api/channels/picture-proxy?url={urllib.parse.quote(pic_url, safe='')}"
+
     return {"success": True, "data": channel}
+
+
+@router.get("/picture-proxy")
+async def picture_proxy(url: str):
+    """
+    Proxy for WhatsApp CDN profile pictures that return 403 when loaded directly in browsers.
+    Fetches the image server-side and returns it.
+    """
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing url parameter")
+
+    # Only allow proxying WhatsApp CDN URLs for security
+    allowed_domains = ["mmg.whatsapp.net", "pps.whatsapp.net", "web.whatsapp.com"]
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if not any(domain in (parsed.hostname or "") for domain in allowed_domains):
+        raise HTTPException(status_code=403, detail="Only WhatsApp CDN URLs can be proxied")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail="Failed to fetch image")
+
+            from fastapi.responses import Response
+            content_type = resp.headers.get("content-type", "image/jpeg")
+            return Response(
+                content=resp.content,
+                media_type=content_type,
+                headers={"Cache-Control": "public, max-age=86400"}
+            )
+    except httpx.HTTPError as e:
+        logger.warning(f"[WA] PICTURE_PROXY_FAILED url={url[:50]} error={e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch image from WhatsApp CDN")
 
 
 @router.post("/publish")

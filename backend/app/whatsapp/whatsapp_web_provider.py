@@ -342,6 +342,21 @@ class WhatsAppWebProvider(WhatsAppProvider):
             f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
             json=payload,
         )
+        # Handle gateway-specific error responses
+        if response.status_code == 400:
+            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            error_msg = data.get("error", data.get("detail", "Bad request"))
+            if "not connected" in error_msg.lower() or "scan qr" in error_msg.lower():
+                raise Exception(
+                    "WhatsApp session is not connected. Please go to the Connections page, "
+                    "scan the QR code to link your WhatsApp account, then try publishing again."
+                )
+            raise Exception(f"Gateway rejected publish request: {error_msg}")
+        if response.status_code == 404:
+            raise Exception(
+                "WhatsApp session not found on the gateway. Please reconnect your WhatsApp account "
+                "from the Connections page."
+            )
         response.raise_for_status()
         result = response.json()
         logger.info(
@@ -367,6 +382,16 @@ class WhatsAppWebProvider(WhatsAppProvider):
             f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
             json=payload,
         )
+        if response.status_code == 400:
+            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            error_msg = data.get("error", data.get("detail", "Bad request"))
+            if "not connected" in error_msg.lower() or "scan qr" in error_msg.lower():
+                raise Exception(
+                    "WhatsApp session is not connected. Please scan the QR code to link your WhatsApp account first."
+                )
+            raise Exception(f"Gateway rejected publish request: {error_msg}")
+        if response.status_code == 404:
+            raise Exception("WhatsApp session not found. Please reconnect your WhatsApp account.")
         response.raise_for_status()
         return response.json()
 
@@ -387,6 +412,16 @@ class WhatsAppWebProvider(WhatsAppProvider):
             f"/v1/whatsapp/connections/{session_identifier}/channels/{channel_id}/publish",
             json=payload,
         )
+        if response.status_code == 400:
+            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            error_msg = data.get("error", data.get("detail", "Bad request"))
+            if "not connected" in error_msg.lower() or "scan qr" in error_msg.lower():
+                raise Exception(
+                    "WhatsApp session is not connected. Please scan the QR code to link your WhatsApp account first."
+                )
+            raise Exception(f"Gateway rejected publish request: {error_msg}")
+        if response.status_code == 404:
+            raise Exception("WhatsApp session not found. Please reconnect your WhatsApp account.")
         response.raise_for_status()
         return response.json()
 

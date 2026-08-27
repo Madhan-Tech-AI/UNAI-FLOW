@@ -37,7 +37,7 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
 
   const startTime = Date.now();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout for Render cold starts
+  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout for AI generation & Render cold starts
 
   try {
     const response = await fetch(url, {

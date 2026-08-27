@@ -44,7 +44,7 @@ async def create_automation(automation: AutomationCreate, user: Dict[str, Any] =
     wa_channel_id = data.get("whatsapp_channel_id")
     if wa_channel_id:
         try:
-            supabase.table("channels").update({"is_selected": False}).execute()
+            supabase.table("channels").update({"is_selected": False}).neq("channel_id", "").execute()
             supabase.table("channels").update({"is_selected": True}).eq("channel_id", wa_channel_id).execute()
         except Exception as e:
             print(f"Warning: Failed to update channel selection: {e}")

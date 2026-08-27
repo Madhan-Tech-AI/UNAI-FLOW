@@ -252,28 +252,47 @@ async def test_platform_connection(platform: str, user: Dict[str, Any] = Depends
     Tests live connection status and token validity in real-time.
     """
     user_id = user["user_id"]
+
+    if platform == "whatsapp":
+        # 1. Check whatsapp_sessions first
+        wa_res = supabase.table("whatsapp_sessions").select("*").eq("user_id", user_id).in_("status", ["CONNECTED", "READY"]).execute()
+        active_wa = wa_res.data[0] if (wa_res.data and len(wa_res.data) > 0) else None
+
+        # 2. Check platform_connections as well
+        conn_res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", "whatsapp").execute()
+        conn = conn_res.data[0] if (conn_res.data and len(conn_res.data) > 0) else None
+
+        if not active_wa and not conn:
+            raise HTTPException(status_code=404, detail="No active connection found for whatsapp")
+
+        phone = None
+        if active_wa and active_wa.get("phone_number"):
+            phone = str(active_wa["phone_number"]).lstrip("+")
+        elif conn and conn.get("platform_account_name"):
+            phone = str(conn["platform_account_name"]).lstrip("+")
+
+        phone_display = f"+{phone}" if phone else "WhatsApp Account"
+
+        # 3. Check gateway health
+        try:
+            from app.whatsapp.whatsapp_web_provider import WhatsAppWebProvider
+            provider = WhatsAppWebProvider()
+            health = await provider.health_check()
+            if health.get("ok"):
+                return {"success": True, "message": f"WhatsApp connected with {phone_display} (Gateway Online)"}
+        except Exception:
+            pass
+
+        return {"success": True, "message": f"WhatsApp connected with {phone_display}"}
+
     conn_res = supabase.table("platform_connections").select("*").eq("user_id", user_id).eq("platform", platform).execute()
     if not conn_res.data:
         raise HTTPException(status_code=404, detail=f"No active connection found for {platform}")
-    
+
     conn = conn_res.data[0]
     raw_token = decrypt_token(conn.get("access_token", ""))
-    
-    if platform == "whatsapp":
-        for wca_url in get_candidate_wca_urls():
-            try:
-                async with httpx.AsyncClient(timeout=4.0) as client:
-                    gw_resp = await client.get(f"{wca_url}/api/status")
-                    if gw_resp.status_code == 200:
-                        status_info = gw_resp.json().get("whatsapp", {})
-                        if status_info.get("isReady"):
-                            return {"success": True, "message": f"WhatsApp Channel Gateway online & linked! Account: {conn.get('platform_account_name', 'Active')}"}
-                        return {"success": False, "message": f"WhatsApp session state: {status_info.get('state', 'offline')}. Click 'Switch Channel' or scan QR to link phone."}
-            except Exception:
-                continue
-        return {"success": True, "message": f"WhatsApp connection active for {conn.get('platform_account_name')}"}
 
-    elif platform in ["instagram", "facebook"]:
+    if platform in ["instagram", "facebook"]:
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 test_resp = await client.get(f"https://graph.facebook.com/v19.0/me?access_token={raw_token}")

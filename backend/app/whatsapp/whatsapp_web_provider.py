@@ -480,8 +480,8 @@ class WhatsAppWebProvider(WhatsAppProvider):
             response = await self._make_request(
                 "POST",
                 f"/v1/whatsapp/{session_identifier}/channels/resolve",
-                json={"link": link_or_code},
-                timeout=10.0,
+                json={"link_or_code": link_or_code, "link": link_or_code},
+                timeout=12.0,
                 max_retries=0,
             )
             if response.status_code == 200:

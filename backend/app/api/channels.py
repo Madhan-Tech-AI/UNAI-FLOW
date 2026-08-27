@@ -80,9 +80,44 @@ async def select_channel(channel_id: str, user_id: str = Depends(get_current_use
         raise HTTPException(status_code=404, detail={"code": "CHANNEL_NOT_FOUND", "message": str(e)})
 
 
-class ResolveChannelRequest(BaseModel):
+class AuthorizeAccountRequest(BaseModel):
     session_identifier: str
-    link_or_code: str
+    channel_link_or_code: Optional[str] = None
+
+
+@router.post("/authorize")
+async def authorize_account(req: AuthorizeAccountRequest, user_id: str = Depends(get_current_user_id)):
+    """
+    Authorize connected WhatsApp account, configure permissions, and fetch channels.
+    If an optional channel link or invite code is provided, resolves and verifies ownership.
+    """
+    logger.info(f"[WA] ACCOUNT_AUTHORIZE_REQUEST session_id={req.session_identifier} link={req.channel_link_or_code}")
+
+    resolved_channel = None
+    if req.channel_link_or_code and req.channel_link_or_code.strip():
+        try:
+            resolved = await provider.resolve_channel(req.session_identifier, req.channel_link_or_code.strip())
+            if resolved:
+                channel_manager.save_resolved_channel(user_id, req.session_identifier, resolved)
+                resolved_channel = resolved
+        except Exception as res_err:
+            logger.warning(f"[WA] RESOLVE_ON_AUTHORIZE_WARNING error={res_err}")
+
+    # Discover all channels accessible to this socket
+    try:
+        channels = await provider.get_channels(req.session_identifier)
+        if channels:
+            await channel_manager.sync_channels(user_id, req.session_identifier)
+    except Exception as disc_err:
+        logger.warning(f"[WA] DISCOVER_ON_AUTHORIZE_WARNING error={disc_err}")
+
+    db_channels = channel_manager.get_user_channels(user_id)
+    return {
+        "success": True,
+        "authorized": True,
+        "resolved_channel": resolved_channel,
+        "data": db_channels,
+    }
 
 
 @router.get("/discover")

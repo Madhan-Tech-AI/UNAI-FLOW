@@ -16,6 +16,11 @@ import {
   Users,
   Info,
   Sparkles,
+  Lock,
+  FileCheck2,
+  Settings2,
+  X,
+  Link2,
 } from 'lucide-react';
 import { fetchApi, API_BASE_URL } from '../lib/apiClient';
 import { supabase } from '../lib/supabaseClient';
@@ -127,6 +132,7 @@ const log = (tag: string, data: any) => {
 export default function WhatsAppChannels() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const mountedRef = useRef(true);
 
   // ── Connection State ──
@@ -315,9 +321,12 @@ export default function WhatsAppChannels() {
           webhookUrl: `${API_BASE_URL}/webhooks/whatsapp`,
         });
 
+        // Automatically open the Configure & Authorize Modal for explicit user confirmation!
+        setShowAuthModal(true);
+
         setTimeout(() => {
           if (mountedRef.current) setViewMode('dashboard');
-        }, 1000);
+        }, 800);
       }
 
       if (newStatus === 'ERROR') {
@@ -443,6 +452,7 @@ export default function WhatsAppChannels() {
         });
       }
       setAccount(null);
+      setShowAuthModal(false);
       setViewMode('list');
       setWaState('DISCONNECTED');
       sessionRef.current = null;
@@ -468,15 +478,27 @@ export default function WhatsAppChannels() {
   // ═══════════════════════════════════════════════════════
   if (viewMode === 'dashboard' && account) {
     return (
-      <DashboardView
-        account={account}
-        gatewayHealth={gatewayHealth}
-        onDisconnect={handleDisconnect}
-        onRefresh={() => {
-          checkGatewayHealth();
-          loadExistingSessions();
-        }}
-      />
+      <>
+        <DashboardView
+          account={account}
+          gatewayHealth={gatewayHealth}
+          onDisconnect={handleDisconnect}
+          onOpenAuthModal={() => setShowAuthModal(true)}
+          onRefresh={() => {
+            checkGatewayHealth();
+            loadExistingSessions();
+          }}
+        />
+
+        {/* ── Terms & Authorization Modal ── */}
+        {showAuthModal && (
+          <AuthorizationModal
+            account={account}
+            onClose={() => setShowAuthModal(false)}
+            onDisconnect={handleDisconnect}
+          />
+        )}
+      </>
     );
   }
 
@@ -696,11 +718,13 @@ export default function WhatsAppChannels() {
 function DashboardView({
   account,
   onDisconnect,
+  onOpenAuthModal,
   onRefresh,
 }: {
   account: ConnectedAccount;
   gatewayHealth?: GatewayHealth | null;
   onDisconnect: () => void;
+  onOpenAuthModal: () => void;
   onRefresh: () => void;
 }) {
   const [channels, setChannels] = useState<WhatsAppChannelItem[]>([]);
@@ -837,6 +861,15 @@ function DashboardView({
 
         <div className="flex items-center gap-2.5">
           <button
+            onClick={onOpenAuthModal}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-all shadow-sm"
+            title="Configure Permissions and Channel Authorization"
+          >
+            <Settings2 size={13} className="text-emerald-600" />
+            <span>Authorize & Configure</span>
+          </button>
+
+          <button
             onClick={() => {
               onRefresh();
               fetchChannels();
@@ -969,14 +1002,22 @@ function DashboardView({
             <h3 className="text-base font-bold text-slate-900 mb-1">No Manageable Channels Found</h3>
             <p className="text-xs text-slate-500 max-w-md mx-auto mb-6 leading-relaxed">
               We couldn't find any WhatsApp Channels where your connected account (+{account.phone || 'account'}) is an <strong>Admin</strong> or <strong>Owner</strong>.
-              Once you create or are assigned admin permissions on a channel in WhatsApp, click below to sync.
+              Click below to complete authorization, sync, or specify your channel invite link.
             </p>
-            <button
-              onClick={fetchChannels}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-sm"
-            >
-              <RefreshCw size={13} /> Re-Scan WhatsApp Channels
-            </button>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                onClick={onOpenAuthModal}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-sm"
+              >
+                <Sparkles size={14} /> Authorize & Sync Channels
+              </button>
+              <button
+                onClick={fetchChannels}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 transition-colors"
+              >
+                <RefreshCw size={13} /> Re-Scan
+              </button>
+            </div>
           </div>
         )}
 
@@ -1138,4 +1179,207 @@ function DashboardView({
     </div>
   );
 }
+
+// ═══════════════════════════════════════════════════════
+// AuthorizationModal Component (Popup for Terms, Permissions & Channel Sync)
+// ═══════════════════════════════════════════════════════
+function AuthorizationModal({
+  account,
+  onClose,
+  onDisconnect,
+}: {
+  account: ConnectedAccount;
+  onClose: () => void;
+  onDisconnect: () => void;
+}) {
+  const [agreed, setAgreed] = useState(true);
+  const [channelLink, setChannelLink] = useState('');
+  const [authorizing, setAuthorizing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
+
+  const handleAuthorize = async () => {
+    if (!agreed) return;
+    setAuthorizing(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    try {
+      const res = await fetchApi('/api/channels/authorize', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_identifier: account.sessionIdentifier,
+          channel_link_or_code: channelLink.trim() || undefined,
+        }),
+      });
+
+      if (res?.success) {
+        setSuccessMsg('WhatsApp account authorized and channels synchronized successfully!');
+        setTimeout(() => {
+          onClose();
+          window.location.reload();
+        }, 1200);
+      } else {
+        setErrorMsg(res?.error || 'Failed to authorize WhatsApp account.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Authorization failed. Please try again.');
+    } finally {
+      setAuthorizing(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-2xl max-w-lg w-full p-6 sm:p-7 relative overflow-hidden">
+        {/* Close Button */}
+        <button
+          onClick={onClose}
+          className="absolute top-5 right-5 p-1.5 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+        >
+          <X size={18} />
+        </button>
+
+        {/* Modal Header */}
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/20 shrink-0">
+            <ShieldCheck size={24} />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-slate-900">Authorize WhatsApp Account</h3>
+            <p className="text-xs text-slate-500">Configure permissions and authorize automated channel publishing.</p>
+          </div>
+        </div>
+
+        {/* Account Profile Card */}
+        <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 mb-5 flex items-center gap-3.5">
+          <div className="relative shrink-0">
+            {account.profilePictureUrl ? (
+              <img
+                src={getSafeImageUrl(account.profilePictureUrl)}
+                alt="Profile"
+                className="w-12 h-12 rounded-xl object-cover border border-emerald-200"
+              />
+            ) : (
+              <div className="w-12 h-12 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-bold">
+                <MessageCircle size={22} />
+              </div>
+            )}
+            <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-slate-900 truncate">
+                {account.phone ? `+${account.phone}` : (account.name || 'WhatsApp Account')}
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                Authenticated
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">{account.sessionIdentifier}</p>
+          </div>
+        </div>
+
+        {/* Permissions Breakdown */}
+        <div className="space-y-2.5 mb-5 text-xs text-slate-600">
+          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50/70 border border-slate-100">
+            <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-semibold text-slate-800">Read & Manage WhatsApp Channels</span>
+              <p className="text-[11px] text-slate-500 mt-0.5">Automatically discover and retrieve channel metrics for channels where this account is Admin or Owner.</p>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50/70 border border-slate-100">
+            <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-semibold text-slate-800">Automated Content Publishing</span>
+              <p className="text-[11px] text-slate-500 mt-0.5">Allow UNAI Flow automation engine to broadcast scheduled campaigns, articles, and media directly to your selected channel.</p>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50/70 border border-slate-100">
+            <Lock size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-semibold text-slate-800">End-to-End Secure Tokens</span>
+              <p className="text-[11px] text-slate-500 mt-0.5">Multi-device socket tokens are securely isolated with AES-256 and can be disconnected anytime.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Optional Channel Link Input */}
+        <div className="mb-5 bg-emerald-50/40 rounded-2xl p-3.5 border border-emerald-100/90">
+          <label className="block text-xs font-bold text-slate-800 mb-1 flex items-center gap-1.5">
+            <Link2 size={13} className="text-emerald-600" /> Specify WhatsApp Channel Link (Optional)
+          </label>
+          <p className="text-[11px] text-slate-500 mb-2">
+            If your channel was created recently or needs immediate verification, enter your channel link or invite code below:
+          </p>
+          <input
+            type="text"
+            placeholder="https://whatsapp.com/channel/0029VbDxqHz6hENhNBcZM31M"
+            value={channelLink}
+            onChange={(e) => setChannelLink(e.target.value)}
+            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono text-slate-800"
+          />
+        </div>
+
+        {/* Terms & Agreement Checkbox */}
+        <label className="flex items-start gap-2.5 mb-5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={agreed}
+            onChange={(e) => setAgreed(e.target.checked)}
+            className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+          />
+          <span className="text-xs text-slate-600 leading-snug">
+            I agree to the <strong className="text-slate-800">UNAI Flow Terms of Service</strong> and authorize this WhatsApp account for automated marketing actions and channel administration.
+          </span>
+        </label>
+
+        {/* Status Alerts */}
+        {errorMsg && (
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs mb-4 flex items-center gap-2">
+            <AlertTriangle size={14} className="shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+        {successMsg && (
+          <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs mb-4 flex items-center gap-2">
+            <Check size={14} className="shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
+        {/* Modal Actions */}
+        <div className="flex items-center justify-end gap-3 pt-2">
+          <button
+            onClick={onDisconnect}
+            className="px-4 py-2.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors"
+          >
+            Disconnect Account
+          </button>
+          <button
+            onClick={handleAuthorize}
+            disabled={!agreed || authorizing}
+            className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] transition-all shadow-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {authorizing ? (
+              <>
+                <Loader2 size={14} className="animate-spin" />
+                <span>Authorizing & Syncing...</span>
+              </>
+            ) : (
+              <>
+                <FileCheck2 size={14} />
+                <span>Approve & Authorize WhatsApp</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 

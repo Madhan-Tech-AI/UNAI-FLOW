@@ -16,11 +16,20 @@ export interface DiscoveredNewsletter {
 }
 
 export class NewsletterService {
+  // Discovery cache with 30s TTL to prevent WhatsApp MEX rate-overlimit errors
+  private static discoveryCache = new Map<string, { channels: DiscoveredNewsletter[]; timestamp: number }>();
+
   /**
    * Discovers all WhatsApp Channels/Newsletters where the connected user is owner/admin or subscriber.
    * Fetches real avatars, exact subscriber counts, verification status, and admin roles.
    */
-  public static async discoverChannels(sock: WASocket): Promise<DiscoveredNewsletter[]> {
+  public static async discoverChannels(sock: WASocket, connectionKey: string = 'default'): Promise<DiscoveredNewsletter[]> {
+    const cached = this.discoveryCache.get(connectionKey);
+    if (cached && (Date.now() - cached.timestamp < 30000) && cached.channels.length > 0) {
+      logger.info({ count: cached.channels.length, ageMs: Date.now() - cached.timestamp }, '[WCA] CHANNELS_SERVED_FROM_CACHE');
+      return cached.channels;
+    }
+
     const channels: DiscoveredNewsletter[] = [];
     const seenIds = new Set<string>();
 
@@ -102,8 +111,8 @@ export class NewsletterService {
             }
           }
         }
-      } catch (mexErr) {
-        logger.warn({ err: mexErr }, '[WCA] WMex subscribed list query warning');
+      } catch (mexErr: any) {
+        logger.warn({ err: mexErr.message || mexErr }, '[WCA] WMex subscribed list query warning');
       }
 
       // 2. Query chat list from socket memory for any @newsletter JIDs
@@ -160,7 +169,8 @@ export class NewsletterService {
         logger.debug({ err: storeErr }, '[WCA] Chat store scan note');
       }
 
-      logger.info({ count: channels.length }, '[WCA] CHANNELS_DISCOVERED');
+      logger.info({ count: channels.length, connectionKey }, '[WCA] CHANNELS_DISCOVERED');
+      this.discoveryCache.set(connectionKey, { channels, timestamp: Date.now() });
       return channels;
     } catch (err) {
       logger.error({ err }, '[WCA] Error during channel discovery');

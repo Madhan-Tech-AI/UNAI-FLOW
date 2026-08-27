@@ -242,7 +242,7 @@ app.get('/v1/whatsapp/:connectionId/channels', async (req: Request, res: Respons
       });
     }
 
-    const allChannels = await NewsletterService.discoverChannels(session.socket);
+    const allChannels = await NewsletterService.discoverChannels(session.socket, connectionId);
     // Return all discovered channels with role metadata
     return res.json({
       success: true,
@@ -250,6 +250,41 @@ app.get('/v1/whatsapp/:connectionId/channels', async (req: Request, res: Respons
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message, channels: [] });
+  }
+});
+
+/**
+ * 5b. Resolve and verify a specific Channel by Link/Invite Code/JID
+ * POST /v1/whatsapp/:connectionId/channels/resolve
+ */
+app.post('/v1/whatsapp/:connectionId/channels/resolve', async (req: Request, res: Response) => {
+  try {
+    const connectionId = getParam(req, 'connectionId');
+    const { link_or_code } = req.body;
+    if (!link_or_code) {
+      return res.status(400).json({ success: false, error: 'link_or_code is required' });
+    }
+
+    let session = sessionManager.getSession(connectionId);
+    if (!session || session.status !== 'CONNECTED' || !session.socket) {
+      session = await sessionManager.getOrCreateSession(connectionId);
+    }
+
+    if (!session || session.status !== 'CONNECTED' || !session.socket) {
+      return res.status(400).json({ success: false, error: 'WhatsApp session not connected' });
+    }
+
+    const channel = await NewsletterService.resolveChannel(session.socket, link_or_code);
+    if (!channel) {
+      return res.status(404).json({ success: false, error: 'Channel could not be resolved from WhatsApp.' });
+    }
+
+    return res.json({
+      success: true,
+      channel,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 

@@ -7,11 +7,18 @@ exports.NewsletterService = void 0;
 const pino_1 = __importDefault(require("pino"));
 const logger = (0, pino_1.default)({ level: 'info' });
 class NewsletterService {
+    // Discovery cache with 30s TTL to prevent WhatsApp MEX rate-overlimit errors
+    static discoveryCache = new Map();
     /**
      * Discovers all WhatsApp Channels/Newsletters where the connected user is owner/admin or subscriber.
      * Fetches real avatars, exact subscriber counts, verification status, and admin roles.
      */
-    static async discoverChannels(sock) {
+    static async discoverChannels(sock, connectionKey = 'default') {
+        const cached = this.discoveryCache.get(connectionKey);
+        if (cached && (Date.now() - cached.timestamp < 30000) && cached.channels.length > 0) {
+            logger.info({ count: cached.channels.length, ageMs: Date.now() - cached.timestamp }, '[WCA] CHANNELS_SERVED_FROM_CACHE');
+            return cached.channels;
+        }
         const channels = [];
         const seenIds = new Set();
         try {
@@ -89,7 +96,7 @@ class NewsletterService {
                 }
             }
             catch (mexErr) {
-                logger.warn({ err: mexErr }, '[WCA] WMex subscribed list query warning');
+                logger.warn({ err: mexErr.message || mexErr }, '[WCA] WMex subscribed list query warning');
             }
             // 2. Query chat list from socket memory for any @newsletter JIDs
             try {
@@ -143,7 +150,8 @@ class NewsletterService {
             catch (storeErr) {
                 logger.debug({ err: storeErr }, '[WCA] Chat store scan note');
             }
-            logger.info({ count: channels.length }, '[WCA] CHANNELS_DISCOVERED');
+            logger.info({ count: channels.length, connectionKey }, '[WCA] CHANNELS_DISCOVERED');
+            this.discoveryCache.set(connectionKey, { channels, timestamp: Date.now() });
             return channels;
         }
         catch (err) {

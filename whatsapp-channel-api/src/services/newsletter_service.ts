@@ -151,6 +151,9 @@ export class NewsletterService {
             } catch {}
 
             logger.info({ id: meta.id, name: meta.name, role }, '[WCA] RESOLVE_CHANNEL_BY_INVITE_SUCCESS');
+            // Cache the invite code → real JID mapping for fast publishes
+            const realJid = meta.id.includes('@') ? meta.id : `${meta.id}@newsletter`;
+            this.jidCache.set(inviteCode, realJid);
             return {
               id: meta.id,
               name: meta.name || meta.thread_metadata?.name?.text || 'WhatsApp Channel',
@@ -209,15 +212,49 @@ export class NewsletterService {
     return await this.resolveChannel(sock, channelId);
   }
 
+  // In-memory cache: invite code → real newsletter JID
+  private static jidCache = new Map<string, string>();
+
   /**
    * Publishes message to a WhatsApp Channel (@newsletter JID) directly via WebSocket protocol.
+   * Automatically resolves invite codes to real JIDs before sending.
    */
   public static async publishToChannel(
     sock: WASocket,
     channelId: string,
     messageContent: proto.IMessage | any
   ): Promise<{ success: boolean; postId: string; channelId: string; publishedAt: string }> {
-    const normalizedJid = channelId.includes('@') ? channelId : `${channelId}@newsletter`;
+    let normalizedJid = channelId.includes('@') ? channelId : `${channelId}@newsletter`;
+
+    // Check if the JID looks like an invite code (non-numeric prefix before @newsletter)
+    // Real newsletter JIDs are numeric like 120363427512887572@newsletter
+    // Invite codes are alphanumeric like 0029VbDxqHz6hENhNBcZM31M
+    const jidPrefix = normalizedJid.split('@')[0];
+    const isLikelyInviteCode = /[a-zA-Z]/.test(jidPrefix);
+
+    if (isLikelyInviteCode) {
+      // Check cache first
+      if (this.jidCache.has(jidPrefix)) {
+        normalizedJid = this.jidCache.get(jidPrefix)!;
+        logger.info({ inviteCode: jidPrefix, resolvedJid: normalizedJid }, '[WCA] PUBLISH_JID_FROM_CACHE');
+      } else {
+        // Resolve invite code to real JID via Baileys
+        try {
+          logger.info({ inviteCode: jidPrefix }, '[WCA] PUBLISH_RESOLVING_INVITE_CODE');
+          if (typeof (sock as any).newsletterMetadata === 'function') {
+            const meta = await (sock as any).newsletterMetadata('invite', jidPrefix);
+            if (meta && meta.id) {
+              const realJid = meta.id.includes('@') ? meta.id : `${meta.id}@newsletter`;
+              this.jidCache.set(jidPrefix, realJid);
+              logger.info({ inviteCode: jidPrefix, resolvedJid: realJid }, '[WCA] PUBLISH_INVITE_RESOLVED');
+              normalizedJid = realJid;
+            }
+          }
+        } catch (resolveErr: any) {
+          logger.warn({ err: resolveErr.message, inviteCode: jidPrefix }, '[WCA] PUBLISH_INVITE_RESOLVE_FAILED, sending to raw JID');
+        }
+      }
+    }
     
     logger.info({ jid: normalizedJid }, '⚡ Sending message to WhatsApp Newsletter / Channel via socket...');
     

@@ -1,6 +1,7 @@
 import uuid
 from typing import Dict, Any, Optional
 from fastapi import Header, HTTPException, Depends
+from fastapi.security import HTTPAuthorizationCredentials
 from app.core.exceptions import InvalidApiKeyException, InsufficientScopeException, RateLimitedException
 from app.services.api_key_service import api_key_service
 from app.core.rate_limiter import rate_limiter
@@ -62,7 +63,8 @@ async def get_auth_context(
         
     # Otherwise treat as Supabase JWT
     try:
-        jwt_user = verify_jwt(authorization=f"Bearer {token}")
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+        jwt_user = await verify_jwt(credentials=credentials)
         user_id = jwt_user["user_id"]
         # In this multi-tenant model, default organization_id maps to user_id or resolved org
         org_id = user_id

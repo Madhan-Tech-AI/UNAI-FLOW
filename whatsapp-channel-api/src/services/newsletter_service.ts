@@ -170,7 +170,9 @@ export class NewsletterService {
       }
 
       logger.info({ count: channels.length, connectionKey }, '[WCA] CHANNELS_DISCOVERED');
-      this.discoveryCache.set(connectionKey, { channels, timestamp: Date.now() });
+      if (channels.length > 0) {
+        this.discoveryCache.set(connectionKey, { channels, timestamp: Date.now() });
+      }
       return channels;
     } catch (err) {
       logger.error({ err }, '[WCA] Error during channel discovery');

@@ -151,7 +151,9 @@ class NewsletterService {
                 logger.debug({ err: storeErr }, '[WCA] Chat store scan note');
             }
             logger.info({ count: channels.length, connectionKey }, '[WCA] CHANNELS_DISCOVERED');
-            this.discoveryCache.set(connectionKey, { channels, timestamp: Date.now() });
+            if (channels.length > 0) {
+                this.discoveryCache.set(connectionKey, { channels, timestamp: Date.now() });
+            }
             return channels;
         }
         catch (err) {

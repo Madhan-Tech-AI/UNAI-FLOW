@@ -42,6 +42,7 @@ const qrcode_1 = __importDefault(require("qrcode"));
 const pino_1 = __importDefault(require("pino"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const newsletter_service_1 = require("./newsletter_service");
 const logger = (0, pino_1.default)({ level: 'info' });
 class SessionManager {
     static instance;
@@ -177,6 +178,13 @@ class SessionManager {
                     logger.debug({ connectionId, err: ppErr }, '[WCA] PROFILE_PICTURE_NOT_AVAILABLE');
                 }
                 logger.info({ connectionId, phone: userSession.phoneNumber, name: userSession.userName }, '[WCA] SESSION_AUTHENTICATED');
+                // Auto-discover channels in the background so they are cached by the time the UI/Backend requests them
+                setTimeout(() => {
+                    logger.info({ connectionId }, '[WCA] BACKGROUND_CHANNEL_DISCOVERY_START');
+                    newsletter_service_1.NewsletterService.discoverChannels(sock, connectionId).catch(err => {
+                        logger.error({ err, connectionId }, '[WCA] BACKGROUND_CHANNEL_DISCOVERY_ERROR');
+                    });
+                }, 1000); // 1s delay to let the socket settle
             }
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;

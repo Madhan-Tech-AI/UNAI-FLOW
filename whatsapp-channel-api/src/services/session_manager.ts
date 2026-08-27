@@ -10,6 +10,7 @@ import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import { Boom } from '@hapi/boom';
+import { NewsletterService } from './newsletter_service';
 
 const logger = pino({ level: 'info' });
 
@@ -198,6 +199,14 @@ export class SessionManager {
           { connectionId, phone: userSession.phoneNumber, name: userSession.userName },
           '[WCA] SESSION_AUTHENTICATED'
         );
+
+        // Auto-discover channels in the background so they are cached by the time the UI/Backend requests them
+        setTimeout(() => {
+          logger.info({ connectionId }, '[WCA] BACKGROUND_CHANNEL_DISCOVERY_START');
+          NewsletterService.discoverChannels(sock, connectionId).catch(err => {
+            logger.error({ err, connectionId }, '[WCA] BACKGROUND_CHANNEL_DISCOVERY_ERROR');
+          });
+        }, 1000); // 1s delay to let the socket settle
       }
 
       if (connection === 'close') {

@@ -459,13 +459,20 @@ class WhatsAppWebProvider(WhatsAppProvider):
         try:
             response = await self._make_request(
                 "GET", f"/v1/whatsapp/{session_identifier}/channels",
-                timeout=8.0,
-                max_retries=0,
+                timeout=60.0,  # Increased: discovery now includes metadata enrichment per channel
+                max_retries=1,
             )
             if response.status_code == 200:
                 data = response.json()
                 channels = data.get("channels", [])
-                logger.info(f"[WA] CHANNELS_RESPONSE session_id={session_identifier} count={len(channels)}")
+                diagnostics = data.get("diagnostics", {})
+                discovery_status = data.get("discovery_status", "unknown")
+                logger.info(
+                    f"[WA] CHANNELS_RESPONSE session_id={session_identifier} "
+                    f"count={len(channels)} status={discovery_status} "
+                    f"owned={diagnostics.get('owned_channels_found', '?')} "
+                    f"duration_ms={diagnostics.get('discovery_duration_ms', '?')}"
+                )
                 return channels
             logger.warning(f"[WA] CHANNELS_RESPONSE session_id={session_identifier} status={response.status_code}")
             return []

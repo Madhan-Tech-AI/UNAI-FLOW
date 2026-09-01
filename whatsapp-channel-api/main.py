@@ -189,7 +189,18 @@ async def v1_get_channels(connection_id: str):
     engine = session_manager.get(connection_id)
     if not engine:
         raise HTTPException(status_code=404, detail="Session not found")
-    return await engine.get_user_channels()
+    result = await engine.get_user_channels()
+    # Pass through diagnostics from the engine
+    return {
+        "success": result.get("success", False),
+        "connection_id": connection_id,
+        "channels": result.get("channels", []),
+        "count": len(result.get("channels", [])),
+        "source": "whatsapp_web",
+        "discovery_status": "completed" if result.get("success") else "failed",
+        "diagnostics": result.get("diagnostics", {}),
+        "error": result.get("error"),
+    }
 
 @app.post("/v1/whatsapp/connections/{connection_id}/channels/{channel_id}/publish")
 async def v1_publish(connection_id: str, channel_id: str, req: PublishRequest, _auth: str = Depends(check_api_key)):

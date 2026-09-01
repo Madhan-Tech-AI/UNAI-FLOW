@@ -1,10 +1,12 @@
 import asyncio
 import io
+import json
 import os
+import re
 import shutil
 import time
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import qrcode
 from qrcode.image.pil import PilImage
 import httpx
@@ -17,6 +19,113 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger("WhatsAppEngine")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CENTRALIZED WHATSAPP WEB SELECTORS
+# When WhatsApp Web changes its DOM structure, update ONLY this block.
+# ══════════════════════════════════════════════════════════════════════════════
+
+WA_SELECTORS = {
+    # Navigation buttons to switch to the Channels/Updates tab
+    "CHANNEL_NAV_BUTTONS": [
+        'button[aria-label="Channels"]',
+        'button[aria-label="Updates"]',
+        'button[aria-label="Newsletters"]',
+        'button[aria-label="Status"]',
+        # Icon-based fallbacks (find the parent button)
+        'span[data-icon="newsletter-outline"]',
+        'span[data-icon="newsletter"]',
+        'span[data-icon="newsletter-fill"]',
+        'span[data-icon="status-outline"]',
+        'span[data-icon="status-v3-outline"]',
+        'span[data-icon="updates-outline"]',
+    ],
+    # Containers that indicate the Channels/Updates view is active
+    "CHANNEL_VIEW_INDICATORS": [
+        'div[data-testid="updates-panel"]',
+        'div[data-testid="newsletters-panel"]',
+        'div[data-testid="channel-list"]',
+        'div[aria-label="Channel list"]',
+        'div[aria-label="Updates"]',
+        'div[aria-label="Channels"]',
+        'header span[title="Channels"]',
+        'header span[title="Updates"]',
+    ],
+    # Individual channel list items in the sidebar
+    "CHANNEL_ITEM_SELECTORS": [
+        'div[data-testid="cell-frame-container"]',
+        'div[data-testid="list-item-newsletter"]',
+        'div[data-testid="chat-list-item"]',
+        'div[role="listitem"]',
+        'div[role="row"]',
+        'a[role="listitem"]',
+        'div[role="gridcell"]',
+    ],
+    # Elements within a channel item that contain the channel name
+    "CHANNEL_NAME_SELECTORS": [
+        'span[title]',
+        'span[dir="auto"][title]',
+        'div[title]',
+        'span.x1rg5ohu',
+        'span[dir="auto"]',
+    ],
+    # Avatar image within a channel item
+    "CHANNEL_AVATAR_SELECTORS": [
+        'img[draggable="false"]',
+        'img[data-testid="user-avatar"]',
+        'div[data-testid="chat-avatar"] img',
+        'img[src*="pps.whatsapp.net"]',
+        'img[src*="mmg.whatsapp.net"]',
+    ],
+    # Navigation back to Chats view
+    "CHAT_NAV_BUTTONS": [
+        'button[aria-label="Chats"]',
+        'span[data-icon="chats-outline"]',
+        'span[data-icon="chats-filled"]',
+        'span[data-icon="chat-outline"]',
+    ],
+    # Channel detail/info panel selectors (when a channel is opened)
+    "CHANNEL_DETAIL": {
+        "header_name": [
+            'div[data-testid="conversation-info-header"] span[dir="auto"]',
+            'header span[title]',
+            'div[data-testid="conversation-header"] span[title]',
+            'span.x1rg5ohu[title]',
+        ],
+        "avatar": [
+            'div[data-testid="conversation-info-header"] img',
+            'header img[draggable="false"]',
+            'div[data-testid="chat-avatar"] img',
+            'img[data-testid="user-avatar"]',
+        ],
+        "description": [
+            'div[data-testid="conversation-info-header"] span.selectable-text',
+            'section span.selectable-text',
+            'div[data-testid="section-about"] span',
+        ],
+        "subscriber_pattern": r'([\d,.]+[kKmM]?)\s*(subscribers?|followers?)',
+        "admin_indicators": [
+            'span[data-icon="settings"]',
+            'button[aria-label="Channel settings"]',
+            'div[data-testid="channel-admin-badge"]',
+            'span[title="Admin"]',
+            'span[title="Owner"]',
+        ],
+        "composer": [
+            'div[data-testid="conversation-compose-box-input"]',
+            'div[contenteditable="true"][data-tab="10"]',
+            'div[contenteditable="true"][data-tab="6"]',
+            'footer div[contenteditable="true"]',
+            'div[role="textbox"]',
+        ],
+    },
+    # Names/labels to filter out (not real channels)
+    "NON_CHANNEL_NAMES": {
+        "my status", "status", "channels", "find channels",
+        "communities", "new channel", "create channel",
+        "search", "archived", "starred messages",
+    },
+}
 
 class WhatsAppEngine:
     """
@@ -810,117 +919,654 @@ class WhatsAppEngine:
 
     async def get_user_channels(self) -> Dict[str, Any]:
         """
-        Discovers all WhatsApp Channels owned or administered by the connected WhatsApp account.
-        Scrapes channels from WhatsApp Web's Channels/Newsletter panel.
+        Discovers all WhatsApp Channels visible to the connected WhatsApp account.
+        Uses robust multi-selector navigation, explicit waits, virtualized-list
+        scrolling, and a metadata enrichment pass for ownership/admin detection.
+        Returns diagnostics alongside the channel list for debugging.
         """
+        discovery_start = time.time()
+        diag = {
+            "authenticated": False,
+            "channels_page_opened": False,
+            "nav_selector_used": None,
+            "channel_items_seen": 0,
+            "owned_channels_found": 0,
+            "scroll_iterations": 0,
+            "discovery_duration_ms": 0,
+            "errors": [],
+        }
+
         if not self.is_ready or not self.page:
+            diag["errors"].append("WHATSAPP_SESSION_NOT_CONNECTED")
             return {
                 "success": False,
                 "error": "WhatsApp is not connected. Scan QR code to connect.",
-                "channels": []
+                "channels": [],
+                "diagnostics": diag,
             }
+
+        diag["authenticated"] = True
 
         async with self._lock:
             try:
-                logger.info("🔍 Discovering WhatsApp Channels from connected account...")
+                logger.info("[WA DISCOVERY] session=%s starting channel discovery", self.session_identifier)
 
-                # 1. Click the Channels / Updates navigation button
-                await self.page.evaluate("""
-                    () => {
-                        const channelsBtn = document.querySelector('button[aria-label="Channels"], button[aria-label="Updates"], button[aria-label="Newsletters"]')
-                            || document.querySelector('span[data-icon="newsletter-outline"], span[data-icon="newsletter"], span[data-icon="status-outline"]')?.closest('button');
-                        if (channelsBtn) channelsBtn.click();
+                # Verify page is alive and on WhatsApp Web
+                try:
+                    current_url = self.page.url or ""
+                    if "web.whatsapp.com" not in current_url:
+                        logger.info("[WA DISCOVERY] not on WhatsApp Web (url=%s), navigating...", current_url)
+                        await self.page.goto("https://web.whatsapp.com/", wait_until="domcontentloaded", timeout=30000)
+                        await asyncio.sleep(3)
+                except Exception as nav_err:
+                    diag["errors"].append(f"PAGE_NAVIGATION_FAILED: {nav_err}")
+                    logger.error("[WA DISCOVERY] page navigation failed: %s", nav_err)
+                    return {
+                        "success": False,
+                        "error": "Failed to navigate to WhatsApp Web",
+                        "channels": [],
+                        "diagnostics": diag,
                     }
-                """)
-                await asyncio.sleep(2)
 
-                # 2. Extract channels from the sidebar / list
-                channels_data = await self.page.evaluate("""
-                    () => {
-                        const list = [];
-                        // Query all channel / newsletter list items
-                        const channelItems = document.querySelectorAll(
-                            'div[data-testid="cell-frame-container"], div[role="listitem"], div[data-testid="list-item-newsletter"]'
-                        );
+                # ── Step 1: Navigate to Channels/Updates tab ──
+                logger.info("[WA DISCOVERY] locating Channels navigation button")
+                nav_clicked = False
 
-                        channelItems.forEach((el, index) => {
-                            const titleEl = el.querySelector('span[title], div[title], span.x1rg5ohu, span[dir="auto"]');
-                            const name = titleEl ? (titleEl.getAttribute('title') || titleEl.innerText || '').trim() : '';
-                            if (!name) return;
+                # Build the JS selector string from our centralized constants
+                nav_selectors_js = json.dumps(WA_SELECTORS["CHANNEL_NAV_BUTTONS"])
 
-                            // Skip general status / non-channel items
-                            const lower = name.toLowerCase();
-                            if (lower === 'my status' || lower === 'status' || lower === 'channels' || lower === 'find channels') return;
+                nav_result = await self.page.evaluate("""
+                    (selectors) => {
+                        for (const sel of selectors) {
+                            let el = document.querySelector(sel);
+                            if (el) {
+                                // If we found an icon span, find its parent button
+                                if (el.tagName === 'SPAN' && !el.matches('button')) {
+                                    const btn = el.closest('button') || el.closest('[role="button"]') || el.parentElement;
+                                    if (btn) el = btn;
+                                }
+                                el.click();
+                                return { clicked: true, selector: sel };
+                            }
+                        }
+                        return { clicked: false, selector: null };
+                    }
+                """, WA_SELECTORS["CHANNEL_NAV_BUTTONS"])
 
-                            const descEl = el.querySelector('span[data-testid="last-msg-status"], p, span.selectable-text');
-                            const description = descEl ? descEl.innerText.trim() : '';
+                nav_clicked = nav_result.get("clicked", False)
+                diag["nav_selector_used"] = nav_result.get("selector")
+                logger.info("[WA DISCOVERY] channels navigation clicked=%s selector=%s",
+                            nav_clicked, diag["nav_selector_used"])
 
-                            // Generate clean ID from name or index
-                            const id = name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+                if not nav_clicked:
+                    # Fallback: Try using keyboard or finding any nav-like button
+                    logger.warning("[WA DISCOVERY] primary nav click failed, trying text-based search")
+                    nav_clicked = await self.page.evaluate("""
+                        () => {
+                            // Search for any button/element containing "Channels", "Updates", or "Newsletters" text
+                            const candidates = Array.from(document.querySelectorAll('button, [role="tab"], [role="button"], nav a, nav button'));
+                            for (const el of candidates) {
+                                const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
+                                if (text === 'channels' || text === 'updates' || text === 'newsletters') {
+                                    el.click();
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }
+                    """)
+                    if nav_clicked:
+                        diag["nav_selector_used"] = "text-based-fallback"
+                        logger.info("[WA DISCOVERY] text-based nav fallback succeeded")
 
-                            list.push({
-                                id: id,
-                                name: name,
-                                description: description,
-                                link: ''
+                if not nav_clicked:
+                    diag["errors"].append("CHANNELS_NAV_BUTTON_NOT_FOUND")
+                    diag["channels_page_opened"] = False
+                    logger.error("[WA DISCOVERY] could not find Channels navigation button")
+                    # Save diagnostic screenshot
+                    try:
+                        screenshot_path = os.path.join(self.session_dir, "diag_nav_failed.png")
+                        await self.page.screenshot(path=screenshot_path)
+                        logger.info("[WA DISCOVERY] diagnostic screenshot saved: %s", screenshot_path)
+                    except Exception:
+                        pass
+                    return {
+                        "success": False,
+                        "error": "CHANNELS_PAGE_NOT_FOUND",
+                        "channels": [],
+                        "diagnostics": diag,
+                    }
+
+                # ── Step 2: Wait for and verify the Channels view is active ──
+                logger.info("[WA DISCOVERY] waiting for channels view to become active")
+                channels_view_active = False
+
+                # Try explicit wait_for_selector for view indicators
+                view_indicator_selectors = WA_SELECTORS["CHANNEL_VIEW_INDICATORS"]
+                for sel in view_indicator_selectors:
+                    try:
+                        await self.page.wait_for_selector(sel, timeout=3000)
+                        channels_view_active = True
+                        logger.info("[WA DISCOVERY] channels view confirmed via: %s", sel)
+                        break
+                    except Exception:
+                        continue
+
+                if not channels_view_active:
+                    # Fallback: wait for any list item to appear (channels or otherwise)
+                    logger.info("[WA DISCOVERY] no explicit view indicator found, waiting for list items...")
+                    await asyncio.sleep(2)
+                    # Check if any channel-like items exist
+                    item_check = await self.page.evaluate("""
+                        (itemSelectors) => {
+                            for (const sel of itemSelectors) {
+                                const items = document.querySelectorAll(sel);
+                                if (items.length > 0) return { found: true, count: items.length, selector: sel };
+                            }
+                            return { found: false, count: 0, selector: null };
+                        }
+                    """, WA_SELECTORS["CHANNEL_ITEM_SELECTORS"])
+                    if item_check.get("found"):
+                        channels_view_active = True
+                        logger.info("[WA DISCOVERY] found %d list items via %s",
+                                    item_check["count"], item_check["selector"])
+                    else:
+                        # Last resort: wait another 3 seconds
+                        await asyncio.sleep(3)
+                        channels_view_active = True  # Proceed optimistically
+
+                diag["channels_page_opened"] = channels_view_active
+
+                # ── Step 3: Extract channels with scrolling for virtualized lists ──
+                logger.info("[WA DISCOVERY] beginning channel extraction with scroll support")
+
+                all_channels: Dict[str, Dict[str, Any]] = {}
+                max_scroll_iterations = 8
+                no_new_items_count = 0
+
+                # Build the extraction JS with all our selectors
+                item_sels_js = ", ".join(WA_SELECTORS["CHANNEL_ITEM_SELECTORS"])
+                name_sels = WA_SELECTORS["CHANNEL_NAME_SELECTORS"]
+                avatar_sels = WA_SELECTORS["CHANNEL_AVATAR_SELECTORS"]
+                non_channel = WA_SELECTORS["NON_CHANNEL_NAMES"]
+
+                for scroll_iter in range(max_scroll_iterations):
+                    diag["scroll_iterations"] = scroll_iter + 1
+
+                    channels_data = await self.page.evaluate("""
+                        (config) => {
+                            const results = [];
+                            const itemSelectors = config.itemSelectors;
+                            const nameSelectors = config.nameSelectors;
+                            const avatarSelectors = config.avatarSelectors;
+                            const nonChannelNames = new Set(config.nonChannelNames.map(n => n.toLowerCase()));
+
+                            // Gather all candidate list items
+                            const allItems = new Set();
+                            for (const sel of itemSelectors) {
+                                document.querySelectorAll(sel).forEach(el => allItems.add(el));
+                            }
+
+                            allItems.forEach(el => {
+                                // Extract name
+                                let name = '';
+                                for (const nSel of nameSelectors) {
+                                    const nameEl = el.querySelector(nSel);
+                                    if (nameEl) {
+                                        name = (nameEl.getAttribute('title') || nameEl.innerText || '').trim();
+                                        if (name) break;
+                                    }
+                                }
+                                if (!name) return;
+
+                                // Filter out non-channel items
+                                const lower = name.toLowerCase();
+                                if (nonChannelNames.has(lower)) return;
+                                // Skip very short or generic items
+                                if (lower.length < 2) return;
+
+                                // Extract channel ID from data attributes or links
+                                let channelId = '';
+                                // Check for data attributes
+                                channelId = el.getAttribute('data-id') || el.getAttribute('data-testid-channel') || '';
+
+                                // Check for links within the item
+                                if (!channelId) {
+                                    const linkEl = el.querySelector('a[href*="channel"], a[href*="newsletter"]');
+                                    if (linkEl) {
+                                        const href = linkEl.getAttribute('href') || '';
+                                        const match = href.match(/channel\\/([a-zA-Z0-9_-]{15,35})/);
+                                        if (match) channelId = match[1];
+                                    }
+                                }
+
+                                // Check for JID or newsletter ID in nested elements
+                                if (!channelId) {
+                                    const allAttrs = el.querySelectorAll('[data-id], [data-jid]');
+                                    for (const attrEl of allAttrs) {
+                                        const val = attrEl.getAttribute('data-id') || attrEl.getAttribute('data-jid') || '';
+                                        if (val.includes('@newsletter') || val.includes('channel')) {
+                                            channelId = val;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Extract avatar URL
+                                let avatarUrl = '';
+                                for (const aSel of avatarSelectors) {
+                                    const imgEl = el.querySelector(aSel);
+                                    if (imgEl) {
+                                        const src = imgEl.getAttribute('src') || '';
+                                        if (src && !src.includes('data:') && !src.includes('default')) {
+                                            avatarUrl = src;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Extract description / last message preview
+                                const descEl = el.querySelector(
+                                    'span[data-testid="last-msg-status"], ' +
+                                    'span.matched-text, ' +
+                                    'span[class*="selectable-text"], ' +
+                                    'div[data-testid="cell-frame-secondary"] span'
+                                );
+                                const description = descEl ? descEl.innerText.trim() : '';
+
+                                // Check for subscriber count text in the item
+                                let subscriberText = '';
+                                const spans = el.querySelectorAll('span');
+                                for (const sp of spans) {
+                                    const txt = (sp.innerText || '').toLowerCase();
+                                    if (txt.match(/([\d,.]+[kKmM]?)\s*(subscribers?|followers?)/)) {
+                                        subscriberText = sp.innerText.trim();
+                                        break;
+                                    }
+                                }
+
+                                results.push({
+                                    name: name,
+                                    channelId: channelId,
+                                    avatarUrl: avatarUrl,
+                                    description: description,
+                                    subscriberText: subscriberText,
+                                    // Position info for scroll detection
+                                    offsetTop: el.offsetTop,
+                                });
                             });
-                        });
 
-                        return list;
-                    }
-                """)
-
-                # Return back to main chat list
-                await self.page.evaluate("""
-                    () => {
-                        const chatsBtn = document.querySelector('button[aria-label="Chats"], span[data-icon="chats-outline"]')?.closest('button');
-                        if (chatsBtn) chatsBtn.click();
-                    }
-                """)
-
-                # Build final channel list
-                discovered = []
-                seen_names = set()
-
-                if config.CHANNEL_ID:
-                    default_name = getattr(config, "CHANNEL_NAME", "") or "WhatsApp Channel"
-                    default_id = config.CHANNEL_ID
-                    default_link = config.CHANNEL_LINK
-
-                    discovered.append({
-                        "id": default_id,
-                        "name": default_name,
-                        "link": default_link,
-                        "description": "Configured Target Channel",
-                        "isDefault": True,
+                            return results;
+                        }
+                    """, {
+                        "itemSelectors": WA_SELECTORS["CHANNEL_ITEM_SELECTORS"],
+                        "nameSelectors": WA_SELECTORS["CHANNEL_NAME_SELECTORS"],
+                        "avatarSelectors": WA_SELECTORS["CHANNEL_AVATAR_SELECTORS"],
+                        "nonChannelNames": list(WA_SELECTORS["NON_CHANNEL_NAMES"]),
                     })
-                    seen_names.add(default_name.lower())
-                    seen_names.add(default_id.lower())
 
-                for ch in channels_data:
-                    cname = ch.get("name", "").strip()
-                    if cname and cname.lower() not in seen_names:
-                        seen_names.add(cname.lower())
-                        discovered.append({
-                            "id": ch.get("id") or f"ch_{len(discovered) + 1}",
-                            "name": cname,
-                            "link": ch.get("link") or "",
-                            "description": ch.get("description", "WhatsApp Channel"),
-                            "isDefault": len(discovered) == 0,
+                    prev_count = len(all_channels)
+
+                    for ch in channels_data:
+                        name = ch.get("name", "").strip()
+                        if not name:
+                            continue
+
+                        # Determine the best available ID
+                        ch_id = ch.get("channelId", "").strip()
+                        if not ch_id:
+                            # Generate a stable hash-based ID from the name as last resort
+                            import hashlib
+                            ch_id = f"wa_ch_{hashlib.md5(name.encode()).hexdigest()[:12]}"
+
+                        # Parse subscriber count from text
+                        sub_count = None
+                        sub_text = ch.get("subscriberText", "")
+                        if sub_text:
+                            match = re.search(r'([\d,.]+)\s*([kKmM]?)', sub_text)
+                            if match:
+                                num_str = match.group(1).replace(",", "")
+                                suffix = match.group(2).lower()
+                                try:
+                                    num = float(num_str)
+                                    if suffix == "k":
+                                        num *= 1000
+                                    elif suffix == "m":
+                                        num *= 1000000
+                                    sub_count = int(num)
+                                except (ValueError, TypeError):
+                                    pass
+
+                        # Reconstruct link from channel ID if it looks like an invite code
+                        link = ""
+                        if ch_id and not ch_id.startswith("wa_ch_") and "@" not in ch_id:
+                            link = f"https://whatsapp.com/channel/{ch_id}"
+
+                        if ch_id not in all_channels:
+                            all_channels[ch_id] = {
+                                "id": ch_id,
+                                "name": name,
+                                "link": link,
+                                "description": ch.get("description", ""),
+                                "avatar_url": ch.get("avatarUrl", ""),
+                                "subscriber_count": sub_count,
+                                "is_owned": None,  # Will be enriched in metadata pass
+                                "is_admin": None,
+                                "can_publish": None,
+                                "source": "whatsapp_web",
+                                "metadata_complete": False,
+                            }
+
+                    new_count = len(all_channels)
+                    new_this_iter = new_count - prev_count
+                    logger.info("[WA DISCOVERY] scroll_iter=%d items_in_dom=%d new_unique=%d total_unique=%d",
+                                scroll_iter, len(channels_data), new_this_iter, new_count)
+
+                    if new_this_iter == 0:
+                        no_new_items_count += 1
+                        if no_new_items_count >= 2:
+                            logger.info("[WA DISCOVERY] no new items after 2 scroll attempts, stopping")
+                            break
+                    else:
+                        no_new_items_count = 0
+
+                    # Scroll the channel list to load more items
+                    if scroll_iter < max_scroll_iterations - 1:
+                        scrolled = await self.page.evaluate("""
+                            (itemSelectors) => {
+                                // Find the scrollable container
+                                const containers = [
+                                    document.querySelector('[data-testid="chat-list"]'),
+                                    document.querySelector('[aria-label="Channel list"]'),
+                                    document.querySelector('[role="list"]'),
+                                    document.querySelector('#pane-side'),
+                                ];
+                                for (const container of containers) {
+                                    if (container && container.scrollHeight > container.clientHeight) {
+                                        container.scrollTop += 400;
+                                        return true;
+                                    }
+                                }
+                                // Try scrolling any list item's parent
+                                for (const sel of itemSelectors) {
+                                    const item = document.querySelector(sel);
+                                    if (item) {
+                                        const parent = item.parentElement;
+                                        if (parent && parent.scrollHeight > parent.clientHeight) {
+                                            parent.scrollTop += 400;
+                                            return true;
+                                        }
+                                    }
+                                }
+                                return false;
+                            }
+                        """, WA_SELECTORS["CHANNEL_ITEM_SELECTORS"])
+
+                        if scrolled:
+                            await asyncio.sleep(1.5)  # Wait for lazy-loaded items
+
+                diag["channel_items_seen"] = len(all_channels)
+                logger.info("[WA DISCOVERY] extraction complete: %d unique channels found", len(all_channels))
+
+                # ── Step 4: Metadata enrichment — check ownership per channel ──
+                logger.info("[WA DISCOVERY] starting metadata enrichment pass")
+                enriched_channels = []
+                for ch_id, ch_data in all_channels.items():
+                    enriched = await self._enrich_channel_metadata(ch_data)
+                    enriched_channels.append(enriched)
+
+                # Count owned
+                owned_count = sum(1 for c in enriched_channels if c.get("can_publish"))
+                diag["owned_channels_found"] = owned_count
+
+                # ── Step 5: Navigate back to Chats ──
+                await self._navigate_back_to_chats()
+
+                # ── Step 6: Include configured default channel if not already discovered ──
+                if config.CHANNEL_ID:
+                    existing_ids = {c["id"] for c in enriched_channels}
+                    if config.CHANNEL_ID not in existing_ids:
+                        default_name = getattr(config, "CHANNEL_NAME", "") or "WhatsApp Channel"
+                        enriched_channels.insert(0, {
+                            "id": config.CHANNEL_ID,
+                            "name": default_name,
+                            "link": config.CHANNEL_LINK or f"https://whatsapp.com/channel/{config.CHANNEL_ID}",
+                            "description": "Configured Target Channel",
+                            "avatar_url": "",
+                            "subscriber_count": None,
+                            "is_owned": True,
+                            "is_admin": True,
+                            "can_publish": True,
+                            "source": "config",
+                            "metadata_complete": False,
                         })
 
-                logger.info(f"✅ Discovered {len(discovered)} WhatsApp Channel(s).")
+                diag["discovery_duration_ms"] = int((time.time() - discovery_start) * 1000)
+                logger.info("[WA DISCOVERY] ✅ completed: %d channels (%d publishable) in %dms",
+                            len(enriched_channels), owned_count, diag["discovery_duration_ms"])
+
                 return {
                     "success": True,
-                    "channels": discovered
+                    "channels": enriched_channels,
+                    "diagnostics": diag,
                 }
 
             except Exception as e:
-                logger.error(f"Error discovering channels: {e}")
+                diag["errors"].append(str(e))
+                diag["discovery_duration_ms"] = int((time.time() - discovery_start) * 1000)
+                logger.error("[WA DISCOVERY] ❌ discovery failed: %s", e)
+                # Save diagnostic screenshot
+                try:
+                    screenshot_path = os.path.join(self.session_dir, "diag_discovery_error.png")
+                    await self.page.screenshot(path=screenshot_path)
+                except Exception:
+                    pass
+                # Navigate back to chats to leave page in clean state
+                await self._navigate_back_to_chats()
                 return {
-                    "success": True,
-                    "channels": []
+                    "success": False,
+                    "error": f"CHANNEL_DISCOVERY_FAILED: {e}",
+                    "channels": [],
+                    "diagnostics": diag,
                 }
+
+    async def _navigate_back_to_chats(self):
+        """Navigate back to the main Chats list view."""
+        try:
+            await self.page.evaluate("""
+                (selectors) => {
+                    for (const sel of selectors) {
+                        let el = document.querySelector(sel);
+                        if (el) {
+                            if (el.tagName === 'SPAN') {
+                                const btn = el.closest('button') || el.closest('[role="button"]');
+                                if (btn) el = btn;
+                            }
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """, WA_SELECTORS["CHAT_NAV_BUTTONS"])
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.debug("[WA DISCOVERY] navigate back to chats failed: %s", e)
+
+    async def _enrich_channel_metadata(self, channel: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Opens a discovered channel to extract detailed metadata:
+        subscriber count, full description, avatar, and ownership/admin status.
+        Determines can_publish by checking for a composer element.
+        """
+        ch_name = channel.get("name", "")
+        ch_id = channel.get("id", "")
+        ch_link = channel.get("link", "")
+        logger.info("[WA DISCOVERY] enriching metadata for channel=%s id=%s", ch_name, ch_id)
+
+        try:
+            # Navigate to the channel — prefer link, fall back to clicking by name
+            channel_opened = False
+
+            if ch_link and "whatsapp.com/channel" in ch_link:
+                try:
+                    await self.page.goto(ch_link, wait_until="domcontentloaded", timeout=15000)
+                    await asyncio.sleep(2)
+                    channel_opened = True
+                except Exception:
+                    logger.debug("[WA DISCOVERY] direct link navigation failed for %s", ch_name)
+
+            if not channel_opened:
+                # Click the channel by name in the sidebar
+                clicked = await self.page.evaluate("""
+                    (name) => {
+                        const lower = name.toLowerCase().trim();
+                        const items = document.querySelectorAll(
+                            'div[data-testid="cell-frame-container"], div[role="listitem"], ' +
+                            'div[data-testid="list-item-newsletter"], div[data-testid="chat-list-item"]'
+                        );
+                        for (const item of items) {
+                            if ((item.innerText || '').toLowerCase().includes(lower)) {
+                                item.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                """, ch_name)
+                if clicked:
+                    await asyncio.sleep(2)
+                    channel_opened = True
+
+            if not channel_opened:
+                logger.warning("[WA DISCOVERY] could not open channel %s for enrichment", ch_name)
+                channel["metadata_complete"] = False
+                channel["is_owned"] = False
+                channel["is_admin"] = False
+                channel["can_publish"] = False
+                return channel
+
+            # Scrape detailed metadata from the channel view
+            detail_selectors = WA_SELECTORS["CHANNEL_DETAIL"]
+            metadata = await self.page.evaluate("""
+                (config) => {
+                    const result = {
+                        name: '',
+                        avatarUrl: '',
+                        description: '',
+                        subscriberCount: null,
+                        hasComposer: false,
+                        hasAdminIndicator: false,
+                    };
+
+                    // Channel name from header
+                    for (const sel of config.headerNameSels) {
+                        const el = document.querySelector(sel);
+                        if (el) {
+                            result.name = (el.getAttribute('title') || el.innerText || '').trim();
+                            if (result.name) break;
+                        }
+                    }
+
+                    // Avatar
+                    for (const sel of config.avatarSels) {
+                        const el = document.querySelector(sel);
+                        if (el && el.src && !el.src.includes('data:') && !el.src.includes('default')) {
+                            result.avatarUrl = el.src;
+                            break;
+                        }
+                    }
+
+                    // Description
+                    for (const sel of config.descSels) {
+                        const el = document.querySelector(sel);
+                        if (el && el.innerText) {
+                            result.description = el.innerText.trim();
+                            if (result.description) break;
+                        }
+                    }
+
+                    // Subscriber count — search all visible spans
+                    const allSpans = document.querySelectorAll('span, div');
+                    const subRegex = /([\d,.]+[kKmM]?)\s*(subscribers?|followers?)/i;
+                    for (const sp of allSpans) {
+                        const txt = (sp.innerText || '');
+                        const match = txt.match(subRegex);
+                        if (match) {
+                            let num = match[1].replace(/,/g, '');
+                            const suffix = num.slice(-1).toLowerCase();
+                            if (suffix === 'k') num = String(parseFloat(num) * 1000);
+                            else if (suffix === 'm') num = String(parseFloat(num) * 1000000);
+                            result.subscriberCount = parseInt(num) || 0;
+                            break;
+                        }
+                    }
+
+                    // Check for composer (indicates admin/owner can publish)
+                    for (const sel of config.composerSels) {
+                        const el = document.querySelector(sel);
+                        if (el) {
+                            result.hasComposer = true;
+                            break;
+                        }
+                    }
+
+                    // Check for admin indicators
+                    for (const sel of config.adminSels) {
+                        const el = document.querySelector(sel);
+                        if (el) {
+                            result.hasAdminIndicator = true;
+                            break;
+                        }
+                    }
+
+                    return result;
+                }
+            """, {
+                "headerNameSels": detail_selectors["header_name"],
+                "avatarSels": detail_selectors["avatar"],
+                "descSels": detail_selectors["description"],
+                "composerSels": detail_selectors["composer"],
+                "adminSels": detail_selectors["admin_indicators"],
+            })
+
+            # Update channel with enriched data
+            if metadata.get("name"):
+                channel["name"] = metadata["name"]
+            if metadata.get("avatarUrl"):
+                channel["avatar_url"] = metadata["avatarUrl"]
+            if metadata.get("description"):
+                channel["description"] = metadata["description"]
+            if metadata.get("subscriberCount") is not None:
+                channel["subscriber_count"] = metadata["subscriberCount"]
+
+            # Ownership / publish capability
+            has_composer = metadata.get("hasComposer", False)
+            has_admin = metadata.get("hasAdminIndicator", False)
+            channel["can_publish"] = has_composer
+            channel["is_admin"] = has_composer or has_admin
+            channel["is_owned"] = has_composer  # Composer presence = definitive publish access
+            channel["metadata_complete"] = True
+
+            logger.info("[WA DISCOVERY] enriched channel=%s subs=%s can_publish=%s",
+                        channel["name"], channel.get("subscriber_count"), channel["can_publish"])
+
+            # Navigate back — use browser back or go to main page
+            try:
+                await self.page.go_back(wait_until="domcontentloaded", timeout=5000)
+                await asyncio.sleep(0.5)
+            except Exception:
+                pass
+
+            return channel
+
+        except Exception as e:
+            logger.warning("[WA DISCOVERY] metadata enrichment failed for %s: %s", ch_name, e)
+            channel["metadata_complete"] = False
+            channel["is_owned"] = False
+            channel["is_admin"] = False
+            channel["can_publish"] = False
+            return channel
 
     async def logout_session(self) -> Dict[str, Any]:
         """Gracefully logs out of WhatsApp Web and purges session storage."""

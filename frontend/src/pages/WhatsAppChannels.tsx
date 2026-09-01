@@ -76,9 +76,14 @@ interface WhatsAppChannelItem {
   can_publish?: boolean;
   picture_url?: string | null;
   pictureUrl?: string | null;
+  avatar_url?: string | null;
   description?: string;
   is_selected?: boolean;
   selected?: boolean;
+  is_owned?: boolean;
+  is_admin?: boolean;
+  metadata_complete?: boolean;
+  source?: string;
   synced_at?: string;
   created_at?: string;
 }
@@ -886,71 +891,143 @@ function DashboardView({
   const [loadingChannels, setLoadingChannels] = useState(false);
   const [selectingChannelId, setSelectingChannelId] = useState<string | null>(null);
   const [viewStyle, setViewStyle] = useState<'grid' | 'list'>('grid');
+  const [discoveryStatus, setDiscoveryStatus] = useState<'idle' | 'discovering' | 'complete' | 'failed'>('idle');
+
+  // Manual linking state
+  const [showManualLink, setShowManualLink] = useState(false);
+  const [manualLinkInput, setManualLinkInput] = useState('');
+  const [manualLinkLoading, setManualLinkLoading] = useState(false);
+  const [manualLinkError, setManualLinkError] = useState('');
+  const [resolvedChannel, setResolvedChannel] = useState<any>(null);
+  const [verificationStatus, setVerificationStatus] = useState<'idle' | 'verifying' | 'verified' | 'failed'>('idle');
+
+  const mapChannelData = (c: any): WhatsAppChannelItem => ({
+    id: c.id || c.channel_id,
+    channel_id: c.channel_id || c.id,
+    name: c.name || c.channel_name || 'WhatsApp Channel',
+    link: c.link || c.channel_link || `https://whatsapp.com/channel/${c.id || c.channel_id}`,
+    role: (c.role || 'owner').toLowerCase(),
+    subscribers_count: c.subscribers_count !== undefined ? c.subscribers_count : (c.followers !== undefined ? c.followers : null),
+    verified: c.verified !== undefined ? Boolean(c.verified) : true,
+    can_publish: c.can_publish !== undefined ? c.can_publish : (c.role === 'owner' || c.role === 'admin'),
+    picture_url: c.picture_url || c.avatar_url || c.pictureUrl || null,
+    pictureUrl: c.pictureUrl || c.picture_url || c.avatar_url || null,
+    description: c.description || '',
+    is_selected: Boolean(c.is_selected || c.selected),
+    selected: Boolean(c.selected || c.is_selected),
+    synced_at: c.synced_at || new Date().toISOString(),
+    created_at: c.created_at || '',
+    is_owned: c.is_owned,
+    is_admin: c.is_admin,
+    metadata_complete: c.metadata_complete,
+  } as WhatsAppChannelItem);
 
   const fetchChannels = async () => {
     if (!account?.sessionIdentifier) return;
     setLoadingChannels(true);
+    setDiscoveryStatus('discovering');
     try {
       const discoverRes = await fetchApi(`/api/channels/discover?session_identifier=${account.sessionIdentifier}`);
       const rawChannels = discoverRes?.data || [];
+      const status = discoverRes?.discovery_status || 'completed';
 
       if (rawChannels.length > 0) {
-        const mapped: WhatsAppChannelItem[] = rawChannels.map((c: any) => ({
-          id: c.id || c.channel_id,
-          channel_id: c.channel_id || c.id,
-          name: c.name || c.channel_name || 'WhatsApp Channel',
-          link: c.link || c.channel_link || `https://whatsapp.com/channel/${c.id || c.channel_id}`,
-          role: (c.role || 'owner').toLowerCase(),
-          subscribers_count: c.subscribers_count !== undefined ? c.subscribers_count : (c.followers !== undefined ? c.followers : null),
-          verified: c.verified !== undefined ? Boolean(c.verified) : true,
-          can_publish: c.can_publish !== undefined ? c.can_publish : (c.role === 'owner' || c.role === 'admin'),
-          picture_url: c.picture_url || c.pictureUrl || null,
-          pictureUrl: c.pictureUrl || c.picture_url || null,
-          description: c.description || 'Official channel for updates, news, and content.',
-          is_selected: Boolean(c.is_selected || c.selected),
-          selected: Boolean(c.selected || c.is_selected),
-          synced_at: c.synced_at || new Date().toISOString(),
-          created_at: c.created_at || 'Aug 10, 2026',
-        }));
-
+        const mapped = rawChannels.map(mapChannelData);
         setChannels(mapped);
+        setDiscoveryStatus('complete');
 
-        const activeSelected = mapped.find(m => m.is_selected || m.selected);
+        const activeSelected = mapped.find((m: WhatsAppChannelItem) => m.is_selected || m.selected);
         if (activeSelected) {
           setSelectedChannelId(activeSelected.id);
         } else if (mapped.length > 0) {
           setSelectedChannelId(mapped[0].id);
         }
       } else {
+        // Fallback: try DB channels
         const dbRes = await fetchApi('/api/channels/user-channels');
-        if (dbRes?.data) {
-          const mapped: WhatsAppChannelItem[] = dbRes.data.map((c: any) => ({
-            id: c.channel_id || c.id,
-            channel_id: c.channel_id || c.id,
-            name: c.name || c.channel_name || 'WhatsApp Channel',
-            link: c.link || c.channel_link || `https://whatsapp.com/channel/${c.channel_id || c.id}`,
-            role: (c.role || 'owner').toLowerCase(),
-            subscribers_count: c.subscribers_count !== undefined ? c.subscribers_count : (c.followers !== undefined ? c.followers : null),
-            verified: c.verified !== undefined ? Boolean(c.verified) : true,
-            can_publish: c.role === 'owner' || c.role === 'admin',
-            picture_url: c.picture_url || c.pictureUrl || null,
-            pictureUrl: c.pictureUrl || c.picture_url || null,
-            description: c.description || 'Official channel for updates, news, and content.',
-            is_selected: Boolean(c.is_selected || c.selected),
-            selected: Boolean(c.selected || c.is_selected),
-            synced_at: c.synced_at || new Date().toISOString(),
-            created_at: c.created_at || 'Aug 10, 2026',
-          }));
+        if (dbRes?.data && dbRes.data.length > 0) {
+          const mapped = dbRes.data.map(mapChannelData);
           setChannels(mapped);
-          const sel = mapped.find(m => m.is_selected || m.selected);
+          setDiscoveryStatus('complete');
+          const sel = mapped.find((m: WhatsAppChannelItem) => m.is_selected || m.selected);
           if (sel) setSelectedChannelId(sel.id);
           else if (mapped.length > 0) setSelectedChannelId(mapped[0].id);
+        } else {
+          setDiscoveryStatus(status === 'failed' ? 'failed' : 'complete');
         }
       }
     } catch (err) {
       console.error('[UNAI-WA] Channels fetch error:', err);
+      setDiscoveryStatus('failed');
     } finally {
       setLoadingChannels(false);
+    }
+  };
+
+  // ── Manual Channel Linking ──
+  const handleResolveChannel = async () => {
+    if (!manualLinkInput.trim() || !account?.sessionIdentifier) return;
+    setManualLinkLoading(true);
+    setManualLinkError('');
+    setResolvedChannel(null);
+    setVerificationStatus('idle');
+    try {
+      const res = await fetchApi('/api/channels/resolve', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_identifier: account.sessionIdentifier,
+          channel_link: manualLinkInput.trim(),
+        }),
+      });
+      if (res?.success && res?.channel) {
+        setResolvedChannel(res.channel);
+        if (res.auto_verified) {
+          setVerificationStatus('verified');
+        }
+      } else {
+        setManualLinkError(res?.error || 'Could not resolve channel. Check the link and try again.');
+      }
+    } catch (err: any) {
+      setManualLinkError(err?.message || 'Failed to resolve channel link.');
+    } finally {
+      setManualLinkLoading(false);
+    }
+  };
+
+  const handleVerifyAndLink = async () => {
+    if (!resolvedChannel || !account?.sessionIdentifier) return;
+    setVerificationStatus('verifying');
+    try {
+      const verifyRes = await fetchApi('/api/channels/verify/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_identifier: account.sessionIdentifier,
+          channel_id: resolvedChannel.id,
+          channel_link: resolvedChannel.link || manualLinkInput,
+        }),
+      });
+      if (verifyRes?.verified) {
+        setVerificationStatus('verified');
+        // Confirm the link
+        await fetchApi('/api/channels/verify/confirm', {
+          method: 'POST',
+          body: JSON.stringify({
+            session_identifier: account.sessionIdentifier,
+            channel_id: resolvedChannel.id,
+          }),
+        });
+        // Refresh channel list
+        setShowManualLink(false);
+        setManualLinkInput('');
+        setResolvedChannel(null);
+        fetchChannels();
+      } else {
+        setVerificationStatus('failed');
+        setManualLinkError(verifyRes?.message || 'Ownership verification failed.');
+      }
+    } catch (err: any) {
+      setVerificationStatus('failed');
+      setManualLinkError(err?.message || 'Verification failed.');
     }
   };
 
@@ -1138,8 +1215,10 @@ function DashboardView({
               {channels.map((channel) => {
                 const isSelected = (channel.id || channel.channel_id) === selectedChannelId;
                 const isSelecting = (channel.id || channel.channel_id) === selectingChannelId;
-                const isOwner = (channel.role || '').toLowerCase() === 'owner';
-                const avatarSrc = getSafeImageUrl(channel.pictureUrl || channel.picture_url);
+                const isOwner = (channel.role || '').toLowerCase() === 'owner' || channel.is_owned;
+                const isAdmin = channel.is_admin || (channel.role || '').toLowerCase() === 'admin';
+                const canPublish = channel.can_publish || isOwner || isAdmin;
+                const avatarSrc = getSafeImageUrl(channel.pictureUrl || channel.picture_url || channel.avatar_url);
 
                 return (
                   <div
@@ -1181,9 +1260,17 @@ function DashboardView({
                           <span className="wa-channel-name">
                             {channel.name}
                           </span>
-                          <span className={`wa-pill-role ${isOwner ? 'owner' : 'admin'}`}>
-                            {isOwner ? 'Owner' : 'Admin'}
+                          <span className={`wa-pill-role ${isOwner ? 'owner' : isAdmin ? 'admin' : 'subscriber'}`}>
+                            {isOwner ? 'Owner' : isAdmin ? 'Admin' : 'Subscriber'}
                           </span>
+                          {canPublish && (
+                            <span style={{
+                              fontSize: '0.65rem', color: '#10b981', fontWeight: 600,
+                              display: 'inline-flex', alignItems: 'center', gap: '3px',
+                            }}>
+                              <CheckCircle2 size={11} /> Can Publish
+                            </span>
+                          )}
                         </div>
 
                         <div className="wa-channel-id-text">
@@ -1237,27 +1324,151 @@ function DashboardView({
             </div>
           )}
 
-          {/* Bottom Card Helper Box (Matching Image 1) */}
+          {/* Bottom Card: Manual Channel Linking */}
           <div className="wa-helper-box">
-            <div className="wa-helper-icon-box">
-              <Search size={20} />
-            </div>
-            <h4 className="wa-helper-title">No channels found?</h4>
-            <p className="wa-helper-desc">
-              If you just created a channel, it might take a few minutes to appear.
-            </p>
-            <button
-              onClick={() => {
-                onRefresh();
-                fetchChannels();
-              }}
-              disabled={loadingChannels}
-              className="btn-primary"
-              style={{ fontSize: '0.78rem', padding: '0.5rem 1.25rem', borderRadius: '10px' }}
-            >
-              <RefreshCw size={12} className={loadingChannels ? 'animate-spin' : ''} />
-              <span>Sync Channels</span>
-            </button>
+            {!showManualLink ? (
+              <>
+                <div className="wa-helper-icon-box">
+                  <Search size={20} />
+                </div>
+                <h4 className="wa-helper-title">
+                  {channels.length === 0 && discoveryStatus === 'complete' ? 'No channels discovered' : "Can't find your channel?"}
+                </h4>
+                <p className="wa-helper-desc">
+                  {channels.length === 0 && discoveryStatus === 'complete'
+                    ? 'Your WhatsApp account has no channels, or they could not be detected automatically.'
+                    : 'If your channel is not appearing, you can link it manually using its WhatsApp invite link.'}
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <button
+                    onClick={() => {
+                      onRefresh();
+                      fetchChannels();
+                    }}
+                    disabled={loadingChannels}
+                    className="btn-primary"
+                    style={{ fontSize: '0.78rem', padding: '0.5rem 1.25rem', borderRadius: '10px' }}
+                  >
+                    <RefreshCw size={12} className={loadingChannels ? 'animate-spin' : ''} />
+                    <span>Retry Discovery</span>
+                  </button>
+                  <button
+                    onClick={() => setShowManualLink(true)}
+                    className="btn-secondary"
+                    style={{ fontSize: '0.78rem', padding: '0.5rem 1.25rem', borderRadius: '10px' }}
+                  >
+                    <ExternalLink size={12} />
+                    <span>Link Channel Manually</span>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h4 className="wa-helper-title" style={{ marginBottom: '0.5rem' }}>Link Channel Manually</h4>
+                <p className="wa-helper-desc" style={{ marginBottom: '0.75rem' }}>
+                  Paste your WhatsApp Channel invite link below.
+                </p>
+
+                <div style={{ display: 'flex', gap: '0.5rem', width: '100%', marginBottom: '0.75rem' }}>
+                  <input
+                    type="text"
+                    value={manualLinkInput}
+                    onChange={(e) => setManualLinkInput(e.target.value)}
+                    placeholder="https://whatsapp.com/channel/..."
+                    style={{
+                      flex: 1, padding: '0.5rem 0.75rem', fontSize: '0.8rem',
+                      borderRadius: '8px', border: '1px solid #e2e8f0',
+                      outline: 'none', background: '#f8fafc', color: '#0f172a',
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && handleResolveChannel()}
+                  />
+                  <button
+                    onClick={handleResolveChannel}
+                    disabled={manualLinkLoading || !manualLinkInput.trim()}
+                    className="btn-primary"
+                    style={{ fontSize: '0.78rem', padding: '0.5rem 1rem', borderRadius: '8px', whiteSpace: 'nowrap' }}
+                  >
+                    {manualLinkLoading ? <Loader2 size={14} className="animate-spin" /> : 'Resolve'}
+                  </button>
+                </div>
+
+                {manualLinkError && (
+                  <div style={{
+                    fontSize: '0.75rem', color: '#ef4444', background: '#fef2f2',
+                    padding: '0.5rem 0.75rem', borderRadius: '8px', marginBottom: '0.5rem',
+                    width: '100%', border: '1px solid #fecaca',
+                  }}>
+                    {manualLinkError}
+                  </div>
+                )}
+
+                {/* Resolved Channel Preview */}
+                {resolvedChannel && (
+                  <div style={{
+                    width: '100%', background: '#f0fdf4', border: '1px solid #bbf7d0',
+                    borderRadius: '10px', padding: '0.75rem', marginBottom: '0.5rem',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      <div style={{
+                        width: '36px', height: '36px', borderRadius: '50%',
+                        background: '#10b981', color: '#fff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '0.85rem', fontWeight: 700,
+                      }}>
+                        {(resolvedChannel.name || 'W').slice(0, 1).toUpperCase()}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0f172a' }}>
+                          {resolvedChannel.name || 'WhatsApp Channel'}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                          {resolvedChannel.id}
+                        </div>
+                      </div>
+                    </div>
+
+                    {verificationStatus === 'verified' ? (
+                      <div style={{
+                        fontSize: '0.75rem', color: '#059669', fontWeight: 600,
+                        display: 'flex', alignItems: 'center', gap: '4px',
+                      }}>
+                        <CheckCircle2 size={14} /> Ownership verified — channel linked!
+                      </div>
+                    ) : verificationStatus === 'verifying' ? (
+                      <div style={{ fontSize: '0.75rem', color: '#2563eb', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Loader2 size={14} className="animate-spin" /> Verifying ownership...
+                      </div>
+                    ) : verificationStatus === 'failed' ? (
+                      <div style={{ fontSize: '0.75rem', color: '#ef4444' }}>
+                        Ownership verification failed. Only admin/owner channels can be linked.
+                      </div>
+                    ) : (
+                      <button
+                        onClick={handleVerifyAndLink}
+                        className="btn-primary"
+                        style={{ fontSize: '0.75rem', padding: '0.4rem 1rem', borderRadius: '8px', width: '100%' }}
+                      >
+                        <ShieldCheck size={13} /> Verify Ownership & Link Channel
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  onClick={() => {
+                    setShowManualLink(false);
+                    setManualLinkInput('');
+                    setManualLinkError('');
+                    setResolvedChannel(null);
+                    setVerificationStatus('idle');
+                  }}
+                  className="btn-secondary"
+                  style={{ fontSize: '0.72rem', padding: '0.35rem 0.75rem', borderRadius: '8px' }}
+                >
+                  ← Back
+                </button>
+              </>
+            )}
           </div>
         </div>
 

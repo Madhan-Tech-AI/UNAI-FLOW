@@ -124,7 +124,7 @@ async def authorize_account(req: AuthorizeAccountRequest, user_id: str = Depends
 async def discover_channels(session_identifier: str, user_id: str = Depends(get_current_user_id)):
     """
     Discover WhatsApp Channels/Newsletters from the connected WhatsApp account.
-    Scoper: Strictly queries channels accessible through the authenticated WhatsApp account.
+    Returns diagnostics alongside channels for debugging.
     """
     logger.info(f"[WA] CHANNELS_DISCOVER session_id={session_identifier}")
     try:
@@ -139,17 +139,221 @@ async def discover_channels(session_identifier: str, user_id: str = Depends(get_
                 logger.warning(f"[WA] CHANNELS_PERSIST_FAILED error={sync_err}")
 
         db_channels = channel_manager.get_user_channels(user_id)
-        return {"success": True, "data": db_channels or channels}
+        return {
+            "success": True,
+            "data": db_channels or channels,
+            "count": len(db_channels or channels),
+            "discovery_status": "completed",
+        }
     except Exception as e:
         logger.error(f"[WA] CHANNELS_DISCOVER_FAILED session_id={session_identifier} error={e}")
         # Fallback: return persisted channels from DB
         try:
             db_channels = channel_manager.get_user_channels(user_id)
             if db_channels:
-                return {"success": True, "data": db_channels, "source": "cache"}
+                return {
+                    "success": True,
+                    "data": db_channels,
+                    "count": len(db_channels),
+                    "source": "cache",
+                    "discovery_status": "cached_fallback",
+                }
         except Exception:
             pass
-        return {"success": False, "data": [], "error": str(e)}
+        return {
+            "success": False,
+            "data": [],
+            "count": 0,
+            "error": str(e),
+            "discovery_status": "failed",
+        }
+
+
+class ResolveChannelRequest(BaseModel):
+    session_identifier: str
+    channel_link: str
+
+
+@router.post("/resolve")
+async def resolve_channel(req: ResolveChannelRequest, user_id: str = Depends(get_current_user_id)):
+    """
+    Resolve a WhatsApp Channel by its invite link or code.
+    Returns channel metadata + verification_required flag.
+    """
+    logger.info(f"[WA] RESOLVE_CHANNEL session_id={req.session_identifier} link={req.channel_link}")
+
+    link = req.channel_link.strip()
+    if not link:
+        raise HTTPException(status_code=400, detail="Channel link is required")
+
+    # Validate URL format
+    invite_match = re.search(r'(?:whatsapp\.com/channel/)?([a-zA-Z0-9_-]{10,50})', link)
+    if not invite_match:
+        raise HTTPException(status_code=400, detail={
+            "code": "INVALID_CHANNEL_LINK",
+            "message": "Please provide a valid WhatsApp Channel link (e.g., https://whatsapp.com/channel/...)"
+        })
+
+    invite_code = invite_match.group(1)
+
+    try:
+        # Try resolving via the WCA gateway
+        resolved = await provider.resolve_channel(req.session_identifier, link)
+
+        if resolved:
+            # Check if this channel is already in the user's discovered channels
+            user_channels = channel_manager.get_user_channels(user_id)
+            already_discovered = any(
+                c.get("id") == invite_code or
+                c.get("channel_id") == invite_code or
+                invite_code in (c.get("link") or "") or
+                (resolved.get("id") and c.get("id") == resolved.get("id"))
+                for c in user_channels
+            )
+
+            # If already discovered with admin/owner role, auto-verify
+            auto_verified = False
+            if already_discovered:
+                matching = [c for c in user_channels if
+                            c.get("id") == invite_code or
+                            c.get("channel_id") == invite_code or
+                            invite_code in (c.get("link") or "")]
+                if matching and matching[0].get("can_publish"):
+                    auto_verified = True
+
+            return {
+                "success": True,
+                "channel": resolved,
+                "already_discovered": already_discovered,
+                "auto_verified": auto_verified,
+                "verification_required": not auto_verified,
+                "verification_method": "session_admin_access" if auto_verified else "admin_panel_check",
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Could not resolve channel. Ensure the link is correct and the channel is public.",
+                "channel": None,
+            }
+    except Exception as e:
+        logger.error(f"[WA] RESOLVE_CHANNEL_FAILED error={e}")
+        raise HTTPException(status_code=500, detail={
+            "code": "RESOLVE_FAILED",
+            "message": str(e)
+        })
+
+
+class VerifyStartRequest(BaseModel):
+    session_identifier: str
+    channel_id: str
+    channel_link: Optional[str] = None
+
+
+@router.post("/verify/start")
+async def verify_channel_ownership(req: VerifyStartRequest, user_id: str = Depends(get_current_user_id)):
+    """
+    Verify ownership of a WhatsApp Channel.
+    Uses the strongest available verification: checks if the authenticated
+    WhatsApp session can access the channel's admin/management controls.
+    """
+    logger.info(f"[WA] VERIFY_START session_id={req.session_identifier} channel_id={req.channel_id}")
+
+    # Step 1: Check if channel is in user's discovered admin channels
+    user_channels = channel_manager.get_user_channels(user_id)
+    matching = [c for c in user_channels if
+                c.get("id") == req.channel_id or
+                c.get("channel_id") == req.channel_id]
+
+    if matching:
+        ch = matching[0]
+        if ch.get("can_publish") or ch.get("is_admin") or ch.get("is_owned"):
+            # Auto-verified: the authenticated session already proved ownership
+            logger.info(f"[WA] VERIFY_AUTO_PASS channel_id={req.channel_id} method=session_discovery")
+            return {
+                "success": True,
+                "verified": True,
+                "verification_method": "session_admin_access",
+                "message": "Channel ownership verified via your authenticated WhatsApp session.",
+                "channel_id": req.channel_id,
+            }
+
+    # Step 2: Try to verify by navigating to the channel and checking for admin controls
+    try:
+        channels = await provider.get_channels(req.session_identifier)
+        for ch in channels:
+            ch_id = ch.get("id") or ch.get("channel_id", "")
+            if ch_id == req.channel_id or req.channel_id in (ch.get("link") or ""):
+                if ch.get("can_publish") or ch.get("is_admin") or ch.get("is_owned"):
+                    # Save the verified channel
+                    channel_manager.save_resolved_channel(user_id, req.session_identifier, ch)
+                    return {
+                        "success": True,
+                        "verified": True,
+                        "verification_method": "rediscovery_admin_check",
+                        "message": "Channel ownership confirmed through admin access detection.",
+                        "channel_id": req.channel_id,
+                    }
+    except Exception as disc_err:
+        logger.warning(f"[WA] VERIFY_REDISCOVERY_FAILED error={disc_err}")
+
+    # Step 3: Cannot verify — the session does not have admin access
+    return {
+        "success": True,
+        "verified": False,
+        "verification_method": "none",
+        "message": (
+            "Unable to verify ownership. Your authenticated WhatsApp account does not appear "
+            "to have admin or owner access to this channel. Only channels where you are an "
+            "admin or owner can be linked for publishing."
+        ),
+        "channel_id": req.channel_id,
+    }
+
+
+class VerifyConfirmRequest(BaseModel):
+    session_identifier: str
+    channel_id: str
+
+
+@router.post("/verify/confirm")
+async def confirm_channel_link(req: VerifyConfirmRequest, user_id: str = Depends(get_current_user_id)):
+    """
+    Confirm and finalize linking a verified channel to the user's account.
+    """
+    logger.info(f"[WA] VERIFY_CONFIRM session_id={req.session_identifier} channel_id={req.channel_id}")
+
+    # Ensure channel is verified (exists in user's publishable channels)
+    user_channels = channel_manager.get_user_channels(user_id)
+    matching = [c for c in user_channels if
+                c.get("id") == req.channel_id or
+                c.get("channel_id") == req.channel_id]
+
+    if not matching:
+        raise HTTPException(status_code=404, detail={
+            "code": "CHANNEL_NOT_FOUND",
+            "message": "Channel not found in your account. Please discover or resolve it first."
+        })
+
+    ch = matching[0]
+    if not (ch.get("can_publish") or ch.get("is_admin") or ch.get("is_owned")):
+        raise HTTPException(status_code=403, detail={
+            "code": "OWNERSHIP_NOT_VERIFIED",
+            "message": "Channel ownership has not been verified. Only admin/owner channels can be linked."
+        })
+
+    # Mark as selected
+    try:
+        channel_manager.select_channel(user_id, req.channel_id)
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "linked": True,
+        "channel_id": req.channel_id,
+        "channel_name": ch.get("name", "WhatsApp Channel"),
+        "message": "Channel successfully linked to your UNAI Flow account.",
+    }
 
 
 @router.get("/picture-proxy")

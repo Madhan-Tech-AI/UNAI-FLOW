@@ -43,6 +43,7 @@ class ChannelManager:
         try:
             # 1. Fetch from provider with retry for cold starts
             import asyncio
+            from datetime import datetime, timezone
             channels = None
             delays = [3, 6, 12]
 
@@ -59,22 +60,29 @@ class ChannelManager:
             if channels is None:
                 channels = []
 
+            now_iso = datetime.now(timezone.utc).isoformat()
+
             # 2. Upsert to Supabase tables
             upserted_channels = []
             for ch in channels:
-                ch_id = ch["id"]
+                ch_id = ch.get("id") or ch.get("channel_id")
+                if not ch_id:
+                    continue
                 ch_name = ch.get("name") or "WhatsApp Channel"
                 ch_link = ch.get("link") or f"https://whatsapp.com/channel/{ch_id}"
                 ch_role = (ch.get("role") or "admin").lower()
-                ch_subs = ch.get("subscribers_count")
+                ch_subs = ch.get("subscribers_count") or ch.get("subscriber_count")
                 if ch_subs is not None:
                     try:
                         ch_subs = int(ch_subs)
                     except (ValueError, TypeError):
                         ch_subs = None
 
-                ch_pic = ch.get("pictureUrl") or ch.get("picture") or ch.get("picture_url") or None
+                ch_pic = ch.get("avatar_url") or ch.get("pictureUrl") or ch.get("picture") or ch.get("picture_url") or None
                 ch_desc = ch.get("description") or ""
+                ch_is_owned = bool(ch.get("is_owned", False))
+                ch_is_admin = bool(ch.get("is_admin", False))
+                ch_can_publish = bool(ch.get("can_publish", False))
 
                 # Table 1: whatsapp_channels (official schema)
                 try:
@@ -93,6 +101,11 @@ class ChannelManager:
                             "picture_url": ch_pic or "",
                             "description": ch_desc,
                             "subscribers_count_exact": ch_subs,
+                            "is_owned": ch_is_owned,
+                            "is_admin": ch_is_admin,
+                            "can_publish": ch_can_publish,
+                            "source": ch.get("source", "whatsapp_web"),
+                            "metadata_complete": ch.get("metadata_complete", False),
                         }
                     }
                     self.sb.table("whatsapp_channels").upsert(wa_ch_data, on_conflict="connection_id,channel_id").execute()
@@ -232,6 +245,11 @@ class ChannelManager:
                             "description": meta.get("description") or "",
                             "is_selected": bool(ch.get("selected", False)),
                             "selected": bool(ch.get("selected", False)),
+                            "is_owned": bool(meta.get("is_owned", False)),
+                            "is_admin": bool(meta.get("is_admin", False)),
+                            "can_publish": bool(meta.get("can_publish", False)),
+                            "source": meta.get("source", "whatsapp_web"),
+                            "metadata_complete": bool(meta.get("metadata_complete", False)),
                             "synced_at": ch.get("synced_at") or ch.get("updated_at"),
                         }
             except Exception as e:
@@ -260,6 +278,11 @@ class ChannelManager:
                                 "description": ch.get("description", ""),
                                 "is_selected": bool(ch.get("is_selected", False)),
                                 "selected": bool(ch.get("is_selected", False)),
+                                "is_owned": False,
+                                "is_admin": False,
+                                "can_publish": (ch.get("role") or "").upper() in ("ADMIN", "OWNER"),
+                                "source": "database",
+                                "metadata_complete": False,
                                 "synced_at": ch.get("updated_at"),
                             }
             except Exception as e:

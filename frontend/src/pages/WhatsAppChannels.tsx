@@ -997,6 +997,7 @@ function DashboardView({
   const handleVerifyAndLink = async () => {
     if (!resolvedChannel || !account?.sessionIdentifier) return;
     setVerificationStatus('verifying');
+    setManualLinkError('');
     try {
       const verifyRes = await fetchApi('/api/channels/verify/start', {
         method: 'POST',
@@ -1004,23 +1005,19 @@ function DashboardView({
           session_identifier: account.sessionIdentifier,
           channel_id: resolvedChannel.id,
           channel_link: resolvedChannel.link || manualLinkInput,
+          channel_data: resolvedChannel,
         }),
       });
       if (verifyRes?.verified) {
         setVerificationStatus('verified');
-        // Confirm the link
-        await fetchApi('/api/channels/verify/confirm', {
-          method: 'POST',
-          body: JSON.stringify({
-            session_identifier: account.sessionIdentifier,
-            channel_id: resolvedChannel.id,
-          }),
-        });
-        // Refresh channel list
-        setShowManualLink(false);
-        setManualLinkInput('');
-        setResolvedChannel(null);
-        fetchChannels();
+        // Refresh channel list after successful link
+        setTimeout(() => {
+          setShowManualLink(false);
+          setManualLinkInput('');
+          setResolvedChannel(null);
+          setVerificationStatus('idle');
+          fetchChannels();
+        }, 1500);
       } else {
         setVerificationStatus('failed');
         setManualLinkError(verifyRes?.message || 'Ownership verification failed.');
@@ -1099,8 +1096,32 @@ function DashboardView({
       <div className="wa-conn-card">
         {/* Left Side: Avatar + Number + Status */}
         <div className="wa-conn-left">
-          <div className="wa-brand-icon-circle">
-            <MessageCircle size={28} />
+          <div className="wa-brand-icon-circle" style={{ overflow: 'hidden', padding: 0 }}>
+            {account.profilePictureUrl ? (
+              <img
+                src={account.profilePictureUrl}
+                alt={account.name || account.phone || 'WhatsApp'}
+                style={{
+                  width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%',
+                }}
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                  const fallback = (e.target as HTMLElement).nextElementSibling as HTMLElement;
+                  if (fallback) fallback.style.display = 'flex';
+                }}
+              />
+            ) : null}
+            <div
+              style={{
+                display: account.profilePictureUrl ? 'none' : 'flex',
+                width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center',
+                fontSize: '1.2rem', fontWeight: 700, color: '#fff',
+                background: 'linear-gradient(135deg, #25D366, #128C7E)',
+                borderRadius: '50%',
+              }}
+            >
+              {(account.name || account.phone || 'W').slice(0, 1).toUpperCase()}
+            </div>
           </div>
 
           <div>

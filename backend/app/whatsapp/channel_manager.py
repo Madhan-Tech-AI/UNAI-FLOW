@@ -330,6 +330,78 @@ class ChannelManager:
 
         return True
 
+    def save_resolved_channel(self, user_id: str, session_identifier: str, channel_data: Dict[str, Any]) -> bool:
+        """
+        Persists a manually-resolved channel to the database.
+        Used when a user links a channel via invite link after ownership verification.
+        """
+        ch_id = channel_data.get("id") or channel_data.get("channel_id")
+        if not ch_id:
+            return False
+
+        ch_name = channel_data.get("name") or "WhatsApp Channel"
+        ch_link = channel_data.get("link") or f"https://whatsapp.com/channel/{ch_id}"
+        ch_desc = channel_data.get("description") or ""
+        ch_pic = channel_data.get("pictureUrl") or channel_data.get("avatar_url") or channel_data.get("picture_url") or ""
+        ch_subs = channel_data.get("subscribers_count")
+        if ch_subs is not None:
+            try:
+                ch_subs = int(ch_subs)
+            except (ValueError, TypeError):
+                ch_subs = 0
+
+        # 1. Save to whatsapp_channels
+        try:
+            wa_data = {
+                "connection_id": session_identifier,
+                "channel_id": ch_id,
+                "channel_name": ch_name,
+                "channel_link": ch_link,
+                "role": "admin",
+                "subscribers_count": ch_subs or 0,
+                "verified": bool(channel_data.get("verified", False)),
+                "name": ch_name,
+                "synced_at": "now()",
+                "metadata": {
+                    "picture_url": ch_pic,
+                    "description": ch_desc,
+                    "subscribers_count_exact": ch_subs,
+                    "is_owned": bool(channel_data.get("is_owned") or channel_data.get("can_publish")),
+                    "is_admin": True,
+                    "can_publish": bool(channel_data.get("can_publish", True)),
+                    "source": channel_data.get("source", "manual_link"),
+                    "metadata_complete": True,
+                },
+            }
+            self.sb.table("whatsapp_channels").upsert(wa_data, on_conflict="connection_id,channel_id").execute()
+        except Exception as e:
+            logger.debug(f"[WA] save_resolved whatsapp_channels note: {e}")
+
+        # 2. Save to channels table
+        sessions = self.session_manager.get_sessions_for_user(user_id)
+        if sessions:
+            session = sessions[0]
+            try:
+                data = {
+                    "whatsapp_session_id": session["id"],
+                    "channel_id": ch_id,
+                    "name": ch_name,
+                    "description": ch_desc,
+                    "picture_url": ch_pic,
+                    "followers": ch_subs or 0,
+                    "role": "ADMIN",
+                }
+                existing = self.sb.table("channels").select("id").eq("whatsapp_session_id", session["id"]).eq("channel_id", ch_id).execute()
+                if existing.data and len(existing.data) > 0:
+                    self.sb.table("channels").update(data).eq("id", existing.data[0]["id"]).execute()
+                else:
+                    self.sb.table("channels").insert(data).execute()
+            except Exception as e:
+                logger.debug(f"[WA] save_resolved channels note: {e}")
+
+        logger.info(f"[WA] CHANNEL_SAVED id={ch_id} name={ch_name}")
+        return True
+
     def delete_user_channels(self, user_id: str) -> None:
         """Delete all channels associated with the user's WhatsApp sessions."""
         sessions = self.session_manager.get_sessions_for_user(user_id)

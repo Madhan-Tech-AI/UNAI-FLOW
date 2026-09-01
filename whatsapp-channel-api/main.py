@@ -188,7 +188,15 @@ async def v1_get_qr(connection_id: str, format: Optional[str] = None):
 async def v1_get_channels(connection_id: str):
     engine = session_manager.get(connection_id)
     if not engine:
-        raise HTTPException(status_code=404, detail="Session not found")
+        # Try to re-create and initialize from persisted session data
+        try:
+            engine = await session_manager.get_or_create(connection_id)
+            if not engine.is_ready:
+                await engine.initialize()
+                import asyncio
+                await asyncio.sleep(3)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Session not found")
     result = await engine.get_user_channels()
     # Pass through diagnostics from the engine
     return {
@@ -206,8 +214,26 @@ async def v1_get_channels(connection_id: str):
 async def v1_publish(connection_id: str, channel_id: str, req: PublishRequest, _auth: str = Depends(check_api_key)):
     engine = session_manager.get(connection_id)
     if not engine:
-        raise HTTPException(status_code=404, detail="Session not found")
-        
+        try:
+            engine = await session_manager.get_or_create(connection_id)
+            # Initialize the engine — this reconnects from persisted session data
+            if not engine.is_ready:
+                await engine.initialize()
+                # Wait briefly for WhatsApp Web to load the existing session
+                import asyncio
+                await asyncio.sleep(3)
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session not found. Could not reconnect: {str(e)}. Please reconnect your WhatsApp account."
+            )
+    
+    if not engine.is_ready:
+        raise HTTPException(
+            status_code=400,
+            detail="WhatsApp session is not connected. Please scan the QR code to link your WhatsApp account first."
+        )
+
     req.channelId = channel_id
     content = req.caption or req.text or ""
     if not content and not req.mediaUrl:

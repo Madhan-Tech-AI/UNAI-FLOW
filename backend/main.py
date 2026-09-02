@@ -1,7 +1,8 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from routers import auth, automations, connections, youtube
+from routers import auth, automations, connections, youtube, email_campaigns
+from app.workers.email_worker import email_worker
 import os
 import asyncio
 import logging
@@ -59,11 +60,20 @@ async def lifespan(app: FastAPI):
     if worker:
         worker_task = asyncio.create_task(worker.start())
         logger.info("[STARTUP] PublishingWorker started.")
+
+    email_worker_task = asyncio.create_task(email_worker.start())
+    logger.info("[STARTUP] EmailWorker started.")
+
     yield
+
     if worker:
         worker.stop()
         if worker_task:
             await worker_task
+
+    email_worker.stop()
+    if email_worker_task:
+        await email_worker_task
 
 app = FastAPI(
     title="UNAI Flow WhatsApp Channels API Gateway",
@@ -104,6 +114,8 @@ app.include_router(auth.router)
 app.include_router(automations.router)
 app.include_router(connections.router)
 app.include_router(youtube.router)
+app.include_router(email_campaigns.router, prefix="/api")
+app.include_router(email_campaigns.router)
 
 # Legacy / Prototype API Routers
 from app.api import health as legacy_health_router

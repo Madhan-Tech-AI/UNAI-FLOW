@@ -16,3 +16,6 @@ redis>=5.0.1
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 google-generativeai
+openpyxl>=3.1.2
+aiosmtplib>=3.0.0
+email-validator>=2.1.0

@@ -7,6 +7,7 @@ from .base import BaseEmailProvider, EmailSendResult
 from .smtp_provider import SmtpEmailProvider
 from .resend_provider import ResendEmailProvider
 from .sendgrid_provider import SendGridEmailProvider
+from .gateway_provider import UnaiEmailGatewayProvider
 from lib.supabase_client import supabase
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ class EmailService:
     """
 
     def __init__(self):
-        self.provider_name = os.getenv("EMAIL_PROVIDER", "smtp").lower()
+        self.provider_name = os.getenv("EMAIL_PROVIDER", "unai_gateway").lower()
         self.from_email = os.getenv("EMAIL_FROM_EMAIL", "noreply@unaiflow.com")
         self.from_name = os.getenv("EMAIL_FROM_NAME", "UNAI Flow")
         self.reply_to = os.getenv("EMAIL_REPLY_TO", "")
@@ -30,7 +31,16 @@ class EmailService:
 
     def _init_provider(self) -> BaseEmailProvider:
         """Instantiates the configured email provider from environment variables."""
-        if self.provider_name == "resend":
+        if self.provider_name in ("unai_gateway", "gateway", "custom"):
+            gateway_url = os.getenv("EMAIL_GATEWAY_URL", "http://localhost:3002")
+            api_key = os.getenv("EMAIL_GATEWAY_API_KEY", "")
+            return UnaiEmailGatewayProvider(
+                gateway_url=gateway_url,
+                api_key=api_key,
+                default_from_email=self.from_email,
+                default_from_name=self.from_name,
+            )
+        elif self.provider_name == "resend":
             api_key = os.getenv("RESEND_API_KEY", "")
             return ResendEmailProvider(
                 api_key=api_key,

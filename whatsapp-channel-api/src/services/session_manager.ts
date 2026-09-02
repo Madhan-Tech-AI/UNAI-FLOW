@@ -42,6 +42,10 @@ export interface UserSession {
   retryCount: number;
   /** Tracks whether a QR code was ever generated in this session lifecycle */
   _qrWasGenerated: boolean;
+  /** True if session has ever reached CONNECTED state (has valid saved credentials) */
+  _hasEverAuthenticated: boolean;
+  /** True if creds.json had registered=true when the session was booted */
+  _hadSavedCreds: boolean;
 }
 
 export class SessionManager {
@@ -227,12 +231,18 @@ export class SessionManager {
         if (res.data && Array.isArray(res.data)) {
           for (const row of res.data) {
             const connId = row.session_identifier;
-            if (connId && !booted.has(connId) && row.encrypted_credentials) {
-              booted.add(connId);
-              logger.info({ connId }, '[WCA] Restoring connected session from Supabase vault on boot...');
-              this.initSession(connId).catch((err) => {
-                logger.error({ err, connId }, '[WCA] Failed to boot session restored from Supabase');
-              });
+            if (connId && !booted.has(connId)) {
+              // Only attempt restore if encrypted_credentials contains actual data
+              const hasCreds = row.encrypted_credentials && typeof row.encrypted_credentials === 'string' && row.encrypted_credentials.trim().startsWith('{');
+              if (hasCreds) {
+                booted.add(connId);
+                logger.info({ connId }, '[WCA] Restoring connected session from Supabase vault on boot...');
+                this.initSession(connId).catch((err) => {
+                  logger.error({ err, connId }, '[WCA] Failed to boot session restored from Supabase');
+                });
+              } else {
+                logger.warn({ connId }, '[WCA] Skipping session restore — no backed-up credentials in Supabase vault. User needs to re-scan QR.');
+              }
             }
           }
         }
@@ -276,6 +286,18 @@ export class SessionManager {
 
     logger.info({ connectionId, version, isLatest }, '🚀 Initializing Multi-Device WhatsApp Socket...');
 
+    // Check if credentials file has registered=true (i.e. has been authenticated before)
+    const hadSavedCreds = (() => {
+      try {
+        const cp = path.join(sessionDir, 'creds.json');
+        if (fs.existsSync(cp)) {
+          const raw = JSON.parse(fs.readFileSync(cp, 'utf-8'));
+          return raw.registered === true;
+        }
+      } catch {}
+      return false;
+    })();
+
     const userSession: UserSession = {
       connectionId,
       socket: null,
@@ -292,7 +314,13 @@ export class SessionManager {
       lastActive: new Date(),
       retryCount: 0,
       _qrWasGenerated: false,
+      _hasEverAuthenticated: hadSavedCreds,
+      _hadSavedCreds: hadSavedCreds,
     };
+
+    logger.info({ connectionId, hadSavedCreds }, hadSavedCreds
+      ? '[WCA] SESSION_INITIALIZING (has saved credentials, expecting auto-login)'
+      : '[WCA] SESSION_INITIALIZING (no saved credentials, will need QR scan)');
 
     logger.info({ connectionId }, '[WCA] SESSION_INITIALIZING');
     this.sessions.set(connectionId, userSession);
@@ -368,6 +396,7 @@ export class SessionManager {
         userSession.phoneNumber = sock.user?.id?.split('@')[0]?.split(':')[0] || null;
         userSession.lastActive = new Date();
         userSession.retryCount = 0;
+        userSession._hasEverAuthenticated = true;
 
         // Clear any pending reconnect timers
         if (this.reconnectTimers.has(connectionId)) {
@@ -415,25 +444,39 @@ export class SessionManager {
           userSession.status = 'REVOKED';
           await this.purgeSession(connectionId);
         } else {
-          // CRITICAL: Maintain session as INITIALIZING and auto-reconnect continuously.
-          // Never abandon session unless user explicitly clicks disconnect or logs out from phone!
-          userSession.status = 'INITIALIZING';
-          userSession.retryCount += 1;
-          const delay = Math.min(1000 * Math.pow(1.5, Math.min(userSession.retryCount, 8)), 15000);
+          // Only auto-reconnect if the session has ever successfully authenticated.
+          // If it was only generating QRs and nobody scanned them (statusCode 408),
+          // do NOT loop forever — stop and wait for the user to explicitly initiate connection.
+          const isQrTimeout = statusCode === 408;
+          const shouldAutoReconnect = userSession._hasEverAuthenticated || userSession._hadSavedCreds;
 
-          if (this.reconnectTimers.has(connectionId)) {
-            clearTimeout(this.reconnectTimers.get(connectionId)!);
-          }
+          if (isQrTimeout && !shouldAutoReconnect) {
+            // Never authenticated, just QR timeout — stop the loop
+            userSession.status = 'DISCONNECTED';
+            logger.info(
+              { connectionId, retryCount: userSession.retryCount },
+              '[WCA] SESSION_QR_TIMEOUT — no saved credentials, stopping reconnect loop. User needs to scan QR.'
+            );
+          } else {
+            // Has valid credentials or network disconnect — auto-reconnect
+            userSession.status = 'INITIALIZING';
+            userSession.retryCount += 1;
+            const delay = Math.min(1000 * Math.pow(1.5, Math.min(userSession.retryCount, 8)), 15000);
 
-          const timer = setTimeout(() => {
-            if (this.sessions.has(connectionId)) {
-              logger.info({ connectionId, attempt: userSession.retryCount }, '[WCA] Executing auto-reconnect...');
-              this.initSession(connectionId).catch((err) => {
-                logger.error({ err, connectionId }, '[WCA] Auto-reconnect failed, will retry');
-              });
+            if (this.reconnectTimers.has(connectionId)) {
+              clearTimeout(this.reconnectTimers.get(connectionId)!);
             }
-          }, delay);
-          this.reconnectTimers.set(connectionId, timer);
+
+            const timer = setTimeout(() => {
+              if (this.sessions.has(connectionId)) {
+                logger.info({ connectionId, attempt: userSession.retryCount }, '[WCA] Executing auto-reconnect...');
+                this.initSession(connectionId).catch((err) => {
+                  logger.error({ err, connectionId }, '[WCA] Auto-reconnect failed, will retry');
+                });
+              }
+            }, delay);
+            this.reconnectTimers.set(connectionId, timer);
+          }
         }
       }
     });

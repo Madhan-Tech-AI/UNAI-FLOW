@@ -304,9 +304,13 @@ app.post('/v1/whatsapp/connections/:connectionId/channels/:channelId/publish', a
             }
         }
         if (!session || session.status !== 'CONNECTED' || !session.socket) {
+            const currentStatus = session?.status || 'NO_SESSION';
+            logger.warn({ connectionId, currentStatus }, '[WCA] PUBLISH_REJECTED — session not in CONNECTED state');
             return res.status(400).json({
                 success: false,
-                error: 'WhatsApp account is not connected. Please scan QR code first.',
+                error: `WhatsApp session is not connected. Please scan the QR code to link your WhatsApp account first.`,
+                sessionStatus: currentStatus,
+                needsRescan: currentStatus === 'QR_READY' || currentStatus === 'DISCONNECTED' || currentStatus === 'WAITING_FOR_SCAN',
             });
         }
         const contentText = caption || text || '';

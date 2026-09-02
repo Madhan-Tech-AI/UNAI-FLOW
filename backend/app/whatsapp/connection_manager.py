@@ -81,8 +81,8 @@ class ConnectionManager:
                             gw_state = SessionStatus.WAITING_FOR_SCAN.value
 
                         if gw_state in ["DISCONNECTED", "ERROR"]:
-                            # If the session is already CONNECTED in DB, do NOT discard it.
-                            # Instead, trigger gateway to restore the session from its saved credentials.
+                            # If the session is already CONNECTED in DB, try gateway restore
+                            # but report the actual state so UI doesn't falsely show Connected
                             if s["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value]:
                                 logger.info(
                                     f"[WA] SESSION_RESTORE_TRIGGER request_id={request_id} "
@@ -94,11 +94,36 @@ class ConnectionManager:
                                 except Exception as conn_err:
                                     logger.warning(f"[WA] Gateway wake up note: {conn_err}")
 
-                                return {
-                                    "success": True,
-                                    "status": SessionStatus.CONNECTED.value,
-                                    "session_identifier": s["session_identifier"],
-                                }
+                                # Re-check gateway status after triggering restore
+                                try:
+                                    import asyncio
+                                    await asyncio.sleep(2)
+                                    recheck = await self.provider.get_full_status(s["session_identifier"])
+                                    actual_state = recheck.get("status", gw_state)
+                                    if actual_state == "QR_READY":
+                                        actual_state = SessionStatus.WAITING_FOR_SCAN.value
+                                    if actual_state == SessionStatus.CONNECTED.value:
+                                        return {
+                                            "success": True,
+                                            "status": SessionStatus.CONNECTED.value,
+                                            "session_identifier": s["session_identifier"],
+                                        }
+                                    else:
+                                        # Gateway didn't reconnect instantly — update DB to reflect reality
+                                        self.session_manager.update_session_status(
+                                            s["id"], actual_state
+                                        )
+                                        return {
+                                            "success": True,
+                                            "status": actual_state,
+                                            "session_identifier": s["session_identifier"],
+                                        }
+                                except Exception:
+                                    return {
+                                        "success": True,
+                                        "status": "INITIALIZING",
+                                        "session_identifier": s["session_identifier"],
+                                    }
 
                             logger.warning(
                                 f"[WA] SESSION_STALE request_id={request_id} "
@@ -312,19 +337,38 @@ class ConnectionManager:
                     except Exception as sync_err:
                         logger.warning(f"[WA] AUTO_SYNC_CHANNELS_FAILED error={sync_err}")
                 else:
-                    # If session was previously CONNECTED in DB, do NOT demote to DISCONNECTED!
-                    # Maintain the session until the user explicitly clicks the disconnect button.
+                    # If gateway reports the session is actually in QR mode or disconnected,
+                    # we MUST update DB to reflect the real state. Lying about CONNECTED
+                    # causes publish to fail because the gateway socket isn't authenticated.
                     if session["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value] and provider_status_str in ["DISCONNECTED", "INITIALIZING"]:
+                        # Gateway socket is down but might be reconnecting.
+                        # Try to trigger a reconnect but report the actual state.
                         logger.info(
-                            f"[WA] SESSION_MAINTAIN_CONNECTED session_id={session_identifier} "
+                            f"[WA] SESSION_GATEWAY_RESTORING session_id={session_identifier} "
                             f"db_status={session['status']} gateway_status={provider_status_str} "
-                            f"— maintaining connected state and prompting gateway restore"
+                            f"— prompting gateway to restore, updating status to reflect reality"
                         )
                         try:
                             await self.provider.connect(session_identifier)
                         except Exception as conn_err:
                             logger.warning(f"[WA] Provider connect re-trigger note: {conn_err}")
-                        provider_status_str = session["status"]
+                        # Update to INITIALIZING so UI knows to wait/show spinner
+                        self.session_manager.update_session_status(
+                            session["id"], provider_status_str
+                        )
+                        session["status"] = provider_status_str
+                    elif session["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value] and provider_status_str == SessionStatus.WAITING_FOR_SCAN.value:
+                        # Gateway is generating QR codes — session needs re-scanning.
+                        # Update DB to reflect reality so UI shows QR prompt.
+                        logger.warning(
+                            f"[WA] SESSION_NEEDS_RESCAN session_id={session_identifier} "
+                            f"db_status={session['status']} gateway_status={provider_status_str} "
+                            f"— session credentials lost, user needs to re-scan QR"
+                        )
+                        self.session_manager.update_session_status(
+                            session["id"], provider_status_str
+                        )
+                        session["status"] = provider_status_str
                     else:
                         self.session_manager.update_session_status(
                             session["id"], provider_status_str

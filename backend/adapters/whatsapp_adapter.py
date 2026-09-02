@@ -12,10 +12,8 @@ _provider = WhatsAppWebProvider()
 
 class WhatsAppAdapter:
     """
-    Publishes content to a WhatsApp Channel using the legacy pipeline:
-      1. Looks up the user's selected channel in `channels` table
-      2. Finds the associated session_identifier from `whatsapp_sessions`
-      3. Calls WhatsAppWebProvider → WCA service for actual delivery
+    Publishes content to a real WhatsApp Channel (@newsletter JID) via WCA gateway.
+    Ensures real numeric JIDs are resolved, preventing fake or dropped messages.
     """
 
     async def publish(self, content: str, user_id: str, automation_id: str) -> Dict[str, Any]:
@@ -27,12 +25,8 @@ class WhatsAppAdapter:
             .execute()
 
         if not sessions_res.data:
-            logger.warning(f"No connected WhatsApp session for user {user_id}, returning demo result.")
-            return {
-                "post_id": f"demo_wa_{uuid.uuid4().hex[:8]}",
-                "post_url": "https://whatsapp.com/channel/demo",
-                "demo": True
-            }
+            logger.error(f"No connected WhatsApp session for user {user_id}")
+            raise Exception("No connected WhatsApp account found. Please link your WhatsApp account in the WhatsApp Channels page before publishing.")
 
         session = sessions_res.data[0]
         session_id = session["id"]
@@ -49,7 +43,7 @@ class WhatsAppAdapter:
             from services.media_manager import MediaManager
             media_url = MediaManager.get_public_url(raw_media_url)
 
-        # 3. Determine target channel (check whatsapp_channels first, then channels table)
+        # 3. Determine target channel (prioritizing newsletter_jid)
         target = None
 
         # Try whatsapp_channels table
@@ -62,16 +56,22 @@ class WhatsAppAdapter:
                 # Look for selected channel
                 for ch in wch_res.data:
                     if ch.get("selected"):
+                        meta = ch.get("metadata") if isinstance(ch.get("metadata"), dict) else {}
+                        target_id = ch.get("newsletter_jid") or meta.get("newsletter_jid") or ch["channel_id"]
                         target = {
-                            "channel_id": ch["channel_id"],
+                            "channel_id": target_id,
+                            "display_id": ch["channel_id"],
                             "name": ch.get("channel_name") or ch.get("name") or "WhatsApp Channel",
                             "link": ch.get("channel_link") or f"https://whatsapp.com/channel/{ch['channel_id']}"
                         }
                         break
                 if not target and wch_res.data:
                     first = wch_res.data[0]
+                    meta = first.get("metadata") if isinstance(first.get("metadata"), dict) else {}
+                    target_id = first.get("newsletter_jid") or meta.get("newsletter_jid") or first["channel_id"]
                     target = {
-                        "channel_id": first["channel_id"],
+                        "channel_id": target_id,
+                        "display_id": first["channel_id"],
                         "name": first.get("channel_name") or first.get("name") or "WhatsApp Channel",
                         "link": first.get("channel_link") or f"https://whatsapp.com/channel/{first['channel_id']}"
                     }
@@ -90,6 +90,7 @@ class WhatsAppAdapter:
                         if ch.get("is_selected"):
                             target = {
                                 "channel_id": ch["channel_id"],
+                                "display_id": ch["channel_id"],
                                 "name": ch.get("name", "WhatsApp Channel"),
                                 "link": f"https://whatsapp.com/channel/{ch['channel_id']}"
                             }
@@ -98,6 +99,7 @@ class WhatsAppAdapter:
                         first = ch_res.data[0]
                         target = {
                             "channel_id": first["channel_id"],
+                            "display_id": first["channel_id"],
                             "name": first.get("name", "WhatsApp Channel"),
                             "link": f"https://whatsapp.com/channel/{first['channel_id']}"
                         }
@@ -105,18 +107,20 @@ class WhatsAppAdapter:
                 logger.debug(f"[WA] query channels in adapter note: {e}")
 
         if not target:
-            logger.warning(f"No channels found for session {session_id}, returning demo result.")
-            return {
-                "post_id": f"demo_wa_{uuid.uuid4().hex[:8]}",
-                "post_url": "https://whatsapp.com/channel/demo",
-                "demo": True
-            }
+            logger.error(f"No WhatsApp channels found for session {session_id}")
+            raise Exception("No WhatsApp Channels found for your connected account. Please verify or link your channel in WhatsApp Channels page.")
 
         channel_id = target["channel_id"]
         channel_name = target.get("name", "WhatsApp Channel")
-        channel_link = target.get("link", f"https://whatsapp.com/channel/{channel_id}")
+        channel_link = target.get("link", f"https://whatsapp.com/channel/{target.get('display_id', channel_id)}")
 
-        # 4. Publish via WhatsAppWebProvider → WCA service
+        # 4. Ensure gateway has the socket ready before publishing
+        try:
+            await _provider.connect(session_identifier)
+        except Exception as conn_warn:
+            logger.warning(f"[WA] Pre-publish gateway connect note: {conn_warn}")
+
+        # 5. Publish via WhatsAppWebProvider → WCA service
         try:
             if media_url and media_url.startswith("http"):
                 result = await _provider.publish_image(
@@ -129,7 +133,10 @@ class WhatsAppAdapter:
                     channel_name=channel_name, channel_link=channel_link
                 )
 
-            post_id = result.get("postId") or result.get("messageId", f"wa_{uuid.uuid4().hex[:8]}")
+            post_id = result.get("postId") or result.get("messageId")
+            if not post_id:
+                raise Exception("Gateway did not return a valid post ID")
+
             logger.info(f"✅ Published to WhatsApp Channel '{channel_name}' via WCA. messageId={post_id}")
 
             return {
@@ -142,4 +149,3 @@ class WhatsAppAdapter:
         except Exception as e:
             logger.error(f"❌ WhatsApp publish failed: {e}")
             raise Exception(f"WhatsApp Channel publish failed: {str(e)}")
-

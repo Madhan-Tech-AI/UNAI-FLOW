@@ -171,12 +171,26 @@ function formatPhoneDisplay(phone?: string | null): string {
   return `+${clean}`;
 }
 
+function decodeEntities(str?: string | null): string {
+  if (!str) return '';
+  return str
+    .replace(/&#039;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#x2022;/g, '•')
+    .trim();
+}
+
 function getSafeImageUrl(url?: string | null): string {
   if (!url) return '';
-  if (url.includes('pps.whatsapp.net') || url.includes('mmg.whatsapp.net')) {
-    return `${API_BASE_URL}/api/channels/picture-proxy?url=${encodeURIComponent(url)}`;
+  const clean = url.replace(/&amp;/g, '&').trim();
+  if (clean.includes('pps.whatsapp.net') || clean.includes('mmg.whatsapp.net') || clean.includes('static.whatsapp.net')) {
+    return `${API_BASE_URL}/api/channels/picture-proxy?url=${encodeURIComponent(clean)}`;
   }
-  return url;
+  return clean;
 }
 
 export default function WhatsAppChannels() {
@@ -901,26 +915,30 @@ function DashboardView({
   const [resolvedChannel, setResolvedChannel] = useState<any>(null);
   const [verificationStatus, setVerificationStatus] = useState<'idle' | 'verifying' | 'verified' | 'failed'>('idle');
 
-  const mapChannelData = (c: any): WhatsAppChannelItem => ({
-    id: c.id || c.channel_id,
-    channel_id: c.channel_id || c.id,
-    name: c.name || c.channel_name || 'WhatsApp Channel',
-    link: c.link || c.channel_link || `https://whatsapp.com/channel/${c.id || c.channel_id}`,
-    role: (c.role || 'owner').toLowerCase(),
-    subscribers_count: c.subscribers_count !== undefined ? c.subscribers_count : (c.followers !== undefined ? c.followers : null),
-    verified: c.verified !== undefined ? Boolean(c.verified) : true,
-    can_publish: c.can_publish !== undefined ? c.can_publish : (c.role === 'owner' || c.role === 'admin'),
-    picture_url: c.picture_url || c.avatar_url || c.pictureUrl || null,
-    pictureUrl: c.pictureUrl || c.picture_url || c.avatar_url || null,
-    description: c.description || '',
-    is_selected: Boolean(c.is_selected || c.selected),
-    selected: Boolean(c.selected || c.is_selected),
-    synced_at: c.synced_at || new Date().toISOString(),
-    created_at: c.created_at || '',
-    is_owned: c.is_owned,
-    is_admin: c.is_admin,
-    metadata_complete: c.metadata_complete,
-  } as WhatsAppChannelItem);
+  const mapChannelData = (c: any): WhatsAppChannelItem => {
+    const rawPic = c.picture_url || c.avatar_url || c.pictureUrl || null;
+    const cleanPic = rawPic ? rawPic.replace(/&amp;/g, '&').trim() : null;
+    return {
+      id: c.id || c.channel_id,
+      channel_id: c.channel_id || c.id,
+      name: decodeEntities(c.name || c.channel_name || 'WhatsApp Channel'),
+      link: c.link || c.channel_link || `https://whatsapp.com/channel/${c.id || c.channel_id}`,
+      role: (c.role || 'owner').toLowerCase(),
+      subscribers_count: c.subscribers_count !== undefined ? c.subscribers_count : (c.followers !== undefined ? c.followers : null),
+      verified: c.verified !== undefined ? Boolean(c.verified) : true,
+      can_publish: c.can_publish !== undefined ? c.can_publish : (c.role === 'owner' || c.role === 'admin'),
+      picture_url: cleanPic,
+      pictureUrl: cleanPic,
+      description: decodeEntities(c.description || ''),
+      is_selected: Boolean(c.is_selected || c.selected),
+      selected: Boolean(c.selected || c.is_selected),
+      synced_at: c.synced_at || new Date().toISOString(),
+      created_at: c.created_at || '',
+      is_owned: c.is_owned,
+      is_admin: c.is_admin,
+      metadata_complete: c.metadata_complete,
+    } as WhatsAppChannelItem;
+  };
 
   const fetchChannels = async () => {
     if (!account?.sessionIdentifier) return;

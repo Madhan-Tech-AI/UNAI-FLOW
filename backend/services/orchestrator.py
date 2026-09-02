@@ -45,23 +45,34 @@ async def orchestrate_publish(automation_id: str, user_id: str) -> List[Dict[str
             result = await adapter.publish(content, user_id, automation_id)
             
             post_id = result.get("post_id", "")
-            is_demo = str(post_id).startswith("demo_")
+            is_demo = str(post_id).startswith("demo_") or result.get("demo") is True
             
-            # 3. Mark success in publish_jobs (DB only allows: queued/processing/success/failed)
-            supabase.table("publish_jobs").update({
-                "status": "success",
-                "platform_post_id": post_id,
-                "platform_post_url": result.get("post_url"),
-                "attempts": 1
-            }).eq("id", job_id).execute()
-            
-            results.append({
-                "platform": platform,
-                "status": "success" if not is_demo else "demo",
-                "post_id": post_id,
-                "post_url": result.get("post_url"),
-                "demo_mode": is_demo
-            })
+            if is_demo:
+                _mark_failed(job_id, f"Account for {platform} is not connected. Connect account in dashboard to publish live.")
+                results.append({
+                    "platform": platform,
+                    "status": "failed",
+                    "error": f"{platform.title()} is in demo mode (account not connected)",
+                    "post_id": post_id,
+                    "post_url": result.get("post_url"),
+                    "demo_mode": True
+                })
+            else:
+                # 3. Mark success in publish_jobs (DB only allows: queued/processing/success/failed)
+                supabase.table("publish_jobs").update({
+                    "status": "success",
+                    "platform_post_id": post_id,
+                    "platform_post_url": result.get("post_url"),
+                    "attempts": 1
+                }).eq("id", job_id).execute()
+                
+                results.append({
+                    "platform": platform,
+                    "status": "success",
+                    "post_id": post_id,
+                    "post_url": result.get("post_url"),
+                    "demo_mode": False
+                })
             
             # 4. If it's a real publish, store in published_posts table
             if not is_demo:

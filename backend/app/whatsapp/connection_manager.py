@@ -81,7 +81,25 @@ class ConnectionManager:
                             gw_state = SessionStatus.WAITING_FOR_SCAN.value
 
                         if gw_state in ["DISCONNECTED", "ERROR"]:
-                            # Gateway lost this session (e.g. after restart) — mark it and skip
+                            # If the session is already CONNECTED in DB, do NOT discard it.
+                            # Instead, trigger gateway to restore the session from its saved credentials.
+                            if s["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value]:
+                                logger.info(
+                                    f"[WA] SESSION_RESTORE_TRIGGER request_id={request_id} "
+                                    f"session_id={s['session_identifier']} db_status={s['status']} "
+                                    f"— waking up gateway session from vault"
+                                )
+                                try:
+                                    await self.provider.connect(s["session_identifier"])
+                                except Exception as conn_err:
+                                    logger.warning(f"[WA] Gateway wake up note: {conn_err}")
+
+                                return {
+                                    "success": True,
+                                    "status": SessionStatus.CONNECTED.value,
+                                    "session_identifier": s["session_identifier"],
+                                }
+
                             logger.warning(
                                 f"[WA] SESSION_STALE request_id={request_id} "
                                 f"session_id={s['session_identifier']} "
@@ -106,8 +124,14 @@ class ConnectionManager:
                     except Exception as e:
                         logger.warning(
                             f"[WA] SESSION_VERIFY_FAILED request_id={request_id} "
-                            f"session_id={s['session_identifier']} error={e} — will create fresh"
+                            f"session_id={s['session_identifier']} error={e}"
                         )
+                        if s["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value]:
+                            return {
+                                "success": True,
+                                "status": SessionStatus.CONNECTED.value,
+                                "session_identifier": s["session_identifier"],
+                            }
                         self.session_manager.update_session_status(
                             s["id"], SessionStatus.DISCONNECTED.value
                         )
@@ -288,10 +312,24 @@ class ConnectionManager:
                     except Exception as sync_err:
                         logger.warning(f"[WA] AUTO_SYNC_CHANNELS_FAILED error={sync_err}")
                 else:
-                    self.session_manager.update_session_status(
-                        session["id"], provider_status_str
-                    )
-                session["status"] = provider_status_str
+                    # If session was previously CONNECTED in DB, do NOT demote to DISCONNECTED!
+                    # Maintain the session until the user explicitly clicks the disconnect button.
+                    if session["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value] and provider_status_str in ["DISCONNECTED", "INITIALIZING"]:
+                        logger.info(
+                            f"[WA] SESSION_MAINTAIN_CONNECTED session_id={session_identifier} "
+                            f"db_status={session['status']} gateway_status={provider_status_str} "
+                            f"— maintaining connected state and prompting gateway restore"
+                        )
+                        try:
+                            await self.provider.connect(session_identifier)
+                        except Exception as conn_err:
+                            logger.warning(f"[WA] Provider connect re-trigger note: {conn_err}")
+                        provider_status_str = session["status"]
+                    else:
+                        self.session_manager.update_session_status(
+                            session["id"], provider_status_str
+                        )
+                        session["status"] = provider_status_str
 
         except httpx.ConnectError as e:
             gateway_error = f"Gateway unreachable: {type(e).__name__}"

@@ -486,8 +486,11 @@ async def picture_proxy(url: str):
     if not url:
         raise HTTPException(status_code=400, detail="Missing url parameter")
 
+    # Clean escaped &amp; and whitespace
+    url = url.replace("&amp;", "&").strip()
+
     # Only allow proxying WhatsApp CDN URLs for security
-    allowed_domains = ["mmg.whatsapp.net", "pps.whatsapp.net", "web.whatsapp.com"]
+    allowed_domains = ["mmg.whatsapp.net", "pps.whatsapp.net", "web.whatsapp.com", "static.whatsapp.net"]
     from urllib.parse import urlparse
     parsed = urlparse(url)
     if not any(domain in (parsed.hostname or "") for domain in allowed_domains):
@@ -502,7 +505,7 @@ async def picture_proxy(url: str):
                 raise HTTPException(status_code=resp.status_code, detail="Failed to fetch image")
 
             from fastapi.responses import Response
-            content_type = resp.headers.get("content-type", "image/jpeg")
+            content_type = resp.headers.get("content-type") or "image/jpeg"
             return Response(
                 content=resp.content,
                 media_type=content_type,

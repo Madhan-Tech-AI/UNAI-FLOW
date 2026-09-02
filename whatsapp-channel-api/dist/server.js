@@ -99,7 +99,14 @@ app.post('/v1/whatsapp/connect', async (req, res) => {
  */
 app.get('/v1/whatsapp/:connectionId/status', async (req, res) => {
     const connectionId = getParam(req, 'connectionId');
-    const session = sessionManager.getSession(connectionId);
+    let session = sessionManager.getSession(connectionId);
+    // If session is not in memory, attempt to restore it from disk or Supabase vault
+    if (!session) {
+        try {
+            session = await sessionManager.getOrCreateSession(connectionId);
+        }
+        catch { }
+    }
     if (!session) {
         return res.status(200).json({
             success: false,
@@ -435,7 +442,11 @@ app.post('/api/logout', async (req, res) => {
 // Start Express Server
 app.listen(PORT, () => {
     logger.info(`⚡ UNAI WhatsApp Gateway v2.0 listening on port ${PORT}`);
-    // Pre-boot default session
+    // Pre-boot all saved sessions from disk & Supabase vault
+    sessionManager.initAllSavedSessions().catch((err) => {
+        logger.error({ err }, 'Error during saved sessions auto-boot');
+    });
+    // Also pre-boot default session
     sessionManager.initSession(DEFAULT_CONN_ID).catch((err) => {
         logger.error({ err }, 'Error during default session auto-boot');
     });

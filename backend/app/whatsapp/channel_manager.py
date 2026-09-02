@@ -1,8 +1,9 @@
 from typing import List, Dict, Any, Optional
+import html
+import logging
 from app.database.supabase import get_supabase_client
 from app.whatsapp.provider import WhatsAppProvider
 from app.whatsapp.session_manager import SessionManager
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class ChannelManager:
                 ch_id = ch.get("id") or ch.get("channel_id")
                 if not ch_id:
                     continue
-                ch_name = ch.get("name") or "WhatsApp Channel"
+                ch_name = html.unescape(ch.get("name") or "WhatsApp Channel")
                 ch_link = ch.get("link") or f"https://whatsapp.com/channel/{ch_id}"
                 ch_role = (ch.get("role") or "admin").lower()
                 ch_subs = ch.get("subscribers_count") or ch.get("subscriber_count")
@@ -78,11 +79,13 @@ class ChannelManager:
                     except (ValueError, TypeError):
                         ch_subs = None
 
-                ch_pic = ch.get("avatar_url") or ch.get("pictureUrl") or ch.get("picture") or ch.get("picture_url") or None
-                ch_desc = ch.get("description") or ""
+                raw_pic = ch.get("avatar_url") or ch.get("pictureUrl") or ch.get("picture") or ch.get("picture_url") or None
+                ch_pic = raw_pic.replace("&amp;", "&").strip() if raw_pic else ""
+                ch_desc = html.unescape(ch.get("description") or "")
                 ch_is_owned = bool(ch.get("is_owned", False))
                 ch_is_admin = bool(ch.get("is_admin", False))
                 ch_can_publish = bool(ch.get("can_publish", False))
+                newsletter_jid = ch.get("jid") or ch.get("newsletter_jid") or (ch_id if "@newsletter" in str(ch_id) else None)
 
                 # Table 1: whatsapp_channels (official schema)
                 try:
@@ -94,7 +97,7 @@ class ChannelManager:
                         "role": ch_role if ch_role in ("admin", "owner", "subscriber", "guest") else "admin",
                         "subscribers_count": ch_subs if ch_subs is not None else 0,
                         "verified": bool(ch.get("verified", False)),
-                        "newsletter_jid": ch_id if "@newsletter" in ch_id else None,
+                        "newsletter_jid": newsletter_jid,
                         "name": ch_name,
                         "synced_at": "now()",
                         "metadata": {
@@ -106,6 +109,7 @@ class ChannelManager:
                             "can_publish": ch_can_publish,
                             "source": ch.get("source", "whatsapp_web"),
                             "metadata_complete": ch.get("metadata_complete", False),
+                            "newsletter_jid": newsletter_jid,
                         }
                     }
                     self.sb.table("whatsapp_channels").upsert(wa_ch_data, on_conflict="connection_id,channel_id").execute()
@@ -155,12 +159,14 @@ class ChannelManager:
         self._ensure_connection_record(user_id, session)
 
         ch_id = channel_data.get("id") or channel_data.get("channel_id")
-        ch_name = channel_data.get("name") or channel_data.get("channel_name") or "WhatsApp Channel"
+        ch_name = html.unescape(channel_data.get("name") or channel_data.get("channel_name") or "WhatsApp Channel")
         ch_link = channel_data.get("link") or channel_data.get("channel_link") or f"https://whatsapp.com/channel/{ch_id}"
         ch_role = (channel_data.get("role") or "admin").lower()
         ch_subs = int(channel_data.get("subscribers_count") or channel_data.get("followers") or 0)
-        ch_pic = channel_data.get("pictureUrl") or channel_data.get("picture_url") or ""
-        ch_desc = channel_data.get("description") or ""
+        raw_pic = channel_data.get("pictureUrl") or channel_data.get("picture_url") or ""
+        ch_pic = raw_pic.replace("&amp;", "&").strip() if raw_pic else ""
+        ch_desc = html.unescape(channel_data.get("description") or "")
+        newsletter_jid = channel_data.get("jid") or channel_data.get("newsletter_jid") or (ch_id if "@newsletter" in str(ch_id) else None)
 
         # 1. Upsert into whatsapp_channels with selected=True
         try:
@@ -174,11 +180,12 @@ class ChannelManager:
                 "subscribers_count": ch_subs,
                 "verified": bool(channel_data.get("verified", False)),
                 "selected": True,
-                "newsletter_jid": ch_id if "@newsletter" in str(ch_id) else None,
+                "newsletter_jid": newsletter_jid,
                 "name": ch_name,
                 "metadata": {
                     "picture_url": ch_pic,
                     "description": ch_desc,
+                    "newsletter_jid": newsletter_jid,
                 }
             }, on_conflict="connection_id,channel_id").execute()
         except Exception as wch_err:
@@ -230,19 +237,22 @@ class ChannelManager:
                         if exact_subs is None:
                             exact_subs = ch.get("subscribers_count")
 
+                        newsletter_jid = ch.get("newsletter_jid") or meta.get("newsletter_jid")
                         channels_map[ch_id] = {
                             "id": ch_id,
                             "channel_id": ch_id,
-                            "name": ch.get("channel_name") or ch.get("name") or "WhatsApp Channel",
-                            "channel_name": ch.get("channel_name") or ch.get("name") or "WhatsApp Channel",
+                            "jid": newsletter_jid,
+                            "newsletter_jid": newsletter_jid,
+                            "name": html.unescape(ch.get("channel_name") or ch.get("name") or "WhatsApp Channel"),
+                            "channel_name": html.unescape(ch.get("channel_name") or ch.get("name") or "WhatsApp Channel"),
                             "link": ch.get("channel_link") or f"https://whatsapp.com/channel/{ch_id}",
                             "role": (ch.get("role") or "admin").lower(),
                             "subscribers_count": exact_subs,
                             "followers": exact_subs,
                             "verified": bool(ch.get("verified", False)),
-                            "picture_url": meta.get("picture_url") or "",
-                            "pictureUrl": meta.get("picture_url") or "",
-                            "description": meta.get("description") or "",
+                            "picture_url": (meta.get("picture_url") or "").replace("&amp;", "&"),
+                            "pictureUrl": (meta.get("picture_url") or "").replace("&amp;", "&"),
+                            "description": html.unescape(meta.get("description") or ""),
                             "is_selected": bool(ch.get("selected", False)),
                             "selected": bool(ch.get("selected", False)),
                             "is_owned": bool(meta.get("is_owned", False)),

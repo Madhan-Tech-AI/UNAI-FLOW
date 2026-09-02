@@ -24,7 +24,7 @@ class SmtpEmailProvider(BaseEmailProvider):
         start_tls: bool = True,
         default_from_email: str = "noreply@example.com",
         default_from_name: str = "UNAI Flow",
-        timeout: float = 30.0,
+        timeout: float = 12.0,
     ):
         self.hostname = hostname
         self.port = port
@@ -127,13 +127,17 @@ class SmtpEmailProvider(BaseEmailProvider):
                 metadata={"smtp_code": code},
             )
         except (aiosmtplib.SMTPConnectError, aiosmtplib.SMTPServerDisconnected, TimeoutError) as e:
-            err_text = f"SMTP connection error: {str(e)}"
+            err_base = str(e)
+            if "timed out" in err_base.lower() or "timeout" in err_base.lower():
+                err_text = f"SMTP timeout on port {self.port}. Cloud hosts like Render block outbound port 587. Please switch to port 465 (SMTP_PORT=465, SMTP_STARTTLS=false) or use Resend (EMAIL_PROVIDER=resend)."
+            else:
+                err_text = f"SMTP connection error: {err_base}"
             logger.error(f"[SMTP] Connection error for {to_email}: {err_text}")
             return EmailSendResult(
                 success=False,
                 error_message=err_text,
                 status="failed",
-                is_retryable=True,  # Transient network error, retryable
+                is_retryable=True,
             )
         except Exception as e:
             err_text = f"SMTP unexpected error: {str(e)}"

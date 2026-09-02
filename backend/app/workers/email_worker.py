@@ -29,6 +29,8 @@ class EmailWorker:
     async def start(self):
         self.running = True
         logger.info("[EMAIL_WORKER] EmailWorker started.")
+        # Recover any orphaned sending recipients from previous container crashes
+        await self._recover_stuck_sending()
         while self.running:
             try:
                 processed_any = await self.process_queue()
@@ -36,6 +38,8 @@ class EmailWorker:
                     self._idle_count = 0
                 else:
                     self._idle_count += 1
+                    if self._idle_count % 10 == 0:
+                        await self._recover_stuck_sending()
             except Exception as e:
                 logger.error(f"[EMAIL_WORKER] Error in queue processing: {e}\n{traceback.format_exc()}")
                 self._idle_count += 1
@@ -295,6 +299,23 @@ class EmailWorker:
 
         except Exception as e:
             logger.error(f"[EMAIL_WORKER] Error in completion check for {campaign_id}: {e}")
+
+    async def _recover_stuck_sending(self):
+        """Recovers any recipients that have been stuck in 'sending' status for more than 2 minutes."""
+        try:
+            res = (
+                supabase.table("email_recipients")
+                .update({
+                    "status": "queued",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+                .eq("status", "sending")
+                .execute()
+            )
+            if res.data and len(res.data) > 0:
+                logger.info(f"[EMAIL_WORKER] Recovered {len(res.data)} orphaned 'sending' recipients back to 'queued'.")
+        except Exception as e:
+            logger.debug(f"[EMAIL_WORKER] Stuck recovery note: {e}")
 
 
 # Singleton worker instance

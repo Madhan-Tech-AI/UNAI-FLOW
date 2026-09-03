@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import pino from 'pino';
-import { MailerService, EmailPayload } from './services/mailer.js';
+import { GmailApiMailer, GmailPayload } from './services/gmail-api-mailer.js';
 import { authenticateApiKey } from './middleware/auth.js';
 
 dotenv.config();
@@ -14,16 +14,17 @@ const port = parseInt(process.env.PORT || '3002', 10);
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-const mailer = MailerService.getInstance();
+const mailer = GmailApiMailer.getInstance();
 
 // ── 1. Health Check (Unauthenticated) ──
 app.get('/health', async (_req: Request, res: Response) => {
-  const isSmtpConnected = await mailer.verify();
+  const isConnected = await mailer.verify();
   return res.json({
     ok: true,
     service: 'unai-email-gateway',
-    status: isSmtpConnected ? 'healthy' : 'degraded',
-    version: '1.0.0',
+    transport: 'gmail-api-https',
+    status: isConnected ? 'healthy' : 'degraded',
+    version: '1.1.0',
     timestamp: new Date().toISOString(),
     uptime_seconds: Math.floor((Date.now() - mailer.startedAt.getTime()) / 1000),
     total_sent: mailer.totalSent,
@@ -34,7 +35,8 @@ app.get('/health', async (_req: Request, res: Response) => {
 app.get('/', (_req: Request, res: Response) => {
   return res.json({
     service: 'UNAI Flow Email Gateway',
-    version: '1.0.0',
+    version: '1.1.0',
+    transport: 'Gmail REST API (HTTPS port 443)',
     docs: 'POST /v1/email/send with X-API-Key header',
   });
 });
@@ -51,7 +53,7 @@ app.post('/v1/email/send', authenticateApiKey, async (req: Request, res: Respons
       });
     }
 
-    const payload: EmailPayload = {
+    const payload: GmailPayload = {
       to,
       name,
       subject,
@@ -69,8 +71,7 @@ app.post('/v1/email/send', authenticateApiKey, async (req: Request, res: Respons
       return res.status(200).json({
         success: true,
         messageId: result.messageId,
-        accepted: result.accepted,
-        rejected: result.rejected,
+        threadId: result.threadId,
       });
     } else {
       return res.status(500).json({
@@ -96,7 +97,7 @@ app.post('/v1/email/batch', authenticateApiKey, async (req: Request, res: Respon
 
     const results = [];
     for (const item of emails) {
-      const payload: EmailPayload = {
+      const payload: GmailPayload = {
         to: item.to,
         name: item.name,
         subject: item.subject,
@@ -135,5 +136,5 @@ app.get('/v1/email/status', authenticateApiKey, (_req: Request, res: Response) =
 });
 
 app.listen(port, () => {
-  logger.info(`🚀 UNAI Email Gateway listening on port ${port}`);
+  logger.info(`🚀 UNAI Email Gateway listening on port ${port} (Gmail API / HTTPS transport)`);
 });

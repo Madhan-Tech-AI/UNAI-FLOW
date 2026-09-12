@@ -8,20 +8,30 @@ from app.core.rate_limiter import rate_limiter
 from app.core.logging import request_id_ctx, org_id_ctx
 from middleware.auth import verify_jwt
 
+
 class AuthContext:
     def __init__(
         self,
-        auth_type: str, # "jwt" or "api_key"
+        auth_type: str,  # "jwt" or "api_key"
         organization_id: str,
         user_id: Optional[str] = None,
         api_key_id: Optional[str] = None,
-        scopes: Optional[list] = None
+        scopes: Optional[list] = None,
+        environment: str = "live"
     ):
         self.auth_type = auth_type
         self.organization_id = organization_id
         self.user_id = user_id or organization_id
         self.api_key_id = api_key_id
         self.scopes = scopes or ["*"]
+        self.environment = environment
+
+    def require_scope(self, required_scope: str):
+        if "*" in self.scopes:
+            return
+        if required_scope not in self.scopes:
+            raise InsufficientScopeException(required_scope)
+
 
 async def get_auth_context(
     authorization: Optional[str] = Header(None),
@@ -30,63 +40,65 @@ async def get_auth_context(
 ) -> AuthContext:
     """
     Unified authentication dependency supporting:
-    1. Authorization: Bearer wa_live_... (API Keys)
+    1. Authorization: Bearer wa_live_... / wa_test_... (API Keys)
     2. Authorization: Bearer <supabase_jwt> (Dashboard user session)
-    3. X-API-Key: wa_live_... (Direct header)
+    3. X-API-Key: wa_live_... / wa_test_... (Direct header)
     """
     req_id = x_request_id or f"req_{uuid.uuid4().hex[:12]}"
     request_id_ctx.set(req_id)
-    
+
     token = None
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:].strip()
     elif x_api_key:
         token = x_api_key.strip()
-        
+
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required (Bearer token or X-API-Key).")
-        
+
     # Check if this is a first-party API key
     if token.startswith("wa_live_") or token.startswith("wa_test_"):
-        # Rate limit by API key
-        rate_limiter.check_rate_limit(f"apikey:{token[:12]}")
         key_record = api_key_service.authenticate_raw_key(token)
+
+        # Rate limit by API key with possible override
+        rate_override = key_record.get("rate_limit_override")
+        rate_limiter.check_rate_limit(f"apikey:{token[:12]}", limit=rate_override)
+
         org_id = key_record["organization_id"]
         org_id_ctx.set(org_id)
-        
+
         return AuthContext(
             auth_type="api_key",
             organization_id=org_id,
             api_key_id=key_record["id"],
-            scopes=key_record.get("scopes", [])
+            scopes=key_record.get("scopes", []),
+            environment=key_record.get("environment", "live")
         )
-        
+
     # Otherwise treat as Supabase JWT
     try:
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
         jwt_user = await verify_jwt(credentials=credentials)
         user_id = jwt_user["user_id"]
-        # In this multi-tenant model, default organization_id maps to user_id or resolved org
         org_id = user_id
         org_id_ctx.set(org_id)
-        
+
         # Rate limit by User ID
         rate_limiter.check_rate_limit(f"user:{user_id}")
-        
+
         return AuthContext(
             auth_type="jwt",
             organization_id=org_id,
             user_id=user_id,
-            scopes=["*"] # Dashboard users have full scope
+            scopes=["*"],  # Dashboard users have full scope
+            environment="live"
         )
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
 
+
 def require_scope(scope: str):
     async def scope_checker(ctx: AuthContext = Depends(get_auth_context)) -> AuthContext:
-        if "*" in ctx.scopes:
-            return ctx
-        if scope not in ctx.scopes:
-            raise InsufficientScopeException(scope)
+        ctx.require_scope(scope)
         return ctx
     return scope_checker

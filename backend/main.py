@@ -32,6 +32,15 @@ try:
 except Exception as e:
     logger.warning(f"PublishingWorker unavailable (non-fatal): {e}")
 
+# CampaignWorker for WhatsApp bulk messaging campaigns
+campaign_worker = None
+try:
+    from app.workers.campaign_worker import campaign_worker
+    from app.services.campaign_service import campaign_service
+    campaign_service.set_worker_trigger(campaign_worker.trigger)
+except Exception as e:
+    logger.warning(f"CampaignWorker unavailable (non-fatal): {e}")
+
 async def _warmup_wca():
     """Wake up the WCA service on Render before accepting requests."""
     import httpx
@@ -64,6 +73,11 @@ async def lifespan(app: FastAPI):
     email_worker_task = asyncio.create_task(email_worker.start())
     logger.info("[STARTUP] EmailWorker started.")
 
+    campaign_worker_task = None
+    if campaign_worker:
+        campaign_worker_task = asyncio.create_task(campaign_worker.start())
+        logger.info("[STARTUP] CampaignWorker started.")
+
     yield
 
     if worker:
@@ -74,6 +88,11 @@ async def lifespan(app: FastAPI):
     email_worker.stop()
     if email_worker_task:
         await email_worker_task
+
+    if campaign_worker:
+        campaign_worker.stop()
+        if campaign_worker_task:
+            await campaign_worker_task
 
 app = FastAPI(
     title="UNAI Flow WhatsApp Channels API Gateway",
@@ -109,6 +128,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# API Logging Middleware for developer usage analytics & metering
+try:
+    from app.middleware.api_logging_middleware import ApiLoggingMiddleware
+    app.add_middleware(ApiLoggingMiddleware)
+except Exception as e:
+    logger.warning(f"ApiLoggingMiddleware unavailable (non-fatal): {e}")
+
 # Existing Dashboard Routers
 app.include_router(auth.router)
 app.include_router(automations.router)
@@ -139,6 +165,8 @@ try:
     from app.api.routes import api_keys as v1_api_keys
     from app.api.routes import webhooks as v1_webhooks
     from app.api.routes import health as v1_health
+    from app.api.routes import campaigns as v1_campaigns
+    from app.api.routes import usage as v1_usage
 
     app.include_router(v1_instances.router)
     app.include_router(v1_channels.router)
@@ -147,6 +175,8 @@ try:
     app.include_router(v1_api_keys.router)
     app.include_router(v1_webhooks.router)
     app.include_router(v1_health.router)
+    app.include_router(v1_campaigns.router)
+    app.include_router(v1_usage.router)
 except Exception as e:
     logger.warning(f"v1 Gateway routers unavailable (non-fatal): {e}")
 

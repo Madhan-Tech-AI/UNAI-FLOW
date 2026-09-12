@@ -10,6 +10,8 @@ import AutomationHistory from './pages/AutomationHistory';
 import Settings from './pages/Settings';
 import WhatsAppChannels from './pages/WhatsAppChannels';
 import EmailAutomation from './pages/EmailAutomation';
+import DeveloperConsole from './pages/DeveloperConsole';
+import BulkMessaging from './pages/BulkMessaging';
 
 export default function App() {
   return (
@@ -21,6 +23,8 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/connections" element={<Connections />} />
           <Route path="/whatsapp-channels" element={<WhatsAppChannels />} />
+          <Route path="/bulk-messaging" element={<BulkMessaging />} />
+          <Route path="/developer" element={<DeveloperConsole />} />
           <Route path="/email-automation" element={<EmailAutomation />} />
           <Route path="/automations/new" element={<NewAutomation />} />
           <Route path="/automations/preview" element={<PreviewVariants />} />

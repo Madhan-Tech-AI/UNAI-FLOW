@@ -116,24 +116,32 @@ if HAS_GATEWAY_EXCEPTIONS:
             }
         )
 
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://unai-flow-rc39.vercel.app",
-    ],
-    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # API Logging Middleware for developer usage analytics & metering
+# NOTE: This must be added BEFORE CORSMiddleware because FastAPI's
+# middleware stack is LIFO — last added = runs first (outermost).
 try:
     from app.middleware.api_logging_middleware import ApiLoggingMiddleware
     app.add_middleware(ApiLoggingMiddleware)
 except Exception as e:
     logger.warning(f"ApiLoggingMiddleware unavailable (non-fatal): {e}")
+
+# Configure CORS — added LAST so it wraps everything (runs first in LIFO)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://unai-flow-rc39.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ],
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
 
 # Existing Dashboard Routers
 app.include_router(auth.router)

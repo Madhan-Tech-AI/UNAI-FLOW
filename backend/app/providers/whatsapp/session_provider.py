@@ -156,32 +156,58 @@ class WhatsAppWebSessionProvider(WhatsAppProvider):
         return None
 
     async def send_text(self, instance_id: str, to: str, text: str) -> ProviderMessageResult:
-        resp = await self._request(
-            "POST",
-            f"/v1/whatsapp/{instance_id}/messages/text",
-            json={"to": to, "body": text, "text": text},
-            timeout=45.0
-        )
+        try:
+            resp = await self._request(
+                "POST",
+                f"/v1/whatsapp/{instance_id}/messages/text",
+                json={"to": to, "body": text, "text": text},
+                timeout=45.0
+            )
+        except Exception:
+            resp = await self._request(
+                "POST",
+                f"/v1/whatsapp/connections/{instance_id}/channels/{to}/publish",
+                json={"type": "text", "text": text, "to": to},
+                timeout=45.0
+            )
         data = resp.json()
-        msg_id = data.get("message_id") or data.get("id") or f"msg_{datetime.now().timestamp()}"
+        msg_id = data.get("message_id") or data.get("id") or data.get("messageId") or f"msg_{datetime.now().timestamp()}"
         return ProviderMessageResult(success=True, message_id=msg_id, timestamp=datetime.now(timezone.utc), provider_raw=data)
 
     async def send_image(self, instance_id: str, to: str, image_url_or_bytes: Any, caption: Optional[str] = None) -> ProviderMessageResult:
         payload = {"to": to, "caption": caption}
         if isinstance(image_url_or_bytes, str):
             payload["media_url"] = image_url_or_bytes
-        resp = await self._request("POST", f"/v1/whatsapp/{instance_id}/messages/image", json=payload, timeout=60.0)
+            payload["mediaUrl"] = image_url_or_bytes
+        try:
+            resp = await self._request("POST", f"/v1/whatsapp/{instance_id}/messages/image", json=payload, timeout=60.0)
+        except Exception:
+            resp = await self._request(
+                "POST",
+                f"/v1/whatsapp/connections/{instance_id}/channels/{to}/publish",
+                json={"type": "image", "mediaUrl": payload.get("media_url"), "caption": caption, "to": to},
+                timeout=60.0
+            )
         data = resp.json()
-        msg_id = data.get("message_id") or data.get("id") or f"msg_{datetime.now().timestamp()}"
+        msg_id = data.get("message_id") or data.get("id") or data.get("messageId") or f"msg_{datetime.now().timestamp()}"
         return ProviderMessageResult(success=True, message_id=msg_id, timestamp=datetime.now(timezone.utc), provider_raw=data)
 
     async def send_video(self, instance_id: str, to: str, video_url_or_bytes: Any, caption: Optional[str] = None) -> ProviderMessageResult:
         payload = {"to": to, "caption": caption}
         if isinstance(video_url_or_bytes, str):
             payload["media_url"] = video_url_or_bytes
-        resp = await self._request("POST", f"/v1/whatsapp/{instance_id}/messages/video", json=payload, timeout=90.0)
+            payload["mediaUrl"] = video_url_or_bytes
+        try:
+            resp = await self._request("POST", f"/v1/whatsapp/{instance_id}/messages/video", json=payload, timeout=90.0)
+        except Exception:
+            resp = await self._request(
+                "POST",
+                f"/v1/whatsapp/connections/{instance_id}/channels/{to}/publish",
+                json={"type": "video", "mediaUrl": payload.get("media_url"), "caption": caption, "to": to},
+                timeout=90.0
+            )
         data = resp.json()
-        msg_id = data.get("message_id") or data.get("id") or f"msg_{datetime.now().timestamp()}"
+        msg_id = data.get("message_id") or data.get("id") or data.get("messageId") or f"msg_{datetime.now().timestamp()}"
         return ProviderMessageResult(success=True, message_id=msg_id, timestamp=datetime.now(timezone.utc), provider_raw=data)
 
     async def send_audio(self, instance_id: str, to: str, audio_url_or_bytes: Any) -> ProviderMessageResult:

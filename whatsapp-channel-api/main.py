@@ -254,6 +254,62 @@ async def v1_publish(connection_id: str, channel_id: str, req: PublishRequest, _
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class DirectMessageRequest(BaseModel):
+    to: Optional[str] = None
+    recipient: Optional[str] = None
+    body: Optional[str] = None
+    text: Optional[str] = None
+    caption: Optional[str] = None
+    media_url: Optional[str] = None
+    mediaUrl: Optional[str] = None
+
+@app.post("/v1/whatsapp/{connection_id}/messages/text")
+@app.post("/v1/whatsapp/connections/{connection_id}/messages/text")
+async def v1_send_text_direct(connection_id: str, req: DirectMessageRequest, _auth: str = Depends(check_api_key)):
+    engine = session_manager.get(connection_id)
+    if not engine or not engine.is_ready:
+        try:
+            engine = await session_manager.get_or_create(connection_id)
+            if not engine.is_ready:
+                await engine.initialize()
+                await asyncio.sleep(3)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Session error: {e}")
+    if not engine.is_ready:
+        raise HTTPException(status_code=400, detail="WhatsApp session is not connected. Please scan the QR code first.")
+
+    target = req.to or req.recipient
+    if not target:
+        raise HTTPException(status_code=400, detail="Missing recipient ('to')")
+
+    body = req.body or req.text or ""
+    if not body:
+        raise HTTPException(status_code=400, detail="Missing message body")
+
+    check_duplicate(body, None)
+    try:
+        result = await engine.publish_to_channel(text=body, channel_id=target)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/v1/whatsapp/{connection_id}/messages/image")
+@app.post("/v1/whatsapp/connections/{connection_id}/messages/image")
+async def v1_send_image_direct(connection_id: str, req: DirectMessageRequest, _auth: str = Depends(check_api_key)):
+    engine = session_manager.get(connection_id)
+    if not engine or not engine.is_ready:
+        raise HTTPException(status_code=400, detail="WhatsApp session is not connected.")
+    target = req.to or req.recipient
+    if not target:
+        raise HTTPException(status_code=400, detail="Missing recipient ('to')")
+    m_url = req.media_url or req.mediaUrl
+    if not m_url:
+        raise HTTPException(status_code=400, detail="Missing 'media_url'")
+    try:
+        return await engine.publish_to_channel(media_url=m_url, caption=req.caption or req.text, channel_id=target)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/v1/whatsapp/{connection_id}/channels/resolve")
 async def v1_resolve_channel(connection_id: str, req: ResolveChannelRequest):
     input_str = req.link or req.code or req.channelId or req.channel_link or ""

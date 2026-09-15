@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Send,
   Plus,
@@ -8,7 +8,10 @@ import {
   FileText,
   Image as ImageIcon,
   Video,
-  Eye
+  Eye,
+  Upload,
+  Phone,
+  Users
 } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
@@ -60,6 +63,8 @@ export default function BulkMessaging() {
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState<string[]>(['Option 1', 'Option 2']);
   const [recipientsRaw, setRecipientsRaw] = useState('');
+  const [defaultCountryCode, setDefaultCountryCode] = useState('+91');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [ratePerSec, setRatePerSec] = useState<number>(1.0);
   const [launchImmediate, setLaunchImmediate] = useState(true);
 
@@ -68,6 +73,69 @@ export default function BulkMessaging() {
   const [recipients, setRecipients] = useState<RecipientItem[]>([]);
   const [recipientsLoading, setRecipientsLoading] = useState(false);
   const [recipientStatusFilter, setRecipientStatusFilter] = useState<string>('all');
+
+  // File Upload Handler (CSV / TXT)
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (!content) return;
+
+      const lines = content.split(/\r\n|\n/);
+      const parsedLines: string[] = [];
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (/^(phone|mobile|number|recipient|contact|jid)/i.test(trimmed)) continue;
+
+        let parts = [trimmed];
+        if (trimmed.includes(',')) parts = trimmed.split(',');
+        else if (trimmed.includes(';')) parts = trimmed.split(';');
+        else if (trimmed.includes('\t')) parts = trimmed.split('\t');
+
+        let rawPhone = parts[0]?.trim() || '';
+        let name = parts[1]?.trim() || '';
+
+        const digits0 = rawPhone.replace(/\D/g, '');
+        const digits1 = name.replace(/\D/g, '');
+        if (digits0.length < 7 && digits1.length >= 7) {
+          const temp = rawPhone;
+          rawPhone = name;
+          name = temp;
+        }
+
+        if (rawPhone) {
+          parsedLines.push(name ? `${rawPhone}, ${name}` : rawPhone);
+        }
+      }
+
+      if (parsedLines.length > 0) {
+        setRecipientsRaw((prev) => (prev ? `${prev.trim()}\n${parsedLines.join('\n')}` : parsedLines.join('\n')));
+      }
+    };
+    reader.readAsText(file);
+    if (e.target) e.target.value = '';
+  };
+
+  // Dynamic Recipient Statistics
+  const recipientStats = useMemo(() => {
+    const lines = recipientsRaw.split('\n').map((l) => l.trim()).filter(Boolean);
+    let mobileCount = 0;
+    let channelCount = 0;
+    for (const l of lines) {
+      if (l.includes('@newsletter')) {
+        channelCount++;
+      } else {
+        const digits = l.split(',')[0].replace(/\D/g, '');
+        if (digits.length >= 7) mobileCount++;
+      }
+    }
+    return { total: lines.length, mobileCount, channelCount };
+  }, [recipientsRaw]);
 
   useEffect(() => {
     loadCampaigns();
@@ -146,23 +214,47 @@ export default function BulkMessaging() {
     e.preventDefault();
     if (!campName.trim() || !recipientsRaw.trim()) return;
 
-    // Parse recipient JIDs
+    // Parse recipient phone numbers or channel JIDs
     const lines = recipientsRaw.split('\n');
     const parsedRecipients: any[] = [];
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      // support CSV format: "jid, name"
+      
+      let rawTarget = trimmed;
+      let name: string | undefined = undefined;
+
+      // support CSV format: "phone/jid, name"
       if (trimmed.includes(',')) {
-        const [jid, name] = trimmed.split(',').map((s) => s.trim());
-        if (jid) parsedRecipients.push({ recipient_jid: jid, recipient_name: name });
-      } else {
-        parsedRecipients.push({ recipient_jid: trimmed });
+        const parts = trimmed.split(',');
+        rawTarget = parts[0].trim();
+        name = parts.slice(1).join(',').trim() || undefined;
+      }
+
+      // Check if it's a mobile phone number vs WhatsApp channel JID
+      if (!rawTarget.includes('@newsletter')) {
+        let cleaned = rawTarget.replace(/[^\d+]/g, '');
+        if (!cleaned.startsWith('+')) {
+          const digitsOnly = cleaned.replace(/\D/g, '');
+          if (digitsOnly.length === 10 && defaultCountryCode) {
+            cleaned = `${defaultCountryCode}${digitsOnly}`;
+          } else if (digitsOnly.length > 0) {
+            cleaned = `+${digitsOnly}`;
+          }
+        }
+        if (cleaned) rawTarget = cleaned;
+      }
+
+      if (rawTarget) {
+        parsedRecipients.push({
+          recipient_jid: rawTarget,
+          ...(name ? { recipient_name: name } : {})
+        });
       }
     }
 
     if (parsedRecipients.length === 0) {
-      alert('Please provide at least one valid recipient JID.');
+      alert('Please provide at least one valid recipient phone number or channel JID.');
       return;
     }
 
@@ -706,15 +798,84 @@ export default function BulkMessaging() {
 
               {/* Recipients Input */}
               <div style={{ marginBottom: '1.25rem' }}>
-                <div className="flex items-center justify-between" style={{ marginBottom: '0.4rem' }}>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept=".csv,.txt"
+                  style={{ display: 'none' }}
+                  onChange={handleFileUpload}
+                />
+                <div className="flex items-center justify-between" style={{ marginBottom: '0.5rem' }}>
                   <label style={{ fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
-                    Recipients (WhatsApp Channel JIDs or Phone JIDs) *
+                    Recipients (Mobile Numbers or WhatsApp Channels) *
                   </label>
-                  <span style={{ fontSize: '0.75rem', color: '#64748b' }}>One per line or "JID, Name"</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex items-center gap-1"
+                      style={{
+                        fontSize: '0.78rem',
+                        color: '#2563eb',
+                        backgroundColor: '#eff6ff',
+                        border: '1px solid #bfdbfe',
+                        borderRadius: '6px',
+                        padding: '0.25rem 0.6rem',
+                        cursor: 'pointer',
+                        fontWeight: 600
+                      }}
+                      title="Upload CSV or TXT file with phone numbers and names"
+                    >
+                      <Upload size={13} /> Upload CSV / TXT
+                    </button>
+                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>One per line</span>
+                  </div>
                 </div>
+
+                {/* Country Code Helper */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    backgroundColor: '#f8fafc',
+                    padding: '0.4rem 0.65rem',
+                    borderRadius: '6px',
+                    border: '1px solid #e2e8f0',
+                    marginBottom: '0.5rem',
+                    fontSize: '0.78rem',
+                    color: '#475569'
+                  }}
+                >
+                  <span className="flex items-center gap-1">
+                    <Phone size={13} style={{ color: '#2563eb' }} /> Default Country Code for 10-digit numbers:
+                  </span>
+                  <select
+                    value={defaultCountryCode}
+                    onChange={(e) => setDefaultCountryCode(e.target.value)}
+                    style={{
+                      padding: '0.2rem 0.5rem',
+                      borderRadius: '4px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.78rem',
+                      backgroundColor: '#ffffff',
+                      color: '#0f172a',
+                      fontWeight: 500
+                    }}
+                  >
+                    <option value="+91">+91 (India)</option>
+                    <option value="+1">+1 (US / Canada)</option>
+                    <option value="+44">+44 (UK)</option>
+                    <option value="+971">+971 (UAE)</option>
+                    <option value="+65">+65 (Singapore)</option>
+                    <option value="+61">+61 (Australia)</option>
+                    <option value="">None (Already has Country Code)</option>
+                  </select>
+                </div>
+
                 <textarea
                   rows={5}
-                  placeholder={`120363171744447809@newsletter, General Announcement\n120363171744447810@newsletter, VIP Channel`}
+                  placeholder={`+919342745299, Rahul Sharma\n+919876543210, Priya Patel\n9342745299\n120363171744447809@newsletter, Channel Announcement`}
                   value={recipientsRaw}
                   onChange={(e) => setRecipientsRaw(e.target.value)}
                   required
@@ -727,6 +888,49 @@ export default function BulkMessaging() {
                     fontFamily: 'monospace'
                   }}
                 />
+
+                {/* Recipient Statistics Chips */}
+                {recipientStats.total > 0 && (
+                  <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    {recipientStats.mobileCount > 0 && (
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          color: '#15803d',
+                          backgroundColor: '#dcfce7',
+                          padding: '0.2rem 0.55rem',
+                          borderRadius: '999px',
+                          fontSize: '0.75rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        <Phone size={12} /> {recipientStats.mobileCount} Mobile Phone{recipientStats.mobileCount > 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {recipientStats.channelCount > 0 && (
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          color: '#4338ca',
+                          backgroundColor: '#e0e7ff',
+                          padding: '0.2rem 0.55rem',
+                          borderRadius: '999px',
+                          fontSize: '0.75rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        <Users size={12} /> {recipientStats.channelCount} Channel{recipientStats.channelCount > 1 ? 's' : ''}
+                      </span>
+                    )}
+                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                      Total: {recipientStats.total} recipient{recipientStats.total > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Rate Limit Slider */}
@@ -901,7 +1105,7 @@ export default function BulkMessaging() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
                   <thead>
                     <tr style={{ backgroundColor: '#f8fafc', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
-                      <th style={{ padding: '0.6rem 1rem' }}>RECIPIENT JID</th>
+                      <th style={{ padding: '0.6rem 1rem' }}>RECIPIENT (PHONE / CHANNEL)</th>
                       <th style={{ padding: '0.6rem 1rem' }}>NAME</th>
                       <th style={{ padding: '0.6rem 1rem' }}>STATUS</th>
                       <th style={{ padding: '0.6rem 1rem' }}>MESSAGE ID / ERROR</th>
@@ -910,7 +1114,20 @@ export default function BulkMessaging() {
                   <tbody>
                     {recipients.map((r) => (
                       <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '0.6rem 1rem', fontFamily: 'monospace' }}>{r.recipient_jid}</td>
+                        <td style={{ padding: '0.6rem 1rem', fontFamily: 'monospace' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            {r.recipient_jid.includes('@newsletter') ? (
+                              <span title="WhatsApp Channel" style={{ display: 'inline-flex' }}>
+                                <Users size={13} style={{ color: '#6366f1' }} />
+                              </span>
+                            ) : (
+                              <span title="Mobile Phone" style={{ display: 'inline-flex' }}>
+                                <Phone size={13} style={{ color: '#16a34a' }} />
+                              </span>
+                            )}
+                            {r.recipient_jid}
+                          </span>
+                        </td>
                         <td style={{ padding: '0.6rem 1rem', color: '#334155' }}>{r.recipient_name || '-'}</td>
                         <td style={{ padding: '0.6rem 1rem' }}>
                           <span

@@ -1633,41 +1633,76 @@ class WhatsAppEngine:
         if not self.is_ready or not self.page:
             raise Exception("WhatsApp is not connected. Please scan the QR code to link your device first.")
 
-        target_name = channel_name or getattr(config, "CHANNEL_NAME", "") or "WhatsApp Channel"
+        target_name = channel_name or getattr(config, "CHANNEL_NAME", "") or "WhatsApp Target"
         target_id = channel_id or config.CHANNEL_ID
         target_link = channel_link or config.CHANNEL_LINK
 
         content = caption or text or ""
-        post_id = f"wa_channel_{int(time.time() * 1000)}"
+        post_id = f"wa_msg_{int(time.time() * 1000)}"
+
+        # Determine if recipient is a mobile phone number or a channel JID
+        raw_target = str(target_id or "").strip()
+        clean_phone = re.sub(r'\D', '', raw_target.split('@')[0])
+        is_phone_number = (
+            len(clean_phone) >= 7 and
+            "@newsletter" not in raw_target and
+            not raw_target.startswith("http") and
+            not (target_link and "whatsapp.com/channel" in target_link)
+        )
 
         async with self._lock:
             try:
-                logger.info(f"⚡ Publishing to WhatsApp Channel '{target_name}'...")
+                if is_phone_number:
+                    logger.info(f"📱 Target is mobile phone number: +{clean_phone}. Opening direct WhatsApp chat...")
+                    direct_url = f"https://web.whatsapp.com/send?phone={clean_phone}"
+                    await self.page.goto(direct_url, wait_until="domcontentloaded", timeout=35000)
+                    await asyncio.sleep(2.5)
 
-                # Ensure page is on WhatsApp Web
-                current_url = self.page.url or ""
-                if "web.whatsapp.com" not in current_url:
-                    await self.page.goto("https://web.whatsapp.com/", wait_until="domcontentloaded", timeout=30000)
-                    await asyncio.sleep(2)
+                    # Check for invalid phone number dialog popup
+                    invalid_popup = await self.page.evaluate("""
+                        () => {
+                            const dialogs = Array.from(document.querySelectorAll('div[data-testid="popup-contents"], div[role="dialog"], div[role="alert"]'));
+                            for (const d of dialogs) {
+                                const txt = (d.innerText || '').toLowerCase();
+                                if (txt.includes('invalid') || txt.includes('url is invalid') || txt.includes('not on whatsapp') || txt.includes('phone number shared')) {
+                                    const btn = d.querySelector('button, div[role="button"]');
+                                    if (btn) btn.click();
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }
+                    """)
+                    if invalid_popup:
+                        raise Exception(f"Phone number +{clean_phone} is not registered on WhatsApp or invalid.")
 
-                # ── Strategy 1: Navigate to channel via its link URL ──
-                if target_link and "whatsapp.com/channel" in target_link:
-                    logger.info(f"📍 Navigating to channel via link: {target_link}")
-                    try:
-                        await self.page.goto(target_link, wait_until="domcontentloaded", timeout=20000)
-                        await asyncio.sleep(3)
-                    except Exception as e:
-                        logger.debug(f"Direct channel link navigation failed: {e}")
+                else:
+                    logger.info(f"⚡ Publishing to WhatsApp Channel '{target_name}'...")
 
-                # ── Strategy 2: Click on channel in sidebar list ──
-                clicked = await self.page.evaluate("""
-                    (name) => {
-                        const lower = (name || '').toLowerCase().trim();
-                        
-                        // First try to click on the Channels/Updates/Newsletters tab
-                        const channelsBtn = document.querySelector('button[aria-label="Channels"], button[aria-label="Updates"], button[aria-label="Newsletters"]')
-                            || document.querySelector('span[data-icon="newsletter-outline"], span[data-icon="newsletter"]')?.closest('button');
-                        if (channelsBtn) {
+                    # Ensure page is on WhatsApp Web
+                    current_url = self.page.url or ""
+                    if "web.whatsapp.com" not in current_url:
+                        await self.page.goto("https://web.whatsapp.com/", wait_until="domcontentloaded", timeout=30000)
+                        await asyncio.sleep(2)
+
+                    # ── Strategy 1: Navigate to channel via its link URL ──
+                    if target_link and "whatsapp.com/channel" in target_link:
+                        logger.info(f"📍 Navigating to channel via link: {target_link}")
+                        try:
+                            await self.page.goto(target_link, wait_until="domcontentloaded", timeout=20000)
+                            await asyncio.sleep(3)
+                        except Exception as e:
+                            logger.debug(f"Direct channel link navigation failed: {e}")
+
+                    # ── Strategy 2: Click on channel in sidebar list ──
+                    clicked = await self.page.evaluate("""
+                        (name) => {
+                            const lower = (name || '').toLowerCase().trim();
+                            
+                            // First try to click on the Channels/Updates/Newsletters tab
+                            const channelsBtn = document.querySelector('button[aria-label="Channels"], button[aria-label="Updates"], button[aria-label="Newsletters"]')
+                                || document.querySelector('span[data-icon="newsletter-outline"], span[data-icon="newsletter"]')?.closest('button');
+                            if (channelsBtn) {
                             channelsBtn.click();
                         }
 
@@ -1832,20 +1867,22 @@ class WhatsAppEngine:
                     await self.page.keyboard.press("Enter")
                     await asyncio.sleep(1)
 
-                logger.info(f"✅ Published post to WhatsApp Channel '{target_name}'! Post ID: {post_id}")
+                log_target = f"+{clean_phone}" if is_phone_number else target_name
+                logger.info(f"✅ Dispatched message to {log_target}! Message ID: {post_id}")
                 return {
                     "success": True,
-                    "platform": "whatsapp_channel",
+                    "platform": "whatsapp_chat" if is_phone_number else "whatsapp_channel",
                     "messageId": post_id,
                     "channelId": target_id,
+                    "to": f"+{clean_phone}" if is_phone_number else target_id,
                     "channelName": target_name,
                     "channelLink": target_link,
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 }
 
             except Exception as err:
-                logger.error(f"❌ Error publishing to channel: {err}")
-                raise Exception(f"Failed to publish to WhatsApp Channel: {str(err)}")
+                logger.error(f"❌ Error dispatching message: {err}")
+                raise Exception(f"Failed to deliver WhatsApp message: {str(err)}")
 
     async def close(self):
         """Gracefully closes browser and stops Playwright."""

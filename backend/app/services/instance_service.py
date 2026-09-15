@@ -10,7 +10,14 @@ from app.core.config import settings
 class InstanceService:
     def __init__(self, provider: Optional[WhatsAppProvider] = None):
         self.sb = get_supabase_client()
-        self.provider = provider or FakeWhatsAppProvider()
+        if provider:
+            self.provider = provider
+        else:
+            try:
+                from app.providers.whatsapp.session_provider import WhatsAppWebSessionProvider
+                self.provider = WhatsAppWebSessionProvider()
+            except Exception:
+                self.provider = FakeWhatsAppProvider()
 
     def set_provider(self, provider: WhatsAppProvider):
         self.provider = provider

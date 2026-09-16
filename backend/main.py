@@ -175,7 +175,6 @@ try:
     from app.api.routes import health as v1_health
     from app.api.routes import campaigns as v1_campaigns
     from app.api.routes import usage as v1_usage
-    from app.api.routes import applications as v1_applications
 
     app.include_router(v1_instances.router)
     app.include_router(v1_channels.router)
@@ -186,9 +185,15 @@ try:
     app.include_router(v1_health.router)
     app.include_router(v1_campaigns.router)
     app.include_router(v1_usage.router)
-    app.include_router(v1_applications.router)
 except Exception as e:
     logger.warning(f"v1 Gateway routers unavailable (non-fatal): {e}")
+
+# Applications platform router (isolated — must not break existing v1 routes)
+try:
+    from app.api.routes import applications as v1_applications
+    app.include_router(v1_applications.router)
+except Exception as e:
+    logger.warning(f"Applications router unavailable (non-fatal): {e}")
 
 @app.get("/")
 def root():

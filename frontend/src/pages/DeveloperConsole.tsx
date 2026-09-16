@@ -104,6 +104,7 @@ export default function DeveloperConsole() {
   // Applications state
   const [apps, setApps] = useState<ApplicationItem[]>([]);
   const [appsLoading, setAppsLoading] = useState(false);
+  const [creatingApp, setCreatingApp] = useState(false);
   const [showCreateAppModal, setShowCreateAppModal] = useState(false);
   const [newAppName, setNewAppName] = useState('');
   const [newAppDesc, setNewAppDesc] = useState('');
@@ -261,6 +262,7 @@ export default function DeveloperConsole() {
   const handleCreateApp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAppName.trim()) return;
+    setCreatingApp(true);
     try {
       const res = await fetchApi('/v1/applications', {
         method: 'POST',
@@ -283,6 +285,8 @@ export default function DeveloperConsole() {
       loadApps();
     } catch (err: any) {
       alert(err?.message || 'Failed to create application');
+    } finally {
+      setCreatingApp(false);
     }
   };
 
@@ -1031,17 +1035,31 @@ print("Response:", response.json())`;
                 </button>
                 <button
                   type="submit"
+                  disabled={creatingApp}
                   style={{
                     padding: '0.65rem 1.25rem',
                     borderRadius: '10px',
                     fontWeight: 600,
                     fontSize: '0.875rem',
-                    background: 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
+                    background: creatingApp
+                      ? 'linear-gradient(135deg, #93c5fd 0%, #bfdbfe 100%)'
+                      : 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
                     color: '#fff',
-                    boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)'
+                    boxShadow: creatingApp ? 'none' : '0 4px 12px rgba(37, 99, 235, 0.3)',
+                    cursor: creatingApp ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    transition: 'all 0.2s ease',
                   }}
                 >
-                  Create Application
+                  {creatingApp && (
+                    <svg width="16" height="16" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite' }}>
+                      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="31.4" strokeLinecap="round" />
+                    </svg>
+                  )}
+                  {creatingApp ? 'Creating...' : 'Create Application'}
                 </button>
               </div>
             </form>

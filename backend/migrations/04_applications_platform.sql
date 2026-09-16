@@ -9,7 +9,7 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.applications (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id     UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  organization_id     UUID NOT NULL,                        -- auth.users.id used as org_id
 
   -- Application identity
   client_id           TEXT NOT NULL UNIQUE,               -- e.g. "unai_client_8f92a3b4c5d6e7f8"

@@ -18,7 +18,11 @@ export function getApiBaseUrl(): string {
 
 export const API_BASE_URL = getApiBaseUrl();
 
-export async function fetchApi(endpoint: string, options: RequestInit = {}) {
+interface ExtendedRequestInit extends RequestInit {
+  _isRetry?: boolean;
+}
+
+export async function fetchApi(endpoint: string, options: ExtendedRequestInit = {}) {
   const { data: { session } } = await supabase.auth.getSession();
   
   const headers: Record<string, string> = {
@@ -33,7 +37,7 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
   const baseUrl = getApiBaseUrl();
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = `${baseUrl}${cleanEndpoint}`;
-  const method = options.method || 'GET';
+  const method = (options.method || 'GET').toUpperCase();
 
   const startTime = Date.now();
   const controller = new AbortController();
@@ -48,8 +52,8 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
     clearTimeout(timeoutId);
 
     const durationMs = Date.now() - startTime;
-    if (endpoint.includes('whatsapp') || endpoint.includes('channels')) {
-      console.log(`%c[UNAI-WA] HTTP_${method}`, response.ok ? 'color:#16a34a' : 'color:#ef4444', {
+    if (endpoint.includes('whatsapp') || endpoint.includes('channels') || endpoint.includes('applications')) {
+      console.log(`%c[UNAI-FLOW] HTTP_${method}`, response.ok ? 'color:#16a34a' : 'color:#ef4444', {
         endpoint: cleanEndpoint,
         status: response.status,
         durationMs: `${durationMs}ms`,
@@ -57,10 +61,18 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
       });
     }
 
+    // Auto-retry transient 503 Service Unavailable for idempotent GET requests once
+    if (response.status === 503 && method === 'GET' && !options._isRetry) {
+      console.warn(`[UNAI-FLOW] 503 received for ${cleanEndpoint} (${durationMs}ms). Retrying in 750ms...`);
+      await new Promise((r) => setTimeout(r, 750));
+      return fetchApi(endpoint, { ...options, _isRetry: true });
+    }
+
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      let errorMessage = `Request failed with status ${response.status}`;
+      let errorMessage = '';
 
+      // 1. Extract backend message if provided
       if (errorData?.error && typeof errorData.error === 'object' && errorData.error.message) {
         errorMessage = errorData.error.message;
       } else if (typeof errorData?.error === 'string') {
@@ -73,6 +85,35 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
         errorMessage = errorData.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
       } else if (errorData?.message) {
         errorMessage = errorData.message;
+      }
+
+      // 2. Clear semantic fallback for standard HTTP error statuses
+      if (!errorMessage) {
+        switch (response.status) {
+          case 401:
+            errorMessage = 'Session expired or invalid. Please sign in again.';
+            break;
+          case 403:
+            errorMessage = 'Permission denied. You do not have access to this resource.';
+            break;
+          case 404:
+            errorMessage = 'The requested resource was not found.';
+            break;
+          case 422:
+            errorMessage = 'Invalid request data. Please check your inputs.';
+            break;
+          case 429:
+            errorMessage = 'Too many requests. Please slow down and try again shortly.';
+            break;
+          case 500:
+            errorMessage = 'Internal server error. Please try again or contact support.';
+            break;
+          case 503:
+            errorMessage = 'UNAI FLOW service is temporarily unavailable (503). Please retry in a few moments.';
+            break;
+          default:
+            errorMessage = `Request failed with status ${response.status}`;
+        }
       }
 
       const reqId = errorData?.error?.request_id || response.headers.get('x-request-id');
@@ -92,10 +133,19 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
     clearTimeout(timeoutId);
     const durationMs = Date.now() - startTime;
     const isTimeout = err.name === 'AbortError';
+
+    // Auto-retry transient network/fetch failure on idempotent GET requests once
+    if (method === 'GET' && !options._isRetry && (err.message === 'Failed to fetch' || isTimeout)) {
+      console.warn(`[UNAI-FLOW] Transient fetch error on ${cleanEndpoint}. Retrying in 750ms...`);
+      await new Promise((r) => setTimeout(r, 750));
+      return fetchApi(endpoint, { ...options, _isRetry: true });
+    }
+
     let message = isTimeout ? `Request timed out after 60s (${cleanEndpoint})` : err.message;
     if (err.message === 'Failed to fetch') {
-      message = `Network or CORS error connecting to backend (${cleanEndpoint}). Please verify the backend service is reachable.`;
+      message = `Cannot connect to UNAI FLOW backend (${cleanEndpoint}). Please verify the backend service is reachable.`;
     }
+
     if (endpoint.includes('whatsapp') || endpoint.includes('channels') || endpoint.includes('applications')) {
       console.error(`[UNAI-FLOW] HTTP_FAIL ${method} ${cleanEndpoint} (${durationMs}ms):`, message);
     }

@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
-from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from typing import Optional, List
 from app.api.dependencies import AuthContext, get_auth_context
 from app.services.application_service import application_service
+from app.core.exceptions import GatewayException
+from app.core.logging import logger
 from app.schemas.application import (
     ApplicationCreate,
     ApplicationUpdate,
@@ -63,13 +65,38 @@ async def create_application(
     )
 
 
-@router.get("")
+@router.get("", response_model=list[ApplicationResponse])
 async def list_applications(
+    request: Request,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """List all applications/integrations for the current organization."""
-    applications = application_service.list_applications(ctx.organization_id)
-    return applications
+    from starlette.concurrency import run_in_threadpool
+    from datetime import datetime, timezone
+
+    req_id = request.headers.get("x-request-id", "")
+    origin = request.headers.get("origin", "")
+    auth_present = bool(request.headers.get("authorization"))
+
+    logger.info(f"[STAGE: REQUEST RECEIVED] req_id={req_id} method=GET path=/v1/applications origin={origin} auth_present={auth_present} ts={datetime.now(timezone.utc).isoformat()}")
+    logger.info(f"[STAGE: AUTH SUCCESS] user_id={ctx.user_id} auth_type={ctx.auth_type}")
+    logger.info(f"[STAGE: ORG RESOLVED] organization_id={ctx.organization_id}")
+
+    try:
+        applications = await run_in_threadpool(
+            application_service.list_applications, ctx.organization_id
+        )
+        logger.info(f"[STAGE: REQUEST COMPLETED] Returning {len(applications)} applications for org {ctx.organization_id}")
+        return applications
+    except GatewayException:
+        raise
+    except Exception as e:
+        logger.error(f"[STAGE: REQUEST FAILED] list_applications failed for org {ctx.organization_id}: {e}", exc_info=True)
+        raise GatewayException(
+            code="SERVICE_UNAVAILABLE",
+            message="Applications service temporarily unavailable. Please retry shortly.",
+            status_code=503
+        )
 
 
 @router.get("/{app_id}")

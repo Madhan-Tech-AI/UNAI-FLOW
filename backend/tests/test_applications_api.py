@@ -212,3 +212,96 @@ def test_credentials_endpoint_security():
             assert data["api_key_prefix"] == "wa_live_safe"
             assert "raw_api_key" not in data
             assert "key_hash" not in data
+
+
+def test_get_applications_empty_list():
+    """Verify that an organization with 0 applications returns 200 and empty list with CORS."""
+    fake_token = "fake.jwt.token"
+    test_org_id = str(uuid.uuid4())
+
+    with patch("app.api.dependencies.verify_jwt", return_value={"user_id": test_org_id}):
+        with patch("app.services.application_service.application_service.list_applications", return_value=[]):
+            response = client.get(
+                "/v1/applications",
+                headers={
+                    "Origin": VERCEL_ORIGIN,
+                    "Authorization": f"Bearer {fake_token}"
+                }
+            )
+            assert response.status_code == 200
+            assert response.headers.get("access-control-allow-origin") == VERCEL_ORIGIN
+            assert response.json() == []
+
+
+def test_get_applications_503_structured_response():
+    """Verify that unexpected database failure in list_applications returns 503 with CORS and Request ID."""
+    fake_token = "fake.jwt.token"
+    test_org_id = str(uuid.uuid4())
+
+    with patch("app.api.dependencies.verify_jwt", return_value={"user_id": test_org_id}):
+        with patch("app.services.application_service.application_service.list_applications", side_effect=Exception("Database connection timeout")):
+            response = client.get(
+                "/v1/applications",
+                headers={
+                    "Origin": VERCEL_ORIGIN,
+                    "Authorization": f"Bearer {fake_token}"
+                }
+            )
+            assert response.status_code == 503
+            assert response.headers.get("access-control-allow-origin") == VERCEL_ORIGIN
+            data = response.json()
+            assert "error" in data
+            assert data["error"]["code"] == "SERVICE_UNAVAILABLE"
+            assert "request_id" in data["error"]
+
+
+def test_post_application_then_immediate_get():
+    """Verify end-to-end contract: create application followed immediately by list_applications."""
+    fake_token = "fake.jwt.token"
+    test_org_id = str(uuid.uuid4())
+    app_id = str(uuid.uuid4())
+    mock_app = {
+        "id": app_id,
+        "organization_id": test_org_id,
+        "client_id": "unai_client_immediate_001",
+        "name": "Immediate Integration",
+        "description": "Created and listed immediately",
+        "environment": "live",
+        "status": "active",
+        "default_instance_id": None,
+        "scopes": ["messages:send"],
+        "_api_key_prefix": "wa_live_imm",
+        "_api_key_count": 1,
+        "_webhook_count": 0,
+        "webhook_secret": "whsec_imm_secret",
+        "created_at": "2026-09-16T12:00:00Z",
+        "updated_at": "2026-09-16T12:00:00Z",
+    }
+    raw_key = "wa_live_imm_secret_token_12345"
+
+    with patch("app.api.dependencies.verify_jwt", return_value={"user_id": test_org_id}):
+        with patch("app.services.application_service.application_service.create_application", return_value=(mock_app, raw_key)):
+            post_res = client.post(
+                "/v1/applications",
+                json={"name": "Immediate Integration"},
+                headers={
+                    "Origin": VERCEL_ORIGIN,
+                    "Authorization": f"Bearer {fake_token}"
+                }
+            )
+            assert post_res.status_code == 200
+            assert post_res.json()["client_id"] == "unai_client_immediate_001"
+
+        with patch("app.services.application_service.application_service.list_applications", return_value=[mock_app]):
+            get_res = client.get(
+                "/v1/applications",
+                headers={
+                    "Origin": VERCEL_ORIGIN,
+                    "Authorization": f"Bearer {fake_token}"
+                }
+            )
+            assert get_res.status_code == 200
+            assert len(get_res.json()) == 1
+            assert get_res.json()[0]["client_id"] == "unai_client_immediate_001"
+            assert get_res.headers.get("access-control-allow-origin") == VERCEL_ORIGIN
+

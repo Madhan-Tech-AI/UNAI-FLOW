@@ -23,6 +23,8 @@ class ApplicationService:
         self.sb = get_supabase_client()
         # In-memory idempotency cache: { "org_id:idempotency_key": (application_dict, raw_api_key, timestamp) }
         self._idempotency_cache: Dict[str, Tuple[Dict[str, Any], str, float]] = {}
+        # Set of verified/ensured organization IDs to eliminate redundant SELECT queries on every request
+        self._ensured_orgs: set = set()
 
     def ensure_organization(self, organization_id: str, name: Optional[str] = None) -> None:
         """
@@ -30,8 +32,9 @@ class ApplicationService:
         In UNAI FLOW, dashboard users have organization_id = auth.users.id.
         Auto-provisions the organization row if not already present to prevent
         foreign key constraint violations across child tables.
+        Uses in-memory caching to avoid database queries on subsequent calls.
         """
-        if not organization_id:
+        if not organization_id or organization_id in self._ensured_orgs:
             return
         try:
             res = self.sb.table("organizations").select("id").eq("id", organization_id).limit(1).execute()
@@ -41,6 +44,7 @@ class ApplicationService:
                     "name": name or "Default Organization"
                 }).execute()
                 logger.info(f"Auto-provisioned organization record for org_id: {organization_id}")
+            self._ensured_orgs.add(organization_id)
         except Exception as e:
             logger.warning(f"Note on ensuring organization record ({organization_id}): {e}")
 
@@ -168,7 +172,12 @@ class ApplicationService:
             )
 
     def list_applications(self, organization_id: str) -> List[Dict[str, Any]]:
-        """Lists all applications for an organization with key/webhook counts."""
+        """Lists all applications for an organization with key/webhook counts using efficient batch queries."""
+        from collections import Counter
+
+        logger.info(f"[STAGE: SERVICE START] list_applications for org: {organization_id}")
+        logger.info(f"[STAGE: SUPABASE QUERY START] Fetching applications for org: {organization_id}")
+
         res = (
             self.sb.table("applications")
             .select("*")
@@ -178,30 +187,40 @@ class ApplicationService:
             .execute()
         )
         applications = res.data or []
+        logger.info(f"[STAGE: SUPABASE QUERY SUCCESS] Found {len(applications)} applications for org: {organization_id}")
 
-        # Enrich with counts
-        for app in applications:
-            app_id = app["id"]
+        # Enrich with batch counts (only 2 fast batch queries total instead of 2 * N queries)
+        if applications:
+            key_counts = Counter()
+            try:
+                key_res = (
+                    self.sb.table("api_keys")
+                    .select("application_id")
+                    .eq("organization_id", organization_id)
+                    .is_("revoked_at", "null")
+                    .execute()
+                )
+                key_counts = Counter(k["application_id"] for k in (key_res.data or []) if k.get("application_id"))
+            except Exception as e:
+                logger.warning(f"Error fetching batch api_keys counts: {e}")
 
-            # Count active API keys
-            key_res = (
-                self.sb.table("api_keys")
-                .select("id", count="exact")
-                .eq("application_id", app_id)
-                .is_("revoked_at", "null")
-                .execute()
-            )
-            app["api_key_count"] = key_res.count if key_res.count is not None else 0
+            wh_counts = Counter()
+            try:
+                wh_res = (
+                    self.sb.table("webhooks")
+                    .select("application_id")
+                    .eq("organization_id", organization_id)
+                    .execute()
+                )
+                wh_counts = Counter(w["application_id"] for w in (wh_res.data or []) if w.get("application_id"))
+            except Exception as e:
+                logger.warning(f"Error fetching batch webhooks counts: {e}")
 
-            # Count webhooks
-            wh_res = (
-                self.sb.table("webhooks")
-                .select("id", count="exact")
-                .eq("application_id", app_id)
-                .execute()
-            )
-            app["webhook_count"] = wh_res.count if wh_res.count is not None else 0
+            for app in applications:
+                app["api_key_count"] = key_counts.get(app["id"], 0)
+                app["webhook_count"] = wh_counts.get(app["id"], 0)
 
+        logger.info(f"[STAGE: RESPONSE SERIALIZED] Returning {len(applications)} enriched applications")
         return applications
 
     def get_application(self, organization_id: str, app_id: str) -> Dict[str, Any]:

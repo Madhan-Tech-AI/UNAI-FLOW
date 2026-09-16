@@ -287,6 +287,26 @@ export default function DeveloperConsole() {
         webhook_secret: res.webhook_secret,
         name: res.name,
       });
+
+      // Optimistically add the newly created application to state immediately
+      setApps((prev) => [
+        {
+          id: res.id,
+          client_id: res.client_id,
+          name: res.name,
+          description: res.description,
+          environment: res.environment,
+          status: res.status || 'active',
+          scopes: res.scopes || [],
+          api_key_count: res.api_key_count || 1,
+          webhook_count: res.webhook_count || 0,
+          webhook_secret: res.webhook_secret,
+          created_at: res.created_at || new Date().toISOString(),
+          updated_at: res.updated_at || new Date().toISOString(),
+        },
+        ...prev.filter((a) => a.id !== res.id)
+      ]);
+
       setShowCreateAppModal(false);
       setNewAppName('');
       setNewAppDesc('');

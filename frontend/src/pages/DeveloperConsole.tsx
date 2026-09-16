@@ -15,9 +15,30 @@ import {
   Radio,
   Zap,
   CheckCircle2,
-  Send
+  Send,
+  AppWindow,
+  Settings,
+  Eye,
+  EyeOff,
+  AlertTriangle
 } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
+
+interface ApplicationItem {
+  id: string;
+  client_id: string;
+  name: string;
+  description?: string;
+  environment: string;
+  status: string;
+  default_instance_id?: string;
+  scopes: string[];
+  api_key_count: number;
+  webhook_count: number;
+  webhook_secret?: string;
+  created_at: string;
+  updated_at?: string;
+}
 
 interface ApiKeyItem {
   id: string;
@@ -27,6 +48,7 @@ interface ApiKeyItem {
   scopes: string[];
   environment: string;
   rate_limit_override?: number;
+  application_id?: string;
   last_used_at?: string;
   expires_at?: string;
   created_at: string;
@@ -77,7 +99,28 @@ interface EndpointStat {
 }
 
 export default function DeveloperConsole() {
-  const [activeTab, setActiveTab] = useState<'keys' | 'webhooks' | 'usage' | 'quickstart'>('keys');
+  const [activeTab, setActiveTab] = useState<'apps' | 'keys' | 'webhooks' | 'usage' | 'quickstart'>('apps');
+
+  // Applications state
+  const [apps, setApps] = useState<ApplicationItem[]>([]);
+  const [appsLoading, setAppsLoading] = useState(false);
+  const [showCreateAppModal, setShowCreateAppModal] = useState(false);
+  const [newAppName, setNewAppName] = useState('');
+  const [newAppDesc, setNewAppDesc] = useState('');
+  const [newAppEnv, setNewAppEnv] = useState<'live' | 'test'>('live');
+  const [newAppScopes, setNewAppScopes] = useState<string[]>([
+    'instances:read', 'channels:read', 'messages:send',
+    'campaigns:read', 'campaigns:write', 'usage:read'
+  ]);
+  const [newlyCreatedApp, setNewlyCreatedApp] = useState<{
+    client_id: string;
+    raw_api_key: string;
+    webhook_secret: string;
+    name: string;
+  } | null>(null);
+  const [copiedAppCred, setCopiedAppCred] = useState<string | null>(null);
+  const [expandedAppId, setExpandedAppId] = useState<string | null>(null);
+  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
 
   // Keys state
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
@@ -124,6 +167,7 @@ export default function DeveloperConsole() {
 
   // Initial Load
   useEffect(() => {
+    loadApps();
     loadKeys();
     loadWebhooks();
     loadUsage();
@@ -132,6 +176,18 @@ export default function DeveloperConsole() {
   useEffect(() => {
     loadUsage();
   }, [usagePeriod]);
+
+  const loadApps = async () => {
+    setAppsLoading(true);
+    try {
+      const data = await fetchApi('/v1/applications');
+      if (Array.isArray(data)) setApps(data);
+    } catch (err) {
+      console.error('Failed to load applications:', err);
+    } finally {
+      setAppsLoading(false);
+    }
+  };
 
   const loadKeys = async () => {
     setKeysLoading(true);
@@ -200,6 +256,78 @@ export default function DeveloperConsole() {
     } catch (err: any) {
       alert(err?.message || 'Failed to create API key');
     }
+  };
+
+  const handleCreateApp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAppName.trim()) return;
+    try {
+      const res = await fetchApi('/v1/applications', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: newAppName,
+          description: newAppDesc || undefined,
+          environment: newAppEnv,
+          scopes: newAppScopes,
+        })
+      });
+      setNewlyCreatedApp({
+        client_id: res.client_id,
+        raw_api_key: res.raw_api_key,
+        webhook_secret: res.webhook_secret,
+        name: res.name,
+      });
+      setShowCreateAppModal(false);
+      setNewAppName('');
+      setNewAppDesc('');
+      loadApps();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to create application');
+    }
+  };
+
+  const handleSuspendApp = async (id: string, name: string) => {
+    if (!confirm(`Suspend application "${name}"? All its API keys will be revoked immediately.`)) return;
+    try {
+      await fetchApi(`/v1/applications/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'suspended' })
+      });
+      loadApps();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to suspend application');
+    }
+  };
+
+  const handleDeleteApp = async (id: string, name: string) => {
+    if (!confirm(`Permanently revoke application "${name}"? This cannot be undone.`)) return;
+    try {
+      await fetchApi(`/v1/applications/${id}`, { method: 'DELETE' });
+      loadApps();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete application');
+    }
+  };
+
+  const handleRegenerateAppKey = async (id: string, name: string) => {
+    if (!confirm(`Regenerate API key for "${name}"? The old key will stop working immediately.`)) return;
+    try {
+      const res = await fetchApi(`/v1/applications/${id}/regenerate-key`, { method: 'POST' });
+      setNewlyCreatedApp({
+        client_id: '',
+        raw_api_key: res.raw_key,
+        webhook_secret: '',
+        name: `${name} (Regenerated Key)`,
+      });
+    } catch (err: any) {
+      alert(err?.message || 'Failed to regenerate key');
+    }
+  };
+
+  const copyAppCredential = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedAppCred(label);
+    setTimeout(() => setCopiedAppCred(null), 2000);
   };
 
   const handleRevokeKey = async (id: string, name: string) => {
@@ -422,9 +550,10 @@ print("Response:", response.json())`;
           </a>
           <button
             onClick={() => {
-              if (activeTab === 'keys') setShowCreateKeyModal(true);
+              if (activeTab === 'apps') setShowCreateAppModal(true);
+              else if (activeTab === 'keys') setShowCreateKeyModal(true);
               else if (activeTab === 'webhooks') setShowCreateWebhookModal(true);
-              else setActiveTab('keys');
+              else setActiveTab('apps');
             }}
             style={{
               display: 'inline-flex',
@@ -439,7 +568,7 @@ print("Response:", response.json())`;
               boxShadow: '0 4px 12px rgba(37, 99, 235, 0.4)'
             }}
           >
-            <Plus size={18} /> {activeTab === 'webhooks' ? 'New Webhook' : 'Create API Key'}
+            <Plus size={18} /> {activeTab === 'apps' ? 'New Application' : activeTab === 'webhooks' ? 'New Webhook' : 'Create API Key'}
           </button>
         </div>
       </div>
@@ -454,6 +583,7 @@ print("Response:", response.json())`;
         }}
       >
         {[
+          { id: 'apps', label: 'Applications', icon: AppWindow, count: apps.length },
           { id: 'keys', label: 'API Keys', icon: Key, count: keys.length },
           { id: 'webhooks', label: 'Webhooks & Events', icon: Webhook, count: webhooks.length },
           { id: 'usage', label: 'Usage & Analytics', icon: BarChart3 },
@@ -499,6 +629,425 @@ print("Response:", response.json())`;
           );
         })}
       </div>
+
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* TAB 0: APPLICATIONS */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {activeTab === 'apps' && (
+        <div>
+          {/* One-time Credentials Banner */}
+          {newlyCreatedApp && (
+            <div
+              style={{
+                backgroundColor: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: '12px',
+                padding: '1.5rem',
+                marginBottom: '1.5rem',
+                boxShadow: '0 4px 12px rgba(34, 197, 94, 0.1)'
+              }}
+            >
+              <div className="flex items-center justify-between" style={{ marginBottom: '0.75rem' }}>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 size={20} color="#16a34a" />
+                  <span style={{ fontWeight: 700, color: '#15803d', fontSize: '1rem' }}>
+                    Application "{newlyCreatedApp.name}" Created
+                  </span>
+                </div>
+                <button
+                  onClick={() => setNewlyCreatedApp(null)}
+                  style={{ color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}
+                >
+                  Dismiss
+                </button>
+              </div>
+              <p style={{ color: '#166534', fontSize: '0.85rem', marginBottom: '1rem' }}>
+                ⚠️ Copy these credentials now — the API key will <strong>never</strong> be shown again.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {newlyCreatedApp.client_id && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <span style={{ color: '#374151', fontWeight: 600, minWidth: '120px', fontSize: '0.85rem' }}>Client ID:</span>
+                    <code style={{ backgroundColor: '#ecfdf5', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1 }}>
+                      {newlyCreatedApp.client_id}
+                    </code>
+                    <button onClick={() => copyAppCredential(newlyCreatedApp.client_id, 'client_id')} style={{ padding: '0.3rem', color: copiedAppCred === 'client_id' ? '#16a34a' : '#64748b' }}>
+                      {copiedAppCred === 'client_id' ? <Check size={16} /> : <Copy size={16} />}
+                    </button>
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ color: '#374151', fontWeight: 600, minWidth: '120px', fontSize: '0.85rem' }}>API Key:</span>
+                  <code style={{ backgroundColor: '#fef3c7', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1, color: '#92400e' }}>
+                    {newlyCreatedApp.raw_api_key}
+                  </code>
+                  <button onClick={() => copyAppCredential(newlyCreatedApp.raw_api_key, 'api_key')} style={{ padding: '0.3rem', color: copiedAppCred === 'api_key' ? '#16a34a' : '#64748b' }}>
+                    {copiedAppCred === 'api_key' ? <Check size={16} /> : <Copy size={16} />}
+                  </button>
+                </div>
+                {newlyCreatedApp.webhook_secret && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <span style={{ color: '#374151', fontWeight: 600, minWidth: '120px', fontSize: '0.85rem' }}>Webhook Secret:</span>
+                    <code style={{ backgroundColor: '#ecfdf5', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1 }}>
+                      {newlyCreatedApp.webhook_secret}
+                    </code>
+                    <button onClick={() => copyAppCredential(newlyCreatedApp.webhook_secret, 'webhook_secret')} style={{ padding: '0.3rem', color: copiedAppCred === 'webhook_secret' ? '#16a34a' : '#64748b' }}>
+                      {copiedAppCred === 'webhook_secret' ? <Check size={16} /> : <Copy size={16} />}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Application Cards */}
+          {appsLoading ? (
+            <div style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>Loading applications...</div>
+          ) : apps.length === 0 ? (
+            <div
+              style={{
+                textAlign: 'center',
+                padding: '4rem 2rem',
+                backgroundColor: '#f8fafc',
+                borderRadius: '16px',
+                border: '2px dashed #e2e8f0'
+              }}
+            >
+              <AppWindow size={48} color="#94a3b8" style={{ marginBottom: '1rem', margin: '0 auto 1rem' }} />
+              <h3 style={{ color: '#1e293b', fontWeight: 700, fontSize: '1.25rem', marginBottom: '0.5rem' }}>No Applications Yet</h3>
+              <p style={{ color: '#64748b', maxWidth: '400px', margin: '0 auto 1.5rem' }}>
+                Create your first application to generate API credentials for your CRM, ERP, or external integrations.
+              </p>
+              <button
+                onClick={() => setShowCreateAppModal(true)}
+                style={{
+                  background: 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
+                  color: '#fff',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '10px',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                <Plus size={18} /> Create Application
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: '1rem' }}>
+              {apps.map((app) => (
+                <div
+                  key={app.id}
+                  style={{
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '14px',
+                    padding: '1.5rem',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+                    transition: 'box-shadow 0.15s',
+                  }}
+                >
+                  <div className="flex items-center justify-between" style={{ marginBottom: '0.75rem' }}>
+                    <div className="flex items-center gap-3">
+                      <div
+                        style={{
+                          width: '40px',
+                          height: '40px',
+                          borderRadius: '10px',
+                          background: app.status === 'active'
+                            ? 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)'
+                            : 'linear-gradient(135deg, #ef4444 0%, #f87171 100%)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <AppWindow size={20} color="#fff" />
+                      </div>
+                      <div>
+                        <h3 style={{ fontWeight: 700, fontSize: '1.05rem', color: '#1e293b', margin: 0 }}>{app.name}</h3>
+                        {app.description && (
+                          <p style={{ color: '#64748b', fontSize: '0.8rem', margin: 0 }}>{app.description}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        style={{
+                          backgroundColor: app.status === 'active' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                          color: app.status === 'active' ? '#16a34a' : '#dc2626',
+                          padding: '0.2rem 0.6rem',
+                          borderRadius: '6px',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          textTransform: 'uppercase' as const
+                        }}
+                      >
+                        {app.status}
+                      </span>
+                      <span
+                        style={{
+                          backgroundColor: app.environment === 'live' ? 'rgba(37, 99, 235, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                          color: app.environment === 'live' ? '#2563eb' : '#d97706',
+                          padding: '0.2rem 0.6rem',
+                          borderRadius: '6px',
+                          fontSize: '0.75rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        {app.environment.toUpperCase()}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '2rem', marginBottom: '1rem', fontSize: '0.85rem', color: '#64748b' }}>
+                    <div>
+                      <span style={{ fontWeight: 600, color: '#374151' }}>Client ID: </span>
+                      <code style={{ fontSize: '0.8rem', backgroundColor: '#f1f5f9', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>{app.client_id}</code>
+                    </div>
+                    <div><Key size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> {app.api_key_count} key{app.api_key_count !== 1 ? 's' : ''}</div>
+                    <div><Webhook size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> {app.webhook_count} webhook{app.webhook_count !== 1 ? 's' : ''}</div>
+                    <div style={{ marginLeft: 'auto', fontSize: '0.8rem' }}>Created {new Date(app.created_at).toLocaleDateString()}</div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setExpandedAppId(expandedAppId === app.id ? null : app.id)}
+                      style={{
+                        padding: '0.5rem 0.85rem',
+                        borderRadius: '8px',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        backgroundColor: '#f1f5f9',
+                        color: '#475569',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.4rem'
+                      }}
+                    >
+                      <Settings size={14} /> {expandedAppId === app.id ? 'Hide Details' : 'View Details'}
+                    </button>
+                    <button
+                      onClick={() => handleRegenerateAppKey(app.id, app.name)}
+                      style={{
+                        padding: '0.5rem 0.85rem',
+                        borderRadius: '8px',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        backgroundColor: '#eff6ff',
+                        color: '#2563eb',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.4rem'
+                      }}
+                    >
+                      <RefreshCw size={14} /> Regenerate Key
+                    </button>
+                    {app.status === 'active' && (
+                      <button
+                        onClick={() => handleSuspendApp(app.id, app.name)}
+                        style={{
+                          padding: '0.5rem 0.85rem',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          fontWeight: 600,
+                          backgroundColor: '#fef2f2',
+                          color: '#dc2626',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.4rem'
+                        }}
+                      >
+                        <AlertTriangle size={14} /> Suspend
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDeleteApp(app.id, app.name)}
+                      style={{
+                        padding: '0.5rem 0.85rem',
+                        borderRadius: '8px',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        backgroundColor: '#fef2f2',
+                        color: '#dc2626',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        marginLeft: 'auto'
+                      }}
+                    >
+                      <Trash2 size={14} /> Revoke
+                    </button>
+                  </div>
+
+                  {/* Expanded Details */}
+                  {expandedAppId === app.id && (
+                    <div
+                      style={{
+                        marginTop: '1rem',
+                        padding: '1.25rem',
+                        backgroundColor: '#f8fafc',
+                        borderRadius: '10px',
+                        border: '1px solid #e2e8f0'
+                      }}
+                    >
+                      <h4 style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1e293b', marginBottom: '0.75rem' }}>Application Credentials</h4>
+                      <div style={{ display: 'grid', gap: '0.5rem', fontSize: '0.85rem' }}>
+                        <div className="flex items-center gap-2">
+                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '120px' }}>Client ID</span>
+                          <code style={{ backgroundColor: '#e2e8f0', padding: '0.3rem 0.6rem', borderRadius: '6px', fontFamily: 'monospace', flex: 1 }}>
+                            {app.client_id}
+                          </code>
+                          <button onClick={() => copyAppCredential(app.client_id, `cid-${app.id}`)} style={{ padding: '0.2rem', color: copiedAppCred === `cid-${app.id}` ? '#16a34a' : '#94a3b8' }}>
+                            {copiedAppCred === `cid-${app.id}` ? <Check size={14} /> : <Copy size={14} />}
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '120px' }}>Webhook Secret</span>
+                          <code style={{ backgroundColor: '#e2e8f0', padding: '0.3rem 0.6rem', borderRadius: '6px', fontFamily: 'monospace', flex: 1 }}>
+                            {showSecrets[app.id] ? (app.webhook_secret || '—') : '••••••••••••••••••'}
+                          </code>
+                          <button onClick={() => setShowSecrets(p => ({...p, [app.id]: !p[app.id]}))} style={{ padding: '0.2rem', color: '#94a3b8' }}>
+                            {showSecrets[app.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '120px' }}>Scopes</span>
+                          <div className="flex gap-1 flex-wrap">
+                            {(app.scopes || []).map((s) => (
+                              <span key={s} style={{ backgroundColor: '#dbeafe', color: '#1e40af', padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 600 }}>{s}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Create Application Modal */}
+      {showCreateAppModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+            backdropFilter: 'blur(4px)'
+          }}
+          onClick={() => setShowCreateAppModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '16px',
+              padding: '2rem',
+              width: '500px',
+              maxHeight: '90vh',
+              overflow: 'auto',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)'
+            }}
+          >
+            <h2 style={{ fontWeight: 800, fontSize: '1.25rem', color: '#0f172a', marginBottom: '1.5rem' }}>Create Application</h2>
+            <form onSubmit={handleCreateApp}>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.4rem' }}>Application Name *</label>
+                <input
+                  value={newAppName}
+                  onChange={(e) => setNewAppName(e.target.value)}
+                  placeholder="e.g. Zoho CRM Integration"
+                  style={{ width: '100%', padding: '0.75rem', border: '1px solid #d1d5db', borderRadius: '10px', fontSize: '0.9rem' }}
+                  required
+                />
+              </div>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.4rem' }}>Description</label>
+                <input
+                  value={newAppDesc}
+                  onChange={(e) => setNewAppDesc(e.target.value)}
+                  placeholder="Optional — what is this integration for?"
+                  style={{ width: '100%', padding: '0.75rem', border: '1px solid #d1d5db', borderRadius: '10px', fontSize: '0.9rem' }}
+                />
+              </div>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.4rem' }}>Environment</label>
+                <div className="flex gap-2">
+                  {(['live', 'test'] as const).map((env) => (
+                    <button
+                      key={env}
+                      type="button"
+                      onClick={() => setNewAppEnv(env)}
+                      style={{
+                        padding: '0.5rem 1.25rem',
+                        borderRadius: '8px',
+                        fontSize: '0.85rem',
+                        fontWeight: 600,
+                        border: '2px solid',
+                        borderColor: newAppEnv === env ? '#2563eb' : '#d1d5db',
+                        backgroundColor: newAppEnv === env ? '#eff6ff' : '#ffffff',
+                        color: newAppEnv === env ? '#2563eb' : '#6b7280',
+                      }}
+                    >
+                      {env === 'live' ? '🟢 Live' : '🟡 Test'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.5rem' }}>Permissions</label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
+                  {['messages:send', 'campaigns:read', 'campaigns:write', 'instances:read', 'channels:read', 'usage:read', 'webhooks:read', 'webhooks:manage'].map((s) => (
+                    <label key={s} className="flex items-center gap-2" style={{ fontSize: '0.8rem', color: '#374151' }}>
+                      <input
+                        type="checkbox"
+                        checked={newAppScopes.includes(s)}
+                        onChange={() => {
+                          setNewAppScopes((prev) =>
+                            prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
+                          );
+                        }}
+                      />
+                      <code style={{ fontSize: '0.75rem' }}>{s}</code>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="flex gap-3" style={{ justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateAppModal(false)}
+                  style={{ padding: '0.65rem 1.25rem', borderRadius: '10px', fontWeight: 600, fontSize: '0.875rem', backgroundColor: '#f1f5f9', color: '#475569' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    padding: '0.65rem 1.25rem',
+                    borderRadius: '10px',
+                    fontWeight: 600,
+                    fontSize: '0.875rem',
+                    background: 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
+                    color: '#fff',
+                    boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)'
+                  }}
+                >
+                  Create Application
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ───────────────────────────────────────────────────────────── */}
       {/* TAB 1: API KEYS */}

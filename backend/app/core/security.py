@@ -5,6 +5,12 @@ from typing import Dict, Any, Tuple, List, Optional
 from datetime import datetime, timezone
 from app.core.config import settings
 
+
+def generate_client_id() -> str:
+    """Generates a unique, non-secret client identifier for an Application."""
+    return f"unai_client_{secrets.token_hex(12)}"
+
+
 def generate_api_key(environment: str = "live") -> Tuple[str, str, str]:
     """
     Generates a cryptographically secure random API key.

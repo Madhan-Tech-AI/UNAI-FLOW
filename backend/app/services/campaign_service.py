@@ -16,10 +16,20 @@ class CampaignService:
     def set_worker_trigger(self, trigger_callable):
         self._worker_trigger = trigger_callable
 
-    def _resolve_instance(self, organization_id: str, instance_id: Optional[str]) -> Dict[str, Any]:
-        """Resolves the instance or picks an active/connected instance."""
+    def _resolve_instance(self, organization_id: str, instance_id: Optional[str], application_id: Optional[str] = None) -> Dict[str, Any]:
+        """Resolves the instance or picks an active/connected instance.
+        Priority: explicit instance_id > application default > org auto-select."""
         if instance_id:
             return instance_service.get_instance(organization_id, instance_id)
+
+        # If an application has a default instance, use it
+        if application_id:
+            try:
+                app_res = self.sb.table("applications").select("default_instance_id").eq("id", application_id).execute()
+                if app_res.data and app_res.data[0].get("default_instance_id"):
+                    return instance_service.get_instance(organization_id, app_res.data[0]["default_instance_id"])
+            except Exception as e:
+                logger.warning(f"[CAMPAIGN] Failed to resolve application default instance: {e}")
 
         instances = instance_service.list_instances(organization_id)
         auth_inst = next((i for i in instances if i.get("status") in ["AUTHENTICATED", "CONNECTED", "READY"]), None)
@@ -34,6 +44,7 @@ class CampaignService:
         organization_id: str,
         data: CampaignCreate,
         api_key_id: Optional[str] = None,
+        application_id: Optional[str] = None,
         idempotency_key: Optional[str] = None
     ) -> Dict[str, Any]:
         """Creates a campaign in 'draft' status with all recipient records staged."""
@@ -50,8 +61,8 @@ class CampaignService:
                 logger.info(f"[CAMPAIGN] Idempotent replay for campaign {existing.data[0]['id']}")
                 return existing.data[0]
 
-        # 2. Resolve instance
-        inst = self._resolve_instance(organization_id, data.instance_id)
+        # 2. Resolve instance (application default > org auto-select)
+        inst = self._resolve_instance(organization_id, data.instance_id, application_id=application_id)
 
         # 3. Create campaign record
         total = len(data.recipients)
@@ -59,6 +70,7 @@ class CampaignService:
         campaign_record = {
             "organization_id": organization_id,
             "api_key_id": api_key_id,
+            "application_id": application_id,
             "instance_id": inst["id"],
             "name": data.name,
             "description": data.description,

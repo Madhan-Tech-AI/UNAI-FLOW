@@ -29,6 +29,7 @@ async def create_campaign(
             organization_id=ctx.organization_id,
             data=body,
             api_key_id=ctx.api_key_id,
+            application_id=ctx.application_id,
             idempotency_key=idempotency_key
         )
         return campaign

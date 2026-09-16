@@ -15,13 +15,14 @@ async def create_webhook(
     return webhook_service.register_webhook(
         organization_id=ctx.organization_id,
         url=req.url,
-        events=req.events
+        events=req.events,
+        application_id=ctx.application_id,
     )
 
 @router.get("", response_model=List[WebhookResponse])
 async def list_webhooks(ctx: AuthContext = Depends(require_scope("webhooks:read"))):
     """List all registered webhook endpoints for the organization."""
-    return webhook_service.list_webhooks(ctx.organization_id)
+    return webhook_service.list_webhooks(ctx.organization_id, application_id=ctx.application_id)
 
 @router.delete("/{webhook_id}")
 async def delete_webhook(

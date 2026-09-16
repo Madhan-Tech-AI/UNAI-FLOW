@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import List, Dict, Any, Optional
 from app.api.dependencies import get_auth_context, AuthContext
 from app.schemas.api_key import ApiKeyCreate, ApiKeyResponse, ApiKeyCreatedResponse, ApiKeyRotateRequest
 from app.services.api_key_service import api_key_service
@@ -20,7 +20,8 @@ async def create_api_key(
         expires_in_days=req.expires_in_days,
         environment=req.environment,
         rate_limit_override=req.rate_limit_override,
-        description=req.description
+        description=req.description,
+        application_id=req.application_id,
     )
 
     return ApiKeyCreatedResponse(
@@ -32,6 +33,7 @@ async def create_api_key(
         scopes=record["scopes"],
         environment=record.get("environment", "live"),
         rate_limit_override=record.get("rate_limit_override"),
+        application_id=record.get("application_id"),
         raw_key=raw_key,
         expires_at=record.get("expires_at"),
         created_at=record.get("created_at")
@@ -39,9 +41,12 @@ async def create_api_key(
 
 
 @router.get("", response_model=List[ApiKeyResponse])
-async def list_api_keys(ctx: AuthContext = Depends(get_auth_context)):
-    """List all active API keys for the current organization."""
-    return api_key_service.list_keys(ctx.organization_id)
+async def list_api_keys(
+    application_id: Optional[str] = Query(None, description="Filter keys by application"),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """List all active API keys for the current organization, optionally filtered by application."""
+    return api_key_service.list_keys(ctx.organization_id, application_id=application_id)
 
 
 @router.post("/{key_id}/rotate", response_model=ApiKeyCreatedResponse)

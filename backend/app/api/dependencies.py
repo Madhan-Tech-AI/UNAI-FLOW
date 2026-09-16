@@ -5,7 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from app.core.exceptions import InvalidApiKeyException, InsufficientScopeException, RateLimitedException
 from app.services.api_key_service import api_key_service
 from app.core.rate_limiter import rate_limiter
-from app.core.logging import request_id_ctx, org_id_ctx
+from app.core.logging import request_id_ctx, org_id_ctx, app_id_ctx
 from middleware.auth import verify_jwt
 
 
@@ -16,6 +16,7 @@ class AuthContext:
         organization_id: str,
         user_id: Optional[str] = None,
         api_key_id: Optional[str] = None,
+        application_id: Optional[str] = None,
         scopes: Optional[list] = None,
         environment: str = "live"
     ):
@@ -23,13 +24,22 @@ class AuthContext:
         self.organization_id = organization_id
         self.user_id = user_id or organization_id
         self.api_key_id = api_key_id
+        self.application_id = application_id
         self.scopes = scopes or ["*"]
         self.environment = environment
 
     def require_scope(self, required_scope: str):
         if "*" in self.scopes:
             return
-        if required_scope not in self.scopes:
+        # Expand scope aliases
+        alias_map = {
+            "campaigns:write": ["campaigns:create", "campaigns:launch", "campaigns:cancel"],
+        }
+        expanded = set(self.scopes)
+        for scope in list(expanded):
+            if scope in alias_map:
+                expanded.update(alias_map[scope])
+        if required_scope not in expanded:
             raise InsufficientScopeException(required_scope)
 
 
@@ -67,10 +77,16 @@ async def get_auth_context(
         org_id = key_record["organization_id"]
         org_id_ctx.set(org_id)
 
+        # Extract application_id if this key belongs to an application
+        application_id = key_record.get("application_id")
+        if application_id:
+            app_id_ctx.set(application_id)
+
         return AuthContext(
             auth_type="api_key",
             organization_id=org_id,
             api_key_id=key_record["id"],
+            application_id=application_id,
             scopes=key_record.get("scopes", []),
             environment=key_record.get("environment", "live")
         )

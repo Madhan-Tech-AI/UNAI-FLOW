@@ -22,6 +22,7 @@ class ApiKeyCreate(BaseModel):
         description="Optional notes or description"
     )
     expires_in_days: Optional[int] = Field(None, description="Optional lifetime in days")
+    application_id: Optional[str] = Field(None, description="Application/integration this key belongs to")
 
 
 class ApiKeyRotateRequest(BaseModel):
@@ -37,6 +38,7 @@ class ApiKeyResponse(BaseModel):
     scopes: List[str]
     environment: str = "live"
     rate_limit_override: Optional[int] = None
+    application_id: Optional[str] = None
     last_used_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     created_at: Optional[datetime] = None

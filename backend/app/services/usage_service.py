@@ -23,12 +23,14 @@ class UsageService:
         user_agent: Optional[str] = None,
         idempotency_key: Optional[str] = None,
         request_id: Optional[str] = None,
+        application_id: Optional[str] = None,
     ):
         """Asynchronously or synchronously records an incoming API request."""
         try:
             record = {
                 "organization_id": organization_id,
                 "api_key_id": api_key_id,
+                "application_id": application_id,
                 "method": method.upper(),
                 "path": path,
                 "status_code": status_code,
@@ -46,19 +48,20 @@ class UsageService:
             # Never let logging failure break user requests
             logger.warning(f"[USAGE] Failed to log API request: {e}")
 
-    def get_usage_summary(self, organization_id: str, period_type: str = "day") -> Dict[str, Any]:
+    def get_usage_summary(self, organization_id: str, period_type: str = "day", application_id: Optional[str] = None) -> Dict[str, Any]:
         """Calculates API usage aggregate summary and bucketed periods."""
         # Query request logs for past 30 days
         thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         try:
-            res = (
+            query = (
                 self.sb.table("api_request_log")
                 .select("status_code, latency_ms, created_at")
                 .eq("organization_id", organization_id)
                 .gte("created_at", thirty_days_ago)
-                .order("created_at", desc=False)
-                .execute()
             )
+            if application_id:
+                query = query.eq("application_id", application_id)
+            res = query.order("created_at", desc=False).execute()
             logs = res.data or []
         except Exception as e:
             logger.warning(f"[USAGE] Failed to fetch request logs: {e}")
@@ -158,15 +161,17 @@ class UsageService:
             "periods": period_stats
         }
 
-    def get_message_stats(self, organization_id: str) -> Dict[str, Any]:
+    def get_message_stats(self, organization_id: str, application_id: Optional[str] = None) -> Dict[str, Any]:
         """Delivery statistics breakdown for campaigns and single messages."""
         try:
-            camp_res = (
+            query = (
                 self.sb.table("api_campaigns")
                 .select("message_type, status, total_recipients, sent_count, delivered_count, failed_count")
                 .eq("organization_id", organization_id)
-                .execute()
             )
+            if application_id:
+                query = query.eq("application_id", application_id)
+            camp_res = query.execute()
             campaigns = camp_res.data or []
         except Exception as e:
             logger.warning(f"[USAGE] Failed to fetch campaign message stats: {e}")
@@ -204,16 +209,17 @@ class UsageService:
             "by_status": dict(by_status)
         }
 
-    def get_usage_by_endpoint(self, organization_id: str) -> Dict[str, Any]:
+    def get_usage_by_endpoint(self, organization_id: str, application_id: Optional[str] = None) -> Dict[str, Any]:
         """Calculates breakdown grouped by endpoint and method."""
         try:
-            res = (
+            query = (
                 self.sb.table("api_request_log")
                 .select("path, method, status_code, latency_ms")
                 .eq("organization_id", organization_id)
-                .limit(2000)
-                .execute()
             )
+            if application_id:
+                query = query.eq("application_id", application_id)
+            res = query.limit(2000).execute()
             logs = res.data or []
         except Exception as e:
             logger.warning(f"[USAGE] Failed to fetch endpoint logs: {e}")

@@ -19,7 +19,8 @@ class WebhookService:
         organization_id: str,
         url: str,
         events: List[str],
-        description: Optional[str] = None
+        description: Optional[str] = None,
+        application_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         secret = f"whsec_{uuid.uuid4().hex}"
         record = {
@@ -31,16 +32,20 @@ class WebhookService:
             "consecutive_failures": 0,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        if application_id:
+            record["application_id"] = application_id
         res = self.sb.table("webhooks").insert(record).execute()
         return res.data[0]
 
-    def list_webhooks(self, organization_id: str) -> List[Dict[str, Any]]:
-        res = (
+    def list_webhooks(self, organization_id: str, application_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        query = (
             self.sb.table("webhooks")
-            .select("id, organization_id, url, events, enabled, consecutive_failures, last_triggered_at, disabled_at, created_at")
+            .select("id, organization_id, application_id, url, events, enabled, consecutive_failures, last_triggered_at, disabled_at, created_at")
             .eq("organization_id", organization_id)
-            .execute()
         )
+        if application_id:
+            query = query.eq("application_id", application_id)
+        res = query.execute()
         return res.data or []
 
     def delete_webhook(self, organization_id: str, webhook_id: str) -> bool:
@@ -152,23 +157,39 @@ class WebhookService:
         except Exception as e:
             logger.warning(f"[WEBHOOK] Failed to update webhook stats: {e}")
 
-    async def trigger_event(self, organization_id: str, event_type: str, data: Dict[str, Any]):
-        """Dispatches event to all enabled webhook endpoints subscribed to this event_type."""
+    async def trigger_event(
+        self,
+        organization_id: str,
+        event_type: str,
+        data: Dict[str, Any],
+        application_id: Optional[str] = None,
+    ):
+        """Dispatches event to enabled webhook endpoints subscribed to this event_type.
+        If application_id is provided, prefers application-specific webhooks;
+        falls back to org-level webhooks if none exist for the application."""
         try:
-            res = (
+            query = (
                 self.sb.table("webhooks")
                 .select("*")
                 .eq("organization_id", organization_id)
                 .eq("enabled", True)
-                .execute()
             )
-            webhooks = res.data or []
+            res = query.execute()
+            all_webhooks = res.data or []
         except Exception as e:
             logger.warning(f"[WEBHOOK] Failed to load webhooks for org {organization_id}: {e}")
             return
 
-        if not webhooks:
+        if not all_webhooks:
             return
+
+        # If an application_id is set, prefer application-scoped webhooks
+        if application_id:
+            app_webhooks = [wh for wh in all_webhooks if wh.get("application_id") == application_id]
+            # Fall back to org-level (non-application) webhooks if no app-specific ones exist
+            webhooks = app_webhooks if app_webhooks else [wh for wh in all_webhooks if not wh.get("application_id")]
+        else:
+            webhooks = all_webhooks
 
         event_id = f"evt_{uuid.uuid4().hex[:12]}"
         now_ts = str(int(datetime.now(timezone.utc).timestamp()))

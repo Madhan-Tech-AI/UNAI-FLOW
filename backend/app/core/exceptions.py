@@ -92,3 +92,21 @@ class RateLimitedException(GatewayException):
 class WhatsAppSessionException(GatewayException):
     def __init__(self, message: str):
         super().__init__(code="WHATSAPP_SESSION_ERROR", message=message, status_code=500)
+
+class ApplicationNotFoundException(GatewayException):
+    def __init__(self, app_id: str):
+        super().__init__(
+            code="APPLICATION_NOT_FOUND",
+            message=f"Application '{app_id}' not found.",
+            status_code=404,
+            details={"application_id": app_id}
+        )
+
+class ApplicationSuspendedException(GatewayException):
+    def __init__(self, app_id: str):
+        super().__init__(
+            code="APPLICATION_SUSPENDED",
+            message=f"Application '{app_id}' is suspended or revoked. Contact your administrator.",
+            status_code=403,
+            details={"application_id": app_id}
+        )

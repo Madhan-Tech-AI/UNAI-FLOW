@@ -4,7 +4,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 from app.services.usage_service import usage_service
-from app.core.logging import org_id_ctx, request_id_ctx
+from app.core.logging import org_id_ctx, request_id_ctx, app_id_ctx
 
 
 class ApiLoggingMiddleware(BaseHTTPMiddleware):
@@ -27,6 +27,7 @@ class ApiLoggingMiddleware(BaseHTTPMiddleware):
 
         # Contextual metadata extracted from contextvars & headers
         org_id = org_id_ctx.get(None)
+        app_id = app_id_ctx.get(None)
         req_id = request_id_ctx.get(None) or request.headers.get("x-request-id")
         idempotency_key = request.headers.get("idempotency-key")
         user_agent = request.headers.get("user-agent")
@@ -62,7 +63,8 @@ class ApiLoggingMiddleware(BaseHTTPMiddleware):
                     ip_address=ip,
                     user_agent=user_agent,
                     idempotency_key=idempotency_key,
-                    request_id=req_id
+                    request_id=req_id,
+                    application_id=app_id,
                 )
             )
         except Exception:

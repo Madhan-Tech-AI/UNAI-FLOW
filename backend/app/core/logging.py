@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 # Context variables for distributed tracing
 request_id_ctx = contextvars.ContextVar("request_id", default="")
 org_id_ctx = contextvars.ContextVar("org_id", default="")
+app_id_ctx = contextvars.ContextVar("app_id", default="")
 instance_id_ctx = contextvars.ContextVar("instance_id", default="")
 job_id_ctx = contextvars.ContextVar("job_id", default="")
 
@@ -18,6 +19,7 @@ class StructuredJsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "request_id": request_id_ctx.get(),
             "organization_id": org_id_ctx.get(),
+            "application_id": app_id_ctx.get(),
             "instance_id": instance_id_ctx.get(),
             "job_id": job_id_ctx.get(),
         }

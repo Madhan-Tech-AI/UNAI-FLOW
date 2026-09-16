@@ -8,7 +8,10 @@ from app.services.api_key_service import api_key_service
 from app.services.application_service import application_service
 from app.core.rate_limiter import rate_limiter
 from app.core.logging import request_id_ctx, org_id_ctx, app_id_ctx
-from middleware.auth import verify_jwt
+try:
+    from app.middleware.auth import verify_jwt
+except ImportError:
+    from middleware.auth import verify_jwt
 
 
 class AuthContext:

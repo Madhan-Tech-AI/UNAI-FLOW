@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Key,
   Webhook,
@@ -20,7 +21,10 @@ import {
   Settings,
   Eye,
   EyeOff,
-  AlertTriangle
+  AlertTriangle,
+  Smartphone,
+  Phone,
+  Lock,
 } from 'lucide-react';
 import { fetchApi } from '../lib/apiClient';
 
@@ -36,7 +40,22 @@ interface ApplicationItem {
   api_key_count: number;
   webhook_count: number;
   webhook_secret?: string;
+  client_secret_preview?: string;
+  oauth_client_id?: string;
+  whatsapp_number?: string;
+  whatsapp_session_id?: string;
+  last_used_at?: string;
   created_at: string;
+  updated_at?: string;
+}
+
+interface WhatsAppSessionItem {
+  id: string;
+  session_identifier: string;
+  phone_number?: string;
+  status: string;
+  profile_picture_url?: string;
+  last_connected_at?: string;
   updated_at?: string;
 }
 
@@ -81,25 +100,24 @@ interface UsageSummary {
   }>;
 }
 
-interface MessageStats {
-  total_sent: number;
-  total_delivered: number;
-  total_failed: number;
-  delivery_rate: number;
-  by_type: Record<string, number>;
-  by_status: Record<string, number>;
-}
-
-interface EndpointStat {
-  path: string;
-  method: string;
-  total_requests: number;
-  avg_latency_ms?: number;
-  error_rate: number;
+interface DiagnosticResult {
+  status: string;
+  app_id: string;
+  name: string;
+  environment: string;
+  is_active: boolean;
+  auth_valid: boolean;
+  scopes: string[];
+  whatsapp_number?: string;
+  whatsapp_connected: boolean;
+  latency_ms: number;
+  timestamp: string;
+  checks: Record<string, string>;
 }
 
 export default function DeveloperConsole() {
-  const [activeTab, setActiveTab] = useState<'apps' | 'keys' | 'webhooks' | 'usage' | 'quickstart'>('apps');
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<'apps' | 'keys' | 'webhooks' | 'whatsapp' | 'usage' | 'quickstart'>('apps');
 
   // Applications state
   const [apps, setApps] = useState<ApplicationItem[]>([]);
@@ -110,20 +128,44 @@ export default function DeveloperConsole() {
   const [newAppName, setNewAppName] = useState('');
   const [newAppDesc, setNewAppDesc] = useState('');
   const [newAppEnv, setNewAppEnv] = useState<'live' | 'test'>('live');
+  const [newAppWhatsAppNumber, setNewAppWhatsAppNumber] = useState('');
+  const [newAppWhatsAppSessionId, setNewAppWhatsAppSessionId] = useState('');
+  const [customPhoneInput, setCustomPhoneInput] = useState(false);
   const [newAppScopes, setNewAppScopes] = useState<string[]>([
     'instances:read', 'channels:read', 'messages:send',
     'campaigns:read', 'campaigns:write', 'usage:read',
     'webhooks:read', 'webhooks:manage'
   ]);
   const [newlyCreatedApp, setNewlyCreatedApp] = useState<{
+    id?: string;
     client_id: string;
+    client_secret?: string;
     raw_api_key: string;
     webhook_secret: string;
+    oauth_client_id?: string;
+    oauth_client_secret?: string;
+    whatsapp_number?: string;
     name: string;
   } | null>(null);
   const [copiedAppCred, setCopiedAppCred] = useState<string | null>(null);
   const [expandedAppId, setExpandedAppId] = useState<string | null>(null);
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+
+  // Secret Rotation State
+  const [rotatedSecretModal, setRotatedSecretModal] = useState<{
+    appName: string;
+    clientSecret: string;
+    preview: string;
+  } | null>(null);
+
+  // Diagnostic Test State
+  const [testingAppId, setTestingAppId] = useState<string | null>(null);
+  const [diagnosticModalData, setDiagnosticModalData] = useState<DiagnosticResult | null>(null);
+
+  // WhatsApp Sessions State
+  const [whatsappSessions, setWhatsappSessions] = useState<WhatsAppSessionItem[]>([]);
+  const [whatsappLoading, setWhatsappLoading] = useState(false);
+  const [gatewayStatus, setGatewayStatus] = useState<any>(null);
 
   // Keys state
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
@@ -160,8 +202,8 @@ export default function DeveloperConsole() {
   // Usage state
   const [usagePeriod, setUsagePeriod] = useState<'day' | 'week' | 'month'>('day');
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
-  const [messageStats, setMessageStats] = useState<MessageStats | null>(null);
-  const [endpointStats, setEndpointStats] = useState<EndpointStat[]>([]);
+  // messageStats removed
+  // endpointStats removed
   const [usageLoading, setUsageLoading] = useState(false);
 
   // Quickstart state
@@ -173,6 +215,7 @@ export default function DeveloperConsole() {
     loadApps();
     loadKeys();
     loadWebhooks();
+    loadWhatsAppSessions();
     loadUsage();
   }, []);
 
@@ -189,6 +232,26 @@ export default function DeveloperConsole() {
       console.error('Failed to load applications:', err);
     } finally {
       setAppsLoading(false);
+    }
+  };
+
+  const loadWhatsAppSessions = async () => {
+    setWhatsappLoading(true);
+    try {
+      const [sessRes, gwRes] = await Promise.all([
+        fetchApi('/api/whatsapp/sessions').catch(() => null),
+        fetchApi('/v1/whatsapp/status').catch(() => null)
+      ]);
+      if (sessRes?.data && Array.isArray(sessRes.data)) {
+        setWhatsappSessions(sessRes.data);
+      }
+      if (gwRes) {
+        setGatewayStatus(gwRes);
+      }
+    } catch (err) {
+      console.error('Failed to load WhatsApp status:', err);
+    } finally {
+      setWhatsappLoading(false);
     }
   };
 
@@ -219,45 +282,14 @@ export default function DeveloperConsole() {
   const loadUsage = async () => {
     setUsageLoading(true);
     try {
-      const [sum, msgs, eps] = await Promise.all([
-        fetchApi(`/v1/usage/summary?period_type=${usagePeriod}`),
-        fetchApi('/v1/usage/messages'),
-        fetchApi('/v1/usage/endpoints')
-      ]);
+      const sum = await fetchApi(`/v1/usage/summary?period_type=${usagePeriod}`);
       setUsageSummary(sum);
-      setMessageStats(msgs);
-      if (eps?.endpoints) setEndpointStats(eps.endpoints);
+      // setMessageStats
+      // setEndpointStats
     } catch (err) {
       console.error('Failed to load usage analytics:', err);
     } finally {
       setUsageLoading(false);
-    }
-  };
-
-  const handleCreateKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newKeyName.trim()) return;
-
-    try {
-      const payload: any = {
-        name: newKeyName,
-        environment: newKeyEnv,
-        scopes: newKeyScopes,
-        description: newKeyDesc || undefined,
-        rate_limit_override: newKeyRateLimit ? parseInt(newKeyRateLimit, 10) : undefined
-      };
-      const res = await fetchApi('/v1/api-keys', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
-      setNewlyCreatedKey({ raw_key: res.raw_key, name: res.name });
-      setShowCreateKeyModal(false);
-      setNewKeyName('');
-      setNewKeyDesc('');
-      setNewKeyRateLimit('');
-      loadKeys();
-    } catch (err: any) {
-      alert(err?.message || 'Failed to create API key');
     }
   };
 
@@ -278,13 +310,21 @@ export default function DeveloperConsole() {
           description: newAppDesc.trim() || undefined,
           environment: newAppEnv,
           scopes: newAppScopes,
+          whatsapp_number: newAppWhatsAppNumber.trim() || undefined,
+          whatsapp_session_id: newAppWhatsAppSessionId.trim() || undefined,
           idempotency_key: idempotencyKey,
         })
       });
+
       setNewlyCreatedApp({
+        id: res.id,
         client_id: res.client_id,
+        client_secret: res.client_secret,
         raw_api_key: res.raw_api_key,
         webhook_secret: res.webhook_secret,
+        oauth_client_id: res.oauth_client_id,
+        oauth_client_secret: res.oauth_client_secret,
+        whatsapp_number: res.whatsapp_number || newAppWhatsAppNumber,
         name: res.name,
       });
 
@@ -301,6 +341,11 @@ export default function DeveloperConsole() {
           api_key_count: res.api_key_count || 1,
           webhook_count: res.webhook_count || 0,
           webhook_secret: res.webhook_secret,
+          client_secret_preview: res.client_secret_preview,
+          oauth_client_id: res.oauth_client_id,
+          whatsapp_number: res.whatsapp_number,
+          whatsapp_session_id: res.whatsapp_session_id,
+          last_used_at: undefined,
           created_at: res.created_at || new Date().toISOString(),
           updated_at: res.updated_at || new Date().toISOString(),
         },
@@ -310,6 +355,9 @@ export default function DeveloperConsole() {
       setShowCreateAppModal(false);
       setNewAppName('');
       setNewAppDesc('');
+      setNewAppWhatsAppNumber('');
+      setNewAppWhatsAppSessionId('');
+      setCustomPhoneInput(false);
       setCreateAppError(null);
       loadApps();
     } catch (err: any) {
@@ -319,8 +367,37 @@ export default function DeveloperConsole() {
     }
   };
 
+  const handleTestConnection = async (appId: string) => {
+    setTestingAppId(appId);
+    try {
+      const res = await fetchApi(`/v1/applications/${appId}/test-connection`, {
+        method: 'POST'
+      });
+      setDiagnosticModalData(res);
+    } catch (err: any) {
+      alert(`Diagnostic test failed: ${err?.message || 'Unknown network error'}`);
+    } finally {
+      setTestingAppId(null);
+    }
+  };
+
+  const handleRegenerateAppSecret = async (id: string, name: string) => {
+    if (!confirm(`Rotate Client Secret for "${name}"? The previous secret will immediately stop working.`)) return;
+    try {
+      const res = await fetchApi(`/v1/applications/${id}/regenerate-secret`, { method: 'POST' });
+      setRotatedSecretModal({
+        appName: name,
+        clientSecret: res.client_secret,
+        preview: res.client_secret_preview,
+      });
+      loadApps();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to rotate client secret');
+    }
+  };
+
   const handleSuspendApp = async (id: string, name: string) => {
-    if (!confirm(`Suspend application "${name}"? All its API keys will be revoked immediately.`)) return;
+    if (!confirm(`Suspend application "${name}"? All its API keys and credentials will be suspended.`)) return;
     try {
       await fetchApi(`/v1/applications/${id}`, {
         method: 'PATCH',
@@ -332,8 +409,20 @@ export default function DeveloperConsole() {
     }
   };
 
+  const handleActivateApp = async (id: string, _name?: string) => {
+    try {
+      await fetchApi(`/v1/applications/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'active' })
+      });
+      loadApps();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to activate application');
+    }
+  };
+
   const handleDeleteApp = async (id: string, name: string) => {
-    if (!confirm(`Permanently revoke application "${name}"? This cannot be undone.`)) return;
+    if (!confirm(`Permanently revoke application "${name}"? This action cannot be undone.`)) return;
     try {
       await fetchApi(`/v1/applications/${id}`, { method: 'DELETE' });
       loadApps();
@@ -363,8 +452,35 @@ export default function DeveloperConsole() {
     setTimeout(() => setCopiedAppCred(null), 2000);
   };
 
+  const handleCreateKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newKeyName.trim()) return;
+
+    try {
+      const payload: any = {
+        name: newKeyName,
+        environment: newKeyEnv,
+        scopes: newKeyScopes,
+        description: newKeyDesc || undefined,
+        rate_limit_override: newKeyRateLimit ? parseInt(newKeyRateLimit, 10) : undefined
+      };
+      const res = await fetchApi('/v1/api-keys', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setNewlyCreatedKey({ raw_key: res.raw_key, name: res.name });
+      setShowCreateKeyModal(false);
+      setNewKeyName('');
+      setNewKeyDesc('');
+      setNewKeyRateLimit('');
+      loadKeys();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to create API key');
+    }
+  };
+
   const handleRevokeKey = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to revoke API key "${name}"? This action cannot be undone and integrations using it will stop working immediately.`)) return;
+    if (!confirm(`Are you sure you want to revoke API key "${name}"? Integrations using it will stop working immediately.`)) return;
     try {
       await fetchApi(`/v1/api-keys/${id}`, { method: 'DELETE' });
       loadKeys();
@@ -374,7 +490,7 @@ export default function DeveloperConsole() {
   };
 
   const handleRotateKey = async (id: string) => {
-    if (!confirm('Rotating this key will immediately revoke the old key and create a new replacement. Continue?')) return;
+    if (!confirm('Rotating this key will immediately revoke the old key and create a replacement. Continue?')) return;
     try {
       const res = await fetchApi(`/v1/api-keys/${id}/rotate`, { method: 'POST' });
       setNewlyCreatedKey({ raw_key: res.raw_key, name: res.name });
@@ -426,83 +542,156 @@ export default function DeveloperConsole() {
     }
   };
 
-  // Sample code snippets
+  // Sample credentials for Quickstart
+  const sampleClientId = apps.length > 0 ? apps[0].client_id : 'app_live_8f3d4a1b0c9e2f5';
   const sampleKey = keys.length > 0 ? `${keys[0].prefix}****************` : 'wa_live_xxxxxxxxxxxxxxxxxxxxxx';
+  const sampleWhatsApp = apps.find(a => a.whatsapp_number)?.whatsapp_number || '919876543210';
+
   const getQuickstartCode = () => {
     if (codeLang === 'curl') {
-      return `# 1. Send an individual WhatsApp message
-curl -X POST "https://unai-flow-backend-w4al.onrender.com/v1/messages/text" \\
-  -H "Authorization: Bearer ${sampleKey}" \\
+      return `# ================================================================
+# 1. VERIFY APPLICATION & WHATSAPP CONNECTION HEALTH
+# ================================================================
+curl -X GET "https://unai-flow-backend-w4al.onrender.com/v1/auth/verify" \\
+  -H "X-Client-ID: ${sampleClientId}" \\
+  -H "X-Client-Secret: YOUR_CLIENT_SECRET"
+
+# Or authenticate using Bearer API Key:
+curl -X GET "https://unai-flow-backend-w4al.onrender.com/v1/whatsapp/status" \\
+  -H "Authorization: Bearer ${sampleKey}"
+
+# ================================================================
+# 2. SEND SINGLE DIRECT WHATSAPP MESSAGE
+# ================================================================
+curl -X POST "https://unai-flow-backend-w4al.onrender.com/v1/messages/send" \\
+  -H "X-Client-ID: ${sampleClientId}" \\
+  -H "X-Client-Secret: YOUR_CLIENT_SECRET" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "to": "120363171744447809@newsletter",
-    "body": "Hello from our backend integration via UNAI FLOW!"
+    "to": "+${sampleWhatsApp}",
+    "text": "Hello from your CRM! Your payment receipt #1042 is confirmed."
   }'
 
-# 2. Create and Launch a Bulk Messaging Campaign
-curl -X POST "https://unai-flow-backend-w4al.onrender.com/v1/campaigns" \\
+# ================================================================
+# 3. DISPATCH PERSONALIZED BULK CAMPAIGN TO RECIPIENTS
+# ================================================================
+curl -X POST "https://unai-flow-backend-w4al.onrender.com/v1/messages/send" \\
   -H "Authorization: Bearer ${sampleKey}" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "name": "Product Launch Announcement",
-    "message_type": "text",
-    "message_payload": { "body": "Exciting news! Our new service is live at {{link}}" },
+    "campaign_name": "VIP Customer Broadcast",
+    "text": "Hello {{name}}, your monthly report is available at {{link}}",
     "recipients": [
-      { "recipient_jid": "120363171744447809@newsletter", "variables": { "link": "https://example.com" } }
+      { "recipient_jid": "919876543210@s.whatsapp.net", "variables": { "name": "Raj", "link": "https://crm.example.com/r/1" } },
+      { "recipient_jid": "919876543211@s.whatsapp.net", "variables": { "name": "Ananya", "link": "https://crm.example.com/r/2" } }
     ],
     "messages_per_second": 2.0
   }'`;
     }
 
     if (codeLang === 'node') {
-      return `import axios from 'axios';
+      return `// Node.js (ES Module / TypeScript / Axios / Fetch)
+import axios from 'axios';
 
-const UNAI_API_KEY = process.env.UNAI_API_KEY || '${sampleKey}';
+const UNAI_CLIENT_ID = process.env.UNAI_CLIENT_ID || '${sampleClientId}';
+const UNAI_CLIENT_SECRET = process.env.UNAI_CLIENT_SECRET || 'YOUR_CLIENT_SECRET';
+const BASE_URL = 'https://unai-flow-backend-w4al.onrender.com/v1';
+
 const client = axios.create({
-  baseURL: 'https://unai-flow-backend-w4al.onrender.com/v1',
+  baseURL: BASE_URL,
   headers: {
-    'Authorization': \`Bearer \${UNAI_API_KEY}\`,
+    'X-Client-ID': UNAI_CLIENT_ID,
+    'X-Client-Secret': UNAI_CLIENT_SECRET,
     'Content-Type': 'application/json'
-  }
+  },
+  timeout: 15000
 });
 
-// Send single message
-async function sendMessage() {
-  const res = await client.post('/messages/text', {
-    to: '120363171744447809@newsletter',
-    body: 'Automated notification from our CRM'
+// 1. Verify Authentication & WhatsApp Device Health
+async function checkConnection() {
+  const res = await client.get('/auth/verify');
+  console.log('UNAI Platform Status:', res.data);
+  // res.data -> { status: "active", whatsapp_number: "+${sampleWhatsApp}", scopes: [...] }
+}
+
+// 2. Dispatch a Realtime Notification (Single Message)
+async function sendNotification(recipientPhone, messageText) {
+  const response = await client.post('/messages/send', {
+    to: recipientPhone, // e.g. "+919876543210"
+    text: messageText
   });
-  console.log('Message dispatched:', res.data);
+  console.log('Message Dispatched:', response.data);
+  return response.data;
 }
 
-// Check campaign status
-async function checkCampaign(campaignId) {
-  const res = await client.get(\`/campaigns/\${campaignId}\`);
-  console.log('Campaign Progress:', res.data.delivered_count, '/', res.data.total_recipients);
+// 3. Dispatch Bulk WhatsApp Campaign
+async function sendBulkBroadcast(campaignName, recipients) {
+  const response = await client.post('/messages/send', {
+    campaign_name: campaignName,
+    text: 'Hello {{name}}, your balance is {{balance}}.',
+    recipients: recipients,
+    messages_per_second: 2.0
+  });
+  console.log('Campaign Launched:', response.data.campaign_id);
+  return response.data;
 }
 
-sendMessage();`;
+// Execute demo
+checkConnection().catch(console.error);`;
     }
 
-    return `import requests
+    return `# Python 3.9+ (requests)
+import os
+import requests
 
-UNAI_API_KEY = "${sampleKey}"
+CLIENT_ID = os.getenv("UNAI_CLIENT_ID", "${sampleClientId}")
+CLIENT_SECRET = os.getenv("UNAI_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
 BASE_URL = "https://unai-flow-backend-w4al.onrender.com/v1"
 
 headers = {
-    "Authorization": f"Bearer {UNAI_API_KEY}",
+    "X-Client-ID": CLIENT_ID,
+    "X-Client-Secret": CLIENT_SECRET,
     "Content-Type": "application/json"
 }
 
-# Send WhatsApp Broadcast
-payload = {
-    "to": "120363171744447809@newsletter",
-    "body": "Daily analytics report ready for download."
-}
+# 1. Health & Connection Check
+def verify_connection():
+    res = requests.get(f"{BASE_URL}/auth/verify", headers=headers, timeout=10)
+    res.raise_for_status()
+    print("UNAI Flow Status:", res.json())
 
-response = requests.post(f"{BASE_URL}/messages/text", json=payload, headers=headers)
-print("Response:", response.json())`;
+# 2. Dispatch Single WhatsApp Message
+def send_whatsapp_message(to_number: str, message: str):
+    payload = {
+        "to": to_number,
+        "text": message
+    }
+    res = requests.post(f"{BASE_URL}/messages/send", json=payload, headers=headers, timeout=15)
+    res.raise_for_status()
+    print("Sent:", res.json())
+    return res.json()
+
+# 3. Dispatch Bulk Personalized Campaign
+def launch_bulk_campaign():
+    payload = {
+        "campaign_name": "Monthly Statements",
+        "text": "Hi {{name}}, your receipt for invoice #{{invoice}} is ready.",
+        "recipients": [
+            {"recipient_jid": "919876543210@s.whatsapp.net", "variables": {"name": "Suresh", "invoice": "INV-102"}},
+            {"recipient_jid": "919876543211@s.whatsapp.net", "variables": {"name": "Meera", "invoice": "INV-103"}}
+        ],
+        "messages_per_second": 2.0
+    }
+    res = requests.post(f"{BASE_URL}/messages/send", json=payload, headers=headers)
+    print("Campaign Launched:", res.json())
+
+if __name__ == "__main__":
+    verify_connection()`;
   };
+
+  const connectedSessionCount = whatsappSessions.filter(
+    s => s.status === 'CONNECTED' || s.status === 'READY'
+  ).length;
 
   return (
     <div style={{ padding: '2rem 2.5rem', maxWidth: '1400px', margin: '0 auto' }}>
@@ -551,12 +740,29 @@ print("Response:", response.json())`;
             >
               <Radio size={12} className="animate-pulse" /> REST API v1 Live
             </span>
+            {connectedSessionCount > 0 && (
+              <span
+                style={{
+                  backgroundColor: 'rgba(168, 85, 247, 0.2)',
+                  color: '#c084fc',
+                  padding: '0.2rem 0.6rem',
+                  borderRadius: '6px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <Smartphone size={12} /> {connectedSessionCount} WhatsApp Device{connectedSessionCount !== 1 ? 's' : ''} Online
+              </span>
+            )}
           </div>
           <h1 style={{ fontSize: '1.875rem', fontWeight: 800, letterSpacing: '-0.03em', margin: 0 }}>
             WhatsApp Developer Console
           </h1>
-          <p style={{ color: '#94a3b8', fontSize: '0.95rem', marginTop: '0.4rem', maxWidth: '650px' }}>
-            Integrate UNAI FLOW as your business's WhatsApp messaging gateway. Generate API keys, configure webhooks, trigger bulk broadcasts, and inspect real-time request metrics.
+          <p style={{ color: '#94a3b8', fontSize: '0.95rem', marginTop: '0.4rem', maxWidth: '700px' }}>
+            Integrate UNAI FLOW as your business's WhatsApp messaging gateway. Issue CRM Client Credentials, associate authenticated phone numbers, trigger bulk broadcasts, and inspect real-time connection health.
           </p>
         </div>
 
@@ -586,6 +792,7 @@ print("Response:", response.json())`;
               if (activeTab === 'apps') setShowCreateAppModal(true);
               else if (activeTab === 'keys') setShowCreateKeyModal(true);
               else if (activeTab === 'webhooks') setShowCreateWebhookModal(true);
+              else if (activeTab === 'whatsapp') navigate('/whatsapp');
               else setActiveTab('apps');
             }}
             style={{
@@ -601,7 +808,7 @@ print("Response:", response.json())`;
               boxShadow: '0 4px 12px rgba(37, 99, 235, 0.4)'
             }}
           >
-            <Plus size={18} /> {activeTab === 'apps' ? 'New Application' : activeTab === 'webhooks' ? 'New Webhook' : 'Create API Key'}
+            <Plus size={18} /> {activeTab === 'apps' ? 'New Application' : activeTab === 'webhooks' ? 'New Webhook' : activeTab === 'whatsapp' ? 'Connect Device' : 'Create API Key'}
           </button>
         </div>
       </div>
@@ -617,10 +824,11 @@ print("Response:", response.json())`;
       >
         {[
           { id: 'apps', label: 'Applications', icon: AppWindow, count: apps.length },
+          { id: 'whatsapp', label: 'WhatsApp Numbers', icon: Smartphone, count: connectedSessionCount },
           { id: 'keys', label: 'API Keys', icon: Key, count: keys.length },
           { id: 'webhooks', label: 'Webhooks & Events', icon: Webhook, count: webhooks.length },
           { id: 'usage', label: 'Usage & Analytics', icon: BarChart3 },
-          { id: 'quickstart', label: 'Quickstart & SDKs', icon: Code2 }
+          { id: 'quickstart', label: 'Quickstart & CRM SDKs', icon: Code2 }
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -639,7 +847,8 @@ print("Response:", response.json())`;
                 fontSize: '0.95rem',
                 background: 'none',
                 transition: 'all 0.15s',
-                marginBottom: '-1px'
+                marginBottom: '-1px',
+                cursor: 'pointer'
               }}
             >
               <Icon size={18} />
@@ -668,64 +877,154 @@ print("Response:", response.json())`;
       {/* ───────────────────────────────────────────────────────────── */}
       {activeTab === 'apps' && (
         <div>
-          {/* One-time Credentials Banner */}
+          {/* One-time Credentials Banner Modal / Callout */}
           {newlyCreatedApp && (
             <div
               style={{
                 backgroundColor: '#f0fdf4',
-                border: '1px solid #bbf7d0',
-                borderRadius: '12px',
-                padding: '1.5rem',
-                marginBottom: '1.5rem',
-                boxShadow: '0 4px 12px rgba(34, 197, 94, 0.1)'
+                border: '1px solid #86efac',
+                borderRadius: '14px',
+                padding: '1.75rem',
+                marginBottom: '1.75rem',
+                boxShadow: '0 8px 24px rgba(34, 197, 94, 0.12)'
               }}
             >
               <div className="flex items-center justify-between" style={{ marginBottom: '0.75rem' }}>
                 <div className="flex items-center gap-2">
-                  <CheckCircle2 size={20} color="#16a34a" />
-                  <span style={{ fontWeight: 700, color: '#15803d', fontSize: '1rem' }}>
-                    Application "{newlyCreatedApp.name}" Created
+                  <CheckCircle2 size={22} color="#16a34a" />
+                  <span style={{ fontWeight: 800, color: '#15803d', fontSize: '1.1rem' }}>
+                    Application "{newlyCreatedApp.name}" Created Successfully!
                   </span>
                 </div>
                 <button
                   onClick={() => setNewlyCreatedApp(null)}
-                  style={{ color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}
+                  style={{
+                    color: '#64748b',
+                    fontWeight: 600,
+                    fontSize: '0.85rem',
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '6px',
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #d1d5db'
+                  }}
                 >
                   Dismiss
                 </button>
               </div>
-              <p style={{ color: '#166534', fontSize: '0.85rem', marginBottom: '1rem' }}>
-                ⚠️ Copy these credentials now — the API key will <strong>never</strong> be shown again.
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {newlyCreatedApp.client_id && (
+
+              <div
+                style={{
+                  backgroundColor: '#fef3c7',
+                  border: '1px solid #fde68a',
+                  borderRadius: '8px',
+                  padding: '0.75rem 1rem',
+                  marginBottom: '1.25rem',
+                  fontSize: '0.85rem',
+                  color: '#92400e',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+                <span>
+                  <strong>Important Security Notice:</strong> Store your <strong>Client Secret</strong> and <strong>API Key</strong> immediately in your CRM environment variables. For security reasons, they will <strong>never</strong> be displayed again!
+                </span>
+              </div>
+
+              <div style={{ display: 'grid', gap: '0.75rem' }}>
+                {newlyCreatedApp.id && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span style={{ color: '#374151', fontWeight: 600, minWidth: '120px', fontSize: '0.85rem' }}>Client ID:</span>
-                    <code style={{ backgroundColor: '#ecfdf5', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1 }}>
-                      {newlyCreatedApp.client_id}
+                    <span style={{ color: '#374151', fontWeight: 600, minWidth: '160px', fontSize: '0.85rem' }}>Application ID:</span>
+                    <code style={{ backgroundColor: '#ffffff', border: '1px solid #d1d5db', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1 }}>
+                      {newlyCreatedApp.id}
                     </code>
-                    <button onClick={() => copyAppCredential(newlyCreatedApp.client_id, 'client_id')} style={{ padding: '0.3rem', color: copiedAppCred === 'client_id' ? '#16a34a' : '#64748b' }}>
-                      {copiedAppCred === 'client_id' ? <Check size={16} /> : <Copy size={16} />}
+                    <button
+                      onClick={() => copyAppCredential(newlyCreatedApp.id!, 'app_id')}
+                      style={{ padding: '0.4rem 0.75rem', borderRadius: '6px', backgroundColor: '#ffffff', border: '1px solid #d1d5db', color: copiedAppCred === 'app_id' ? '#16a34a' : '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', fontWeight: 600 }}
+                    >
+                      {copiedAppCred === 'app_id' ? <Check size={14} /> : <Copy size={14} />} {copiedAppCred === 'app_id' ? 'Copied' : 'Copy'}
                     </button>
                   </div>
                 )}
+
+                {newlyCreatedApp.client_id && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <span style={{ color: '#374151', fontWeight: 600, minWidth: '160px', fontSize: '0.85rem' }}>Client ID:</span>
+                    <code style={{ backgroundColor: '#ffffff', border: '1px solid #d1d5db', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1, color: '#1e40af', fontWeight: 600 }}>
+                      {newlyCreatedApp.client_id}
+                    </code>
+                    <button
+                      onClick={() => copyAppCredential(newlyCreatedApp.client_id, 'client_id')}
+                      style={{ padding: '0.4rem 0.75rem', borderRadius: '6px', backgroundColor: '#ffffff', border: '1px solid #d1d5db', color: copiedAppCred === 'client_id' ? '#16a34a' : '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', fontWeight: 600 }}
+                    >
+                      {copiedAppCred === 'client_id' ? <Check size={14} /> : <Copy size={14} />} {copiedAppCred === 'client_id' ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                )}
+
+                {newlyCreatedApp.client_secret && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <span style={{ color: '#374151', fontWeight: 700, minWidth: '160px', fontSize: '0.85rem' }}>Client Secret (One-Time):</span>
+                    <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+                      <code style={{ backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', width: '100%', color: '#065f46', fontWeight: 700 }}>
+                        {showSecrets['new_secret'] ? newlyCreatedApp.client_secret : '••••••••••••••••••••••••••••••••••••••••••••••••'}
+                      </code>
+                      <button
+                        onClick={() => setShowSecrets(p => ({ ...p, new_secret: !p['new_secret'] }))}
+                        style={{ position: 'absolute', right: '8px', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}
+                      >
+                        {showSecrets['new_secret'] ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => copyAppCredential(newlyCreatedApp.client_secret!, 'client_secret')}
+                      style={{ padding: '0.4rem 0.75rem', borderRadius: '6px', backgroundColor: '#15803d', color: '#ffffff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      {copiedAppCred === 'client_secret' ? <Check size={14} /> : <Copy size={14} />} {copiedAppCred === 'client_secret' ? 'Copied' : 'Copy Secret'}
+                    </button>
+                  </div>
+                )}
+
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <span style={{ color: '#374151', fontWeight: 600, minWidth: '120px', fontSize: '0.85rem' }}>API Key:</span>
-                  <code style={{ backgroundColor: '#fef3c7', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1, color: '#92400e' }}>
+                  <span style={{ color: '#374151', fontWeight: 700, minWidth: '160px', fontSize: '0.85rem' }}>Primary API Key:</span>
+                  <code style={{ backgroundColor: '#fef3c7', border: '1px solid #fde68a', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1, color: '#92400e', fontWeight: 600 }}>
                     {newlyCreatedApp.raw_api_key}
                   </code>
-                  <button onClick={() => copyAppCredential(newlyCreatedApp.raw_api_key, 'api_key')} style={{ padding: '0.3rem', color: copiedAppCred === 'api_key' ? '#16a34a' : '#64748b' }}>
-                    {copiedAppCred === 'api_key' ? <Check size={16} /> : <Copy size={16} />}
+                  <button
+                    onClick={() => copyAppCredential(newlyCreatedApp.raw_api_key, 'api_key')}
+                    style={{ padding: '0.4rem 0.75rem', borderRadius: '6px', backgroundColor: '#d97706', color: '#ffffff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    {copiedAppCred === 'api_key' ? <Check size={14} /> : <Copy size={14} />} {copiedAppCred === 'api_key' ? 'Copied' : 'Copy Key'}
                   </button>
                 </div>
+
+                {newlyCreatedApp.whatsapp_number && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <span style={{ color: '#374151', fontWeight: 600, minWidth: '160px', fontSize: '0.85rem' }}>WhatsApp Sender:</span>
+                    <code style={{ backgroundColor: '#ffffff', border: '1px solid #d1d5db', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1, color: '#047857', fontWeight: 600 }}>
+                      +{newlyCreatedApp.whatsapp_number.replace(/^\+/, '')}
+                    </code>
+                    <button
+                      onClick={() => copyAppCredential(newlyCreatedApp.whatsapp_number!, 'wa_num')}
+                      style={{ padding: '0.4rem 0.75rem', borderRadius: '6px', backgroundColor: '#ffffff', border: '1px solid #d1d5db', color: copiedAppCred === 'wa_num' ? '#16a34a' : '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', fontWeight: 600 }}
+                    >
+                      {copiedAppCred === 'wa_num' ? <Check size={14} /> : <Copy size={14} />} {copiedAppCred === 'wa_num' ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                )}
+
                 {newlyCreatedApp.webhook_secret && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span style={{ color: '#374151', fontWeight: 600, minWidth: '120px', fontSize: '0.85rem' }}>Webhook Secret:</span>
-                    <code style={{ backgroundColor: '#ecfdf5', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1 }}>
+                    <span style={{ color: '#374151', fontWeight: 600, minWidth: '160px', fontSize: '0.85rem' }}>Webhook Secret:</span>
+                    <code style={{ backgroundColor: '#ffffff', border: '1px solid #d1d5db', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1 }}>
                       {newlyCreatedApp.webhook_secret}
                     </code>
-                    <button onClick={() => copyAppCredential(newlyCreatedApp.webhook_secret, 'webhook_secret')} style={{ padding: '0.3rem', color: copiedAppCred === 'webhook_secret' ? '#16a34a' : '#64748b' }}>
-                      {copiedAppCred === 'webhook_secret' ? <Check size={16} /> : <Copy size={16} />}
+                    <button
+                      onClick={() => copyAppCredential(newlyCreatedApp.webhook_secret, 'webhook_secret')}
+                      style={{ padding: '0.4rem 0.75rem', borderRadius: '6px', backgroundColor: '#ffffff', border: '1px solid #d1d5db', color: copiedAppCred === 'webhook_secret' ? '#16a34a' : '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', fontWeight: 600 }}
+                    >
+                      {copiedAppCred === 'webhook_secret' ? <Check size={14} /> : <Copy size={14} />} {copiedAppCred === 'webhook_secret' ? 'Copied' : 'Copy'}
                     </button>
                   </div>
                 )}
@@ -733,9 +1032,55 @@ print("Response:", response.json())`;
             </div>
           )}
 
-          {/* Application Cards */}
+          {/* Rotated Secret Success Callout */}
+          {rotatedSecretModal && (
+            <div
+              style={{
+                backgroundColor: '#eff6ff',
+                border: '1px solid #93c5fd',
+                borderRadius: '14px',
+                padding: '1.5rem',
+                marginBottom: '1.5rem',
+                boxShadow: '0 4px 14px rgba(37, 99, 235, 0.1)'
+              }}
+            >
+              <div className="flex items-center justify-between" style={{ marginBottom: '0.5rem' }}>
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={20} color="#2563eb" />
+                  <span style={{ fontWeight: 700, color: '#1e40af', fontSize: '1rem' }}>
+                    Client Secret Rotated for "{rotatedSecretModal.appName}"
+                  </span>
+                </div>
+                <button
+                  onClick={() => setRotatedSecretModal(null)}
+                  style={{ color: '#64748b', fontSize: '0.85rem', fontWeight: 600 }}
+                >
+                  Dismiss
+                </button>
+              </div>
+              <p style={{ color: '#1e3a8a', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                Make sure to copy the new secret now. Update your CRM configuration immediately:
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <code style={{ backgroundColor: '#ffffff', border: '1px solid #bfdbfe', padding: '0.5rem 0.75rem', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', flex: 1, color: '#1e40af', fontWeight: 700 }}>
+                  {rotatedSecretModal.clientSecret}
+                </code>
+                <button
+                  onClick={() => copyAppCredential(rotatedSecretModal.clientSecret, 'rotated_secret')}
+                  style={{ padding: '0.4rem 0.85rem', borderRadius: '6px', backgroundColor: '#2563eb', color: '#ffffff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}
+                >
+                  {copiedAppCred === 'rotated_secret' ? <Check size={14} /> : <Copy size={14} />} {copiedAppCred === 'rotated_secret' ? 'Copied' : 'Copy Secret'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Application Cards List */}
           {appsLoading ? (
-            <div style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>Loading applications...</div>
+            <div style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
+              <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 0.75rem' }} />
+              Loading applications...
+            </div>
           ) : apps.length === 0 ? (
             <div
               style={{
@@ -747,9 +1092,9 @@ print("Response:", response.json())`;
               }}
             >
               <AppWindow size={48} color="#94a3b8" style={{ marginBottom: '1rem', margin: '0 auto 1rem' }} />
-              <h3 style={{ color: '#1e293b', fontWeight: 700, fontSize: '1.25rem', marginBottom: '0.5rem' }}>No Applications Yet</h3>
-              <p style={{ color: '#64748b', maxWidth: '400px', margin: '0 auto 1.5rem' }}>
-                Create your first application to generate API credentials for your CRM, ERP, or external integrations.
+              <h3 style={{ color: '#1e293b', fontWeight: 700, fontSize: '1.25rem', marginBottom: '0.5rem' }}>No Applications Configured</h3>
+              <p style={{ color: '#64748b', maxWidth: '440px', margin: '0 auto 1.5rem', fontSize: '0.9rem' }}>
+                Create your first developer application to generate CRM credentials, pair your authenticated WhatsApp mobile number, and initiate automated messaging.
               </p>
               <button
                 onClick={() => setShowCreateAppModal(true)}
@@ -761,7 +1106,8 @@ print("Response:", response.json())`;
                   fontWeight: 600,
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '0.5rem'
+                  gap: '0.5rem',
+                  cursor: 'pointer'
                 }}
               >
                 <Plus size={18} /> Create Application
@@ -785,8 +1131,8 @@ print("Response:", response.json())`;
                     <div className="flex items-center gap-3">
                       <div
                         style={{
-                          width: '40px',
-                          height: '40px',
+                          width: '42px',
+                          height: '42px',
                           borderRadius: '10px',
                           background: app.status === 'active'
                             ? 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)'
@@ -794,14 +1140,48 @@ print("Response:", response.json())`;
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
+                          color: '#fff',
+                          fontWeight: 700
                         }}
                       >
-                        <AppWindow size={20} color="#fff" />
+                        <AppWindow size={22} />
                       </div>
                       <div>
-                        <h3 style={{ fontWeight: 700, fontSize: '1.05rem', color: '#1e293b', margin: 0 }}>{app.name}</h3>
+                        <div className="flex items-center gap-2">
+                          <h3 style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0f172a', margin: 0 }}>{app.name}</h3>
+                          {app.whatsapp_number ? (
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                backgroundColor: '#dcfce7',
+                                color: '#15803d',
+                                padding: '0.15rem 0.55rem',
+                                borderRadius: '999px',
+                                fontSize: '0.75rem',
+                                fontWeight: 700
+                              }}
+                            >
+                              <Smartphone size={12} /> +{app.whatsapp_number.replace(/^\+/, '')}
+                            </span>
+                          ) : (
+                            <span
+                              style={{
+                                backgroundColor: '#f1f5f9',
+                                color: '#64748b',
+                                padding: '0.15rem 0.5rem',
+                                borderRadius: '999px',
+                                fontSize: '0.75rem',
+                                fontWeight: 500
+                              }}
+                            >
+                              No WhatsApp linked
+                            </span>
+                          )}
+                        </div>
                         {app.description && (
-                          <p style={{ color: '#64748b', fontSize: '0.8rem', margin: 0 }}>{app.description}</p>
+                          <p style={{ color: '#64748b', fontSize: '0.85rem', margin: '0.2rem 0 0 0' }}>{app.description}</p>
                         )}
                       </div>
                     </div>
@@ -810,10 +1190,10 @@ print("Response:", response.json())`;
                         style={{
                           backgroundColor: app.status === 'active' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
                           color: app.status === 'active' ? '#16a34a' : '#dc2626',
-                          padding: '0.2rem 0.6rem',
+                          padding: '0.25rem 0.65rem',
                           borderRadius: '6px',
                           fontSize: '0.75rem',
-                          fontWeight: 600,
+                          fontWeight: 700,
                           textTransform: 'uppercase' as const
                         }}
                       >
@@ -823,10 +1203,10 @@ print("Response:", response.json())`;
                         style={{
                           backgroundColor: app.environment === 'live' ? 'rgba(37, 99, 235, 0.1)' : 'rgba(245, 158, 11, 0.1)',
                           color: app.environment === 'live' ? '#2563eb' : '#d97706',
-                          padding: '0.2rem 0.6rem',
+                          padding: '0.25rem 0.65rem',
                           borderRadius: '6px',
                           fontSize: '0.75rem',
-                          fontWeight: 600
+                          fontWeight: 700
                         }}
                       >
                         {app.environment.toUpperCase()}
@@ -834,17 +1214,97 @@ print("Response:", response.json())`;
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', gap: '2rem', marginBottom: '1rem', fontSize: '0.85rem', color: '#64748b' }}>
+                  {/* Metadata Row */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', marginBottom: '1rem', fontSize: '0.85rem', color: '#64748b', alignItems: 'center' }}>
                     <div>
                       <span style={{ fontWeight: 600, color: '#374151' }}>Client ID: </span>
-                      <code style={{ fontSize: '0.8rem', backgroundColor: '#f1f5f9', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>{app.client_id}</code>
+                      <code style={{ fontSize: '0.8rem', backgroundColor: '#f1f5f9', padding: '0.2rem 0.5rem', borderRadius: '4px', color: '#1e293b' }}>{app.client_id}</code>
                     </div>
-                    <div><Key size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> {app.api_key_count} key{app.api_key_count !== 1 ? 's' : ''}</div>
-                    <div><Webhook size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> {app.webhook_count} webhook{app.webhook_count !== 1 ? 's' : ''}</div>
-                    <div style={{ marginLeft: 'auto', fontSize: '0.8rem' }}>Created {new Date(app.created_at).toLocaleDateString()}</div>
+                    {app.client_secret_preview && (
+                      <div>
+                        <span style={{ fontWeight: 600, color: '#374151' }}>Secret: </span>
+                        <code style={{ fontSize: '0.8rem', backgroundColor: '#f1f5f9', padding: '0.2rem 0.5rem', borderRadius: '4px', color: '#64748b' }}>{app.client_secret_preview}</code>
+                      </div>
+                    )}
+                    <div>
+                      <Key size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} />
+                      {app.api_key_count} key{app.api_key_count !== 1 ? 's' : ''}
+                    </div>
+                    <div>
+                      <Webhook size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} />
+                      {app.webhook_count} webhook{app.webhook_count !== 1 ? 's' : ''}
+                    </div>
+                    <div>
+                      <Activity size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} />
+                      Last Active: {app.last_used_at ? new Date(app.last_used_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Never used'}
+                    </div>
+                    <div style={{ marginLeft: 'auto', fontSize: '0.8rem', color: '#94a3b8' }}>
+                      Created {new Date(app.created_at).toLocaleDateString()}
+                    </div>
                   </div>
 
-                  <div className="flex gap-2">
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap gap-2 items-center">
+                    {/* Live Diagnostic Button */}
+                    <button
+                      onClick={() => handleTestConnection(app.id)}
+                      disabled={testingAppId === app.id}
+                      style={{
+                        padding: '0.5rem 0.85rem',
+                        borderRadius: '8px',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        backgroundColor: '#eff6ff',
+                        color: '#2563eb',
+                        border: '1px solid #bfdbfe',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Zap size={14} className={testingAppId === app.id ? 'animate-spin' : ''} />
+                      {testingAppId === app.id ? 'Testing...' : 'Test Connection'}
+                    </button>
+
+                    <button
+                      onClick={() => handleRegenerateAppSecret(app.id, app.name)}
+                      style={{
+                        padding: '0.5rem 0.85rem',
+                        borderRadius: '8px',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        backgroundColor: '#f8fafc',
+                        color: '#334155',
+                        border: '1px solid #cbd5e1',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Lock size={14} /> Rotate Secret
+                    </button>
+
+                    <button
+                      onClick={() => handleRegenerateAppKey(app.id, app.name)}
+                      style={{
+                        padding: '0.5rem 0.85rem',
+                        borderRadius: '8px',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        backgroundColor: '#f8fafc',
+                        color: '#334155',
+                        border: '1px solid #cbd5e1',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <RefreshCw size={14} /> Regenerate Key
+                    </button>
+
                     <button
                       onClick={() => setExpandedAppId(expandedAppId === app.id ? null : app.id)}
                       style={{
@@ -854,30 +1314,17 @@ print("Response:", response.json())`;
                         fontWeight: 600,
                         backgroundColor: '#f1f5f9',
                         color: '#475569',
+                        border: '1px solid #e2e8f0',
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: '0.4rem'
+                        gap: '0.4rem',
+                        cursor: 'pointer'
                       }}
                     >
                       <Settings size={14} /> {expandedAppId === app.id ? 'Hide Details' : 'View Details'}
                     </button>
-                    <button
-                      onClick={() => handleRegenerateAppKey(app.id, app.name)}
-                      style={{
-                        padding: '0.5rem 0.85rem',
-                        borderRadius: '8px',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        backgroundColor: '#eff6ff',
-                        color: '#2563eb',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.4rem'
-                      }}
-                    >
-                      <RefreshCw size={14} /> Regenerate Key
-                    </button>
-                    {app.status === 'active' && (
+
+                    {app.status === 'active' ? (
                       <button
                         onClick={() => handleSuspendApp(app.id, app.name)}
                         style={{
@@ -887,14 +1334,36 @@ print("Response:", response.json())`;
                           fontWeight: 600,
                           backgroundColor: '#fef2f2',
                           color: '#dc2626',
+                          border: '1px solid #fecaca',
                           display: 'inline-flex',
                           alignItems: 'center',
-                          gap: '0.4rem'
+                          gap: '0.4rem',
+                          cursor: 'pointer'
                         }}
                       >
                         <AlertTriangle size={14} /> Suspend
                       </button>
+                    ) : (
+                      <button
+                        onClick={() => handleActivateApp(app.id, app.name)}
+                        style={{
+                          padding: '0.5rem 0.85rem',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          fontWeight: 600,
+                          backgroundColor: '#f0fdf4',
+                          color: '#15803d',
+                          border: '1px solid #bbf7d0',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <CheckCircle2 size={14} /> Activate
+                      </button>
                     )}
+
                     <button
                       onClick={() => handleDeleteApp(app.id, app.name)}
                       style={{
@@ -904,31 +1373,45 @@ print("Response:", response.json())`;
                         fontWeight: 600,
                         backgroundColor: '#fef2f2',
                         color: '#dc2626',
+                        border: '1px solid #fecaca',
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: '0.4rem',
-                        marginLeft: 'auto'
+                        marginLeft: 'auto',
+                        cursor: 'pointer'
                       }}
                     >
                       <Trash2 size={14} /> Revoke
                     </button>
                   </div>
 
-                  {/* Expanded Details */}
+                  {/* Expanded Credentials & Details Drawer */}
                   {expandedAppId === app.id && (
                     <div
                       style={{
-                        marginTop: '1rem',
+                        marginTop: '1.25rem',
                         padding: '1.25rem',
                         backgroundColor: '#f8fafc',
                         borderRadius: '10px',
                         border: '1px solid #e2e8f0'
                       }}
                     >
-                      <h4 style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1e293b', marginBottom: '0.75rem' }}>Application Credentials</h4>
-                      <div style={{ display: 'grid', gap: '0.5rem', fontSize: '0.85rem' }}>
+                      <h4 style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1e293b', marginBottom: '0.75rem' }}>
+                        Application Configuration & Permissions
+                      </h4>
+                      <div style={{ display: 'grid', gap: '0.6rem', fontSize: '0.85rem' }}>
                         <div className="flex items-center gap-2">
-                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '120px' }}>Client ID</span>
+                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '150px' }}>Application ID</span>
+                          <code style={{ backgroundColor: '#e2e8f0', padding: '0.3rem 0.6rem', borderRadius: '6px', fontFamily: 'monospace', flex: 1 }}>
+                            {app.id}
+                          </code>
+                          <button onClick={() => copyAppCredential(app.id, `aid-${app.id}`)} style={{ padding: '0.2rem', color: copiedAppCred === `aid-${app.id}` ? '#16a34a' : '#94a3b8' }}>
+                            {copiedAppCred === `aid-${app.id}` ? <Check size={14} /> : <Copy size={14} />}
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '150px' }}>Client ID</span>
                           <code style={{ backgroundColor: '#e2e8f0', padding: '0.3rem 0.6rem', borderRadius: '6px', fontFamily: 'monospace', flex: 1 }}>
                             {app.client_id}
                           </code>
@@ -936,20 +1419,36 @@ print("Response:", response.json())`;
                             {copiedAppCred === `cid-${app.id}` ? <Check size={14} /> : <Copy size={14} />}
                           </button>
                         </div>
+
                         <div className="flex items-center gap-2">
-                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '120px' }}>Webhook Secret</span>
+                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '150px' }}>Associated WhatsApp</span>
+                          <span style={{ flex: 1, color: app.whatsapp_number ? '#15803d' : '#64748b', fontWeight: app.whatsapp_number ? 700 : 400 }}>
+                            {app.whatsapp_number ? `+${app.whatsapp_number.replace(/^\+/, '')}` : 'Not configured (falls back to default connected instance)'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '150px' }}>Webhook Signing Secret</span>
                           <code style={{ backgroundColor: '#e2e8f0', padding: '0.3rem 0.6rem', borderRadius: '6px', fontFamily: 'monospace', flex: 1 }}>
-                            {showSecrets[app.id] ? (app.webhook_secret || '—') : '••••••••••••••••••'}
+                            {showSecrets[app.id] ? (app.webhook_secret || '—') : '••••••••••••••••••••••••'}
                           </code>
-                          <button onClick={() => setShowSecrets(p => ({...p, [app.id]: !p[app.id]}))} style={{ padding: '0.2rem', color: '#94a3b8' }}>
+                          <button onClick={() => setShowSecrets(p => ({ ...p, [app.id]: !p[app.id] }))} style={{ padding: '0.2rem', color: '#64748b', cursor: 'pointer' }}>
                             {showSecrets[app.id] ? <EyeOff size={14} /> : <Eye size={14} />}
                           </button>
+                          {app.webhook_secret && (
+                            <button onClick={() => copyAppCredential(app.webhook_secret!, `wh-${app.id}`)} style={{ padding: '0.2rem', color: copiedAppCred === `wh-${app.id}` ? '#16a34a' : '#94a3b8' }}>
+                              {copiedAppCred === `wh-${app.id}` ? <Check size={14} /> : <Copy size={14} />}
+                            </button>
+                          )}
                         </div>
+
                         <div className="flex items-center gap-2">
-                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '120px' }}>Scopes</span>
+                          <span style={{ fontWeight: 600, color: '#374151', minWidth: '150px' }}>Authorized Scopes</span>
                           <div className="flex gap-1 flex-wrap">
                             {(app.scopes || []).map((s) => (
-                              <span key={s} style={{ backgroundColor: '#dbeafe', color: '#1e40af', padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 600 }}>{s}</span>
+                              <span key={s} style={{ backgroundColor: '#dbeafe', color: '#1e40af', padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 600 }}>
+                                {s}
+                              </span>
                             ))}
                           </div>
                         </div>
@@ -963,171 +1462,230 @@ print("Response:", response.json())`;
         </div>
       )}
 
-      {/* Create Application Modal */}
-      {showCreateAppModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 50,
-            backdropFilter: 'blur(4px)'
-          }}
-          onClick={() => setShowCreateAppModal(false)}
-        >
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* TAB 1: WHATSAPP NUMBERS & GATEWAY STATUS */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {activeTab === 'whatsapp' && (
+        <div>
+          {/* Gateway Status Header */}
           <div
-            onClick={(e) => e.stopPropagation()}
             style={{
               backgroundColor: '#ffffff',
-              borderRadius: '16px',
-              padding: '2rem',
-              width: '500px',
-              maxHeight: '90vh',
-              overflow: 'auto',
-              boxShadow: '0 20px 60px rgba(0,0,0,0.2)'
+              borderRadius: '14px',
+              border: '1px solid #e2e8f0',
+              padding: '1.5rem',
+              marginBottom: '1.5rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)'
             }}
           >
-            <h2 style={{ fontWeight: 800, fontSize: '1.25rem', color: '#0f172a', marginBottom: '1.5rem' }}>Create Application</h2>
-            <form onSubmit={handleCreateApp}>
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.4rem' }}>Application Name *</label>
-                <input
-                  value={newAppName}
-                  onChange={(e) => setNewAppName(e.target.value)}
-                  placeholder="e.g. Zoho CRM Integration"
-                  style={{ width: '100%', padding: '0.75rem', border: '1px solid #d1d5db', borderRadius: '10px', fontSize: '0.9rem' }}
-                  required
-                />
-              </div>
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.4rem' }}>Description</label>
-                <input
-                  value={newAppDesc}
-                  onChange={(e) => setNewAppDesc(e.target.value)}
-                  placeholder="Optional — what is this integration for?"
-                  style={{ width: '100%', padding: '0.75rem', border: '1px solid #d1d5db', borderRadius: '10px', fontSize: '0.9rem' }}
-                />
-              </div>
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.4rem' }}>Environment</label>
-                <div className="flex gap-2">
-                  {(['live', 'test'] as const).map((env) => (
-                    <button
-                      key={env}
-                      type="button"
-                      onClick={() => setNewAppEnv(env)}
-                      style={{
-                        padding: '0.5rem 1.25rem',
-                        borderRadius: '8px',
-                        fontSize: '0.85rem',
-                        fontWeight: 600,
-                        border: '2px solid',
-                        borderColor: newAppEnv === env ? '#2563eb' : '#d1d5db',
-                        backgroundColor: newAppEnv === env ? '#eff6ff' : '#ffffff',
-                        color: newAppEnv === env ? '#2563eb' : '#6b7280',
-                      }}
-                    >
-                      {env === 'live' ? '🟢 Live' : '🟡 Test'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.5rem' }}>Permissions</label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
-                  {['messages:send', 'campaigns:read', 'campaigns:write', 'instances:read', 'channels:read', 'usage:read', 'webhooks:read', 'webhooks:manage'].map((s) => (
-                    <label key={s} className="flex items-center gap-2" style={{ fontSize: '0.8rem', color: '#374151' }}>
-                      <input
-                        type="checkbox"
-                        checked={newAppScopes.includes(s)}
-                        onChange={() => {
-                          setNewAppScopes((prev) =>
-                            prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
-                          );
-                        }}
-                      />
-                      <code style={{ fontSize: '0.75rem' }}>{s}</code>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              {createAppError && (
-                <div
+            <div>
+              <div className="flex items-center gap-2">
+                <span style={{ fontWeight: 700, fontSize: '1.05rem', color: '#0f172a' }}>
+                  WhatsApp Gateway Engine Status
+                </span>
+                <span
                   style={{
-                    marginBottom: '1rem',
-                    padding: '0.75rem 1rem',
-                    borderRadius: '10px',
-                    backgroundColor: '#fef2f2',
-                    border: '1px solid #fecaca',
-                    color: '#b91c1c',
-                    fontSize: '0.85rem',
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '0.5rem',
+                    backgroundColor: gatewayStatus?.connected ? '#dcfce7' : '#f1f5f9',
+                    color: gatewayStatus?.connected ? '#15803d' : '#64748b',
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: '999px',
+                    fontSize: '0.75rem',
+                    fontWeight: 700
                   }}
                 >
-                  <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: '0.15rem' }} />
-                  <div>
-                    <strong style={{ display: 'block', fontWeight: 700 }}>Application Creation Failed</strong>
-                    <span>{createAppError}</span>
-                  </div>
-                </div>
-              )}
+                  {gatewayStatus?.connected ? 'ONLINE' : 'ACTIVE / IDLE'}
+                </span>
+              </div>
+              <p style={{ margin: '0.25rem 0 0 0', color: '#64748b', fontSize: '0.85rem' }}>
+                All messages sent via Developer Applications and CRM integrations route through authenticated WhatsApp sessions below.
+              </p>
+            </div>
 
-              <div className="flex gap-3" style={{ justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCreateAppModal(false);
-                    setCreateAppError(null);
-                  }}
-                  style={{ padding: '0.65rem 1.25rem', borderRadius: '10px', fontWeight: 600, fontSize: '0.875rem', backgroundColor: '#f1f5f9', color: '#475569' }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={creatingApp}
-                  style={{
-                    padding: '0.65rem 1.25rem',
-                    borderRadius: '10px',
-                    fontWeight: 600,
-                    fontSize: '0.875rem',
-                    background: creatingApp
-                      ? 'linear-gradient(135deg, #93c5fd 0%, #bfdbfe 100%)'
-                      : 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
-                    color: '#fff',
-                    boxShadow: creatingApp ? 'none' : '0 4px 12px rgba(37, 99, 235, 0.3)',
-                    cursor: creatingApp ? 'not-allowed' : 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    transition: 'all 0.2s ease',
-                  }}
-                >
-                  {creatingApp && (
-                    <svg width="16" height="16" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite' }}>
-                      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="31.4" strokeLinecap="round" />
-                    </svg>
-                  )}
-                  {creatingApp ? 'Creating...' : 'Create Application'}
-                </button>
-              </div>
-            </form>
+            <div className="flex gap-2">
+              <button
+                onClick={loadWhatsAppSessions}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.6rem 1rem',
+                  borderRadius: '8px',
+                  backgroundColor: '#f1f5f9',
+                  color: '#475569',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  border: '1px solid #e2e8f0',
+                  cursor: 'pointer'
+                }}
+              >
+                <RefreshCw size={14} className={whatsappLoading ? 'animate-spin' : ''} /> Refresh Devices
+              </button>
+              <button
+                onClick={() => navigate('/whatsapp')}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.6rem 1.25rem',
+                  borderRadius: '8px',
+                  backgroundColor: '#2563eb',
+                  color: '#ffffff',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  border: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                <Smartphone size={16} /> Connect / Scan QR Code
+              </button>
+            </div>
           </div>
+
+          {/* WhatsApp Sessions Grid */}
+          {whatsappSessions.length === 0 ? (
+            <div
+              style={{
+                textAlign: 'center',
+                padding: '4rem 2rem',
+                backgroundColor: '#f8fafc',
+                borderRadius: '16px',
+                border: '2px dashed #e2e8f0'
+              }}
+            >
+              <Smartphone size={48} color="#94a3b8" style={{ margin: '0 auto 1rem' }} />
+              <h3 style={{ color: '#1e293b', fontWeight: 700, fontSize: '1.25rem', marginBottom: '0.5rem' }}>
+                No WhatsApp Numbers Connected
+              </h3>
+              <p style={{ color: '#64748b', maxWidth: '420px', margin: '0 auto 1.5rem', fontSize: '0.9rem' }}>
+                Pair a WhatsApp mobile phone with UNAI FLOW to allow your CRM and external systems to broadcast messages.
+              </p>
+              <button
+                onClick={() => navigate('/whatsapp')}
+                style={{
+                  background: 'linear-gradient(135deg, #16a34a 0%, #22c55e 100%)',
+                  color: '#fff',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '10px',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  cursor: 'pointer'
+                }}
+              >
+                <Smartphone size={18} /> Connect WhatsApp Account
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1.25rem' }}>
+              {whatsappSessions.map((session) => {
+                const isConnected = session.status === 'CONNECTED' || session.status === 'READY';
+                const linkedApps = apps.filter(
+                  a => a.whatsapp_number && session.phone_number &&
+                       a.whatsapp_number.replace(/\D/g, '') === session.phone_number.replace(/\D/g, '')
+                );
+
+                return (
+                  <div
+                    key={session.id}
+                    style={{
+                      backgroundColor: '#ffffff',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '14px',
+                      padding: '1.5rem',
+                      boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)'
+                    }}
+                  >
+                    <div className="flex items-center justify-between" style={{ marginBottom: '1rem' }}>
+                      <div className="flex items-center gap-3">
+                        <div
+                          style={{
+                            width: '42px',
+                            height: '42px',
+                            borderRadius: '50%',
+                            backgroundColor: isConnected ? '#dcfce7' : '#f1f5f9',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: isConnected ? '#15803d' : '#64748b'
+                          }}
+                        >
+                          <Phone size={20} />
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a' }}>
+                            {session.phone_number ? `+${session.phone_number.replace(/^\+/, '')}` : 'WhatsApp Session'}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#64748b', fontFamily: 'monospace' }}>
+                            {session.session_identifier?.slice(0, 18)}...
+                          </div>
+                        </div>
+                      </div>
+                      <span
+                        style={{
+                          backgroundColor: isConnected ? '#dcfce7' : '#fee2e2',
+                          color: isConnected ? '#15803d' : '#b91c1c',
+                          padding: '0.2rem 0.6rem',
+                          borderRadius: '999px',
+                          fontSize: '0.75rem',
+                          fontWeight: 700
+                        }}
+                      >
+                        {isConnected ? 'ONLINE' : session.status}
+                      </span>
+                    </div>
+
+                    <div style={{ padding: '0.75rem', backgroundColor: '#f8fafc', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.8rem' }}>
+                      <div style={{ color: '#475569', marginBottom: '0.25rem', fontWeight: 600 }}>
+                        Linked Developer Applications:
+                      </div>
+                      {linkedApps.length > 0 ? (
+                        <div className="flex gap-1 flex-wrap">
+                          {linkedApps.map(a => (
+                            <span key={a.id} style={{ backgroundColor: '#dbeafe', color: '#1e40af', padding: '0.15rem 0.45rem', borderRadius: '4px', fontWeight: 600 }}>
+                              {a.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span style={{ color: '#94a3b8' }}>Available for assignment to any Application</span>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => navigate('/whatsapp')}
+                        style={{
+                          flex: 1,
+                          padding: '0.5rem',
+                          borderRadius: '8px',
+                          backgroundColor: '#f1f5f9',
+                          color: '#334155',
+                          fontSize: '0.8rem',
+                          fontWeight: 600,
+                          border: '1px solid #e2e8f0',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Manage Session
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
       {/* ───────────────────────────────────────────────────────────── */}
-      {/* TAB 1: API KEYS */}
+      {/* TAB 2: API KEYS */}
       {/* ───────────────────────────────────────────────────────────── */}
       {activeTab === 'keys' && (
         <div>
-          {/* Secret Key Alert / Success Banner */}
           {newlyCreatedKey && (
             <div
               style={{
@@ -1178,7 +1736,8 @@ print("Response:", response.json())`;
                     padding: '0.4rem 0.8rem',
                     borderRadius: '6px',
                     fontSize: '0.8rem',
-                    fontWeight: 600
+                    fontWeight: 600,
+                    cursor: 'pointer'
                   }}
                 >
                   {copiedKey ? <Check size={14} /> : <Copy size={14} />}
@@ -1188,7 +1747,6 @@ print("Response:", response.json())`;
             </div>
           )}
 
-          {/* Keys Table Card */}
           <div
             style={{
               backgroundColor: '#ffffff',
@@ -1221,7 +1779,10 @@ print("Response:", response.json())`;
                   gap: '0.4rem',
                   color: '#64748b',
                   fontSize: '0.85rem',
-                  fontWeight: 600
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  background: 'none',
+                  border: 'none'
                 }}
               >
                 <RefreshCw size={14} className={keysLoading ? 'animate-spin' : ''} /> Refresh
@@ -1243,7 +1804,8 @@ print("Response:", response.json())`;
                     padding: '0.6rem 1.25rem',
                     borderRadius: '8px',
                     fontSize: '0.875rem',
-                    fontWeight: 600
+                    fontWeight: 600,
+                    cursor: 'pointer'
                   }}
                 >
                   Create Your First Key
@@ -1332,7 +1894,9 @@ print("Response:", response.json())`;
                               fontWeight: 600,
                               display: 'inline-flex',
                               alignItems: 'center',
-                              gap: '4px'
+                              gap: '4px',
+                              cursor: 'pointer',
+                              background: '#fff'
                             }}
                           >
                             <RefreshCw size={12} /> Rotate
@@ -1349,7 +1913,9 @@ print("Response:", response.json())`;
                               fontWeight: 600,
                               display: 'inline-flex',
                               alignItems: 'center',
-                              gap: '4px'
+                              gap: '4px',
+                              cursor: 'pointer',
+                              border: 'none'
                             }}
                           >
                             <Trash2 size={12} /> Revoke
@@ -1366,7 +1932,7 @@ print("Response:", response.json())`;
       )}
 
       {/* ───────────────────────────────────────────────────────────── */}
-      {/* TAB 2: WEBHOOKS */}
+      {/* TAB 3: WEBHOOKS */}
       {/* ───────────────────────────────────────────────────────────── */}
       {activeTab === 'webhooks' && (
         <div>
@@ -1384,7 +1950,7 @@ print("Response:", response.json())`;
                 <div className="flex items-center gap-2" style={{ color: '#1d4ed8', fontWeight: 700 }}>
                   <ShieldCheck size={20} /> Webhook Endpoint Registered!
                 </div>
-                <button onClick={() => setCreatedWebhookSecret(null)} style={{ color: '#64748b', fontSize: '0.8rem' }}>
+                <button onClick={() => setCreatedWebhookSecret(null)} style={{ color: '#64748b', fontSize: '0.8rem', cursor: 'pointer', background: 'none', border: 'none' }}>
                   Dismiss
                 </button>
               </div>
@@ -1429,7 +1995,10 @@ print("Response:", response.json())`;
                   gap: '0.4rem',
                   color: '#64748b',
                   fontSize: '0.85rem',
-                  fontWeight: 600
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  background: 'none',
+                  border: 'none'
                 }}
               >
                 <RefreshCw size={14} className={webhooksLoading ? 'animate-spin' : ''} /> Refresh
@@ -1451,7 +2020,8 @@ print("Response:", response.json())`;
                     padding: '0.6rem 1.25rem',
                     borderRadius: '8px',
                     fontSize: '0.875rem',
-                    fontWeight: 600
+                    fontWeight: 600,
+                    cursor: 'pointer'
                   }}
                 >
                   Register Webhook URL
@@ -1523,7 +2093,9 @@ print("Response:", response.json())`;
                             backgroundColor: '#fee2e2',
                             color: '#b91c1c',
                             fontSize: '0.75rem',
-                            fontWeight: 600
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            border: 'none'
                           }}
                         >
                           Delete
@@ -1539,11 +2111,10 @@ print("Response:", response.json())`;
       )}
 
       {/* ───────────────────────────────────────────────────────────── */}
-      {/* TAB 3: USAGE & ANALYTICS */}
+      {/* TAB 4: USAGE & ANALYTICS */}
       {/* ───────────────────────────────────────────────────────────── */}
       {activeTab === 'usage' && (
         <div>
-          {/* Controls */}
           <div className="flex items-center justify-between" style={{ marginBottom: '1.5rem' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#0f172a', margin: 0 }}>
               Platform Usage & Performance
@@ -1561,7 +2132,8 @@ print("Response:", response.json())`;
                   backgroundColor: '#ffffff',
                   border: '1px solid #e2e8f0',
                   padding: '0.35rem 0.75rem',
-                  borderRadius: '8px'
+                  borderRadius: '8px',
+                  cursor: 'pointer'
                 }}
               >
                 <RefreshCw size={14} className={usageLoading ? 'animate-spin' : ''} /> Refresh
@@ -1586,7 +2158,9 @@ print("Response:", response.json())`;
                       fontWeight: 600,
                       textTransform: 'capitalize',
                       backgroundColor: usagePeriod === p ? '#2563eb' : 'transparent',
-                      color: usagePeriod === p ? '#ffffff' : '#64748b'
+                      color: usagePeriod === p ? '#ffffff' : '#64748b',
+                      border: 'none',
+                      cursor: 'pointer'
                     }}
                   >
                     {p}
@@ -1596,167 +2170,48 @@ print("Response:", response.json())`;
             </div>
           </div>
 
-          {/* Metric Cards Grid */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-              gap: '1.25rem',
-              marginBottom: '2rem'
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: '1rem',
+              marginBottom: '1.5rem'
             }}
           >
-            <div
-              style={{
-                backgroundColor: '#ffffff',
-                padding: '1.5rem',
-                borderRadius: '14px',
-                border: '1px solid #e2e8f0',
-                boxShadow: '0 2px 6px rgba(15, 23, 42, 0.03)'
-              }}
-            >
-              <div className="flex items-center justify-between" style={{ color: '#64748b', fontSize: '0.85rem', fontWeight: 600 }}>
-                API REQUESTS (30D)
-                <Activity size={18} style={{ color: '#3b82f6' }} />
-              </div>
-              <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0f172a', marginTop: '0.5rem' }}>
-                {usageSummary?.total_requests.toLocaleString() || 0}
-              </div>
-              <div style={{ fontSize: '0.8rem', color: '#16a34a', marginTop: '0.25rem' }}>
-                Across all registered API keys
-              </div>
-            </div>
-
-            <div
-              style={{
-                backgroundColor: '#ffffff',
-                padding: '1.5rem',
-                borderRadius: '14px',
-                border: '1px solid #e2e8f0',
-                boxShadow: '0 2px 6px rgba(15, 23, 42, 0.03)'
-              }}
-            >
-              <div className="flex items-center justify-between" style={{ color: '#64748b', fontSize: '0.85rem', fontWeight: 600 }}>
-                MESSAGES SENT
-                <Send size={18} style={{ color: '#10b981' }} />
-              </div>
-              <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0f172a', marginTop: '0.5rem' }}>
-                {messageStats?.total_sent.toLocaleString() || 0}
-              </div>
-              <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.25rem' }}>
-                Delivered: {messageStats?.total_delivered.toLocaleString() || 0}
-              </div>
-            </div>
-
-            <div
-              style={{
-                backgroundColor: '#ffffff',
-                padding: '1.5rem',
-                borderRadius: '14px',
-                border: '1px solid #e2e8f0',
-                boxShadow: '0 2px 6px rgba(15, 23, 42, 0.03)'
-              }}
-            >
-              <div className="flex items-center justify-between" style={{ color: '#64748b', fontSize: '0.85rem', fontWeight: 600 }}>
-                DELIVERY SUCCESS RATE
-                <CheckCircle2 size={18} style={{ color: '#8b5cf6' }} />
-              </div>
-              <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0f172a', marginTop: '0.5rem' }}>
-                {messageStats?.delivery_rate || 100}%
-              </div>
-              <div style={{ fontSize: '0.8rem', color: '#dc2626', marginTop: '0.25rem' }}>
-                Failed: {messageStats?.total_failed || 0}
-              </div>
-            </div>
-
-            <div
-              style={{
-                backgroundColor: '#ffffff',
-                padding: '1.5rem',
-                borderRadius: '14px',
-                border: '1px solid #e2e8f0',
-                boxShadow: '0 2px 6px rgba(15, 23, 42, 0.03)'
-              }}
-            >
-              <div className="flex items-center justify-between" style={{ color: '#64748b', fontSize: '0.85rem', fontWeight: 600 }}>
-                CAMPAIGNS DISPATCHED
-                <Zap size={18} style={{ color: '#f59e0b' }} />
-              </div>
-              <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0f172a', marginTop: '0.5rem' }}>
-                {usageSummary?.total_campaigns || 0}
-              </div>
-              <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.25rem' }}>
-                Active keys: {usageSummary?.active_api_keys || 0}
-              </div>
-            </div>
-          </div>
-
-          {/* Endpoints Table */}
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: '14px',
-              border: '1px solid #e2e8f0',
-              overflow: 'hidden',
-              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)'
-            }}
-          >
-            <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #f1f5f9' }}>
-              <h4 style={{ margin: 0, fontWeight: 700, fontSize: '0.95rem' }}>Traffic Breakdown by Endpoint</h4>
-            </div>
-            {endpointStats.length === 0 ? (
-              <div style={{ padding: '2.5rem', textAlign: 'center', color: '#64748b' }}>
-                No API calls logged yet. Use the Quickstart guide to send your first request!
-              </div>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.875rem' }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#f8fafc', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
-                    <th style={{ padding: '0.875rem 1.5rem', fontWeight: 600 }}>METHOD & PATH</th>
-                    <th style={{ padding: '0.875rem 1rem', fontWeight: 600 }}>TOTAL REQUESTS</th>
-                    <th style={{ padding: '0.875rem 1rem', fontWeight: 600 }}>AVG LATENCY</th>
-                    <th style={{ padding: '0.875rem 1.5rem', fontWeight: 600 }}>ERROR RATE</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {endpointStats.map((ep, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ padding: '0.875rem 1.5rem' }}>
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            padding: '0.15rem 0.4rem',
-                            borderRadius: '4px',
-                            fontWeight: 700,
-                            fontSize: '0.7rem',
-                            marginRight: '0.6rem',
-                            backgroundColor: ep.method === 'POST' ? '#dbeafe' : '#e0e7ff',
-                            color: ep.method === 'POST' ? '#1d4ed8' : '#3730a3'
-                          }}
-                        >
-                          {ep.method}
-                        </span>
-                        <code style={{ fontFamily: 'monospace', fontWeight: 600 }}>{ep.path}</code>
-                      </td>
-                      <td style={{ padding: '0.875rem 1rem', fontWeight: 600 }}>{ep.total_requests}</td>
-                      <td style={{ padding: '0.875rem 1rem', color: '#64748b' }}>
-                        {ep.avg_latency_ms ? `${ep.avg_latency_ms} ms` : 'N/A'}
-                      </td>
-                      <td style={{ padding: '0.875rem 1.5rem' }}>
-                        <span style={{ color: ep.error_rate > 0 ? '#dc2626' : '#16a34a', fontWeight: 600 }}>
-                          {ep.error_rate}%
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+            {[
+              { label: 'Total API Requests', value: usageSummary?.total_requests ?? 0, icon: Activity, color: '#2563eb' },
+              { label: 'Messages Dispatched', value: usageSummary?.total_messages_sent ?? 0, icon: Send, color: '#16a34a' },
+              { label: 'Delivery Failures', value: usageSummary?.total_messages_failed ?? 0, icon: AlertTriangle, color: '#dc2626' },
+              { label: 'Bulk Campaigns Executed', value: usageSummary?.total_campaigns ?? 0, icon: Zap, color: '#9333ea' }
+            ].map((m, idx) => {
+              const Icon = m.icon;
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '12px',
+                    padding: '1.25rem',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.02)'
+                  }}
+                >
+                  <div className="flex items-center justify-between" style={{ marginBottom: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#64748b' }}>{m.label}</span>
+                    <Icon size={18} color={m.color} />
+                  </div>
+                  <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#0f172a' }}>
+                    {m.value.toLocaleString()}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* ───────────────────────────────────────────────────────────── */}
-      {/* TAB 4: QUICKSTART & INTEGRATION */}
+      {/* TAB 5: QUICKSTART & CRM INTEGRATION GUIDE */}
       {/* ───────────────────────────────────────────────────────────── */}
       {activeTab === 'quickstart' && (
         <div>
@@ -1771,9 +2226,9 @@ print("Response:", response.json())`;
           >
             <div className="flex items-center justify-between" style={{ marginBottom: '1.25rem' }}>
               <div>
-                <h3 style={{ margin: 0, fontWeight: 700, fontSize: '1.1rem' }}>Developer Quickstart Guide</h3>
+                <h3 style={{ margin: 0, fontWeight: 800, fontSize: '1.2rem', color: '#0f172a' }}>CRM & Developer Integration Guide</h3>
                 <p style={{ margin: '0.25rem 0 0 0', color: '#64748b', fontSize: '0.9rem' }}>
-                  Connect your CRM or backend in less than 5 minutes using these code snippets.
+                  Connect your CRM, Edge Functions, HubSpot, or backend in minutes using Client Credentials or API Keys.
                 </p>
               </div>
 
@@ -1797,7 +2252,9 @@ print("Response:", response.json())`;
                       fontWeight: 700,
                       textTransform: 'uppercase',
                       backgroundColor: codeLang === lang ? '#0f172a' : 'transparent',
-                      color: codeLang === lang ? '#ffffff' : '#64748b'
+                      color: codeLang === lang ? '#ffffff' : '#64748b',
+                      border: 'none',
+                      cursor: 'pointer'
                     }}
                   >
                     {lang === 'node' ? 'Node.js' : lang}
@@ -1830,8 +2287,8 @@ print("Response:", response.json())`;
                   <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#ef4444' }} />
                   <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#eab308' }} />
                   <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#22c55e' }} />
-                  <span style={{ marginLeft: '0.5rem', color: '#64748b', fontSize: '0.75rem', fontFamily: 'monospace' }}>
-                    UNAI FLOW WhatsApp REST API
+                  <span style={{ marginLeft: '0.5rem', color: '#94a3b8', fontSize: '0.75rem', fontFamily: 'monospace' }}>
+                    UNAI FLOW WhatsApp Platform API
                   </span>
                 </div>
                 <button
@@ -1843,9 +2300,11 @@ print("Response:", response.json())`;
                     color: '#94a3b8',
                     fontSize: '0.75rem',
                     fontWeight: 600,
-                    padding: '0.25rem 0.5rem',
+                    padding: '0.35rem 0.65rem',
                     borderRadius: '4px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)'
+                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                    border: 'none',
+                    cursor: 'pointer'
                   }}
                 >
                   {copiedCode ? <Check size={12} style={{ color: '#22c55e' }} /> : <Copy size={12} />}
@@ -1859,13 +2318,363 @@ print("Response:", response.json())`;
                   padding: '1.5rem',
                   color: '#e2e8f0',
                   fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-                  fontSize: '0.875rem',
+                  fontSize: '0.85rem',
                   lineHeight: '1.6',
                   overflowX: 'auto'
                 }}
               >
                 {getQuickstartCode()}
               </pre>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* MODAL: CREATE APPLICATION */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {showCreateAppModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            backdropFilter: 'blur(4px)'
+          }}
+          onClick={() => setShowCreateAppModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '16px',
+              padding: '2rem',
+              width: '100%',
+              maxWidth: '560px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)'
+            }}
+          >
+            <div className="flex items-center justify-between" style={{ marginBottom: '1.25rem' }}>
+              <div>
+                <h2 style={{ fontWeight: 800, fontSize: '1.3rem', color: '#0f172a', margin: 0 }}>
+                  Create Developer Application
+                </h2>
+                <p style={{ color: '#64748b', fontSize: '0.85rem', margin: '0.2rem 0 0 0' }}>
+                  Generate Client Credentials and pair an authenticated WhatsApp number for your CRM.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleCreateApp}>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.4rem' }}>
+                  Application Name *
+                </label>
+                <input
+                  value={newAppName}
+                  onChange={(e) => setNewAppName(e.target.value)}
+                  placeholder="e.g. Vekkalam CRM Integration / Zoho Automation"
+                  style={{ width: '100%', padding: '0.7rem 0.85rem', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '0.9rem', outline: 'none' }}
+                  required
+                />
+              </div>
+
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.4rem' }}>
+                  Description (Optional)
+                </label>
+                <input
+                  value={newAppDesc}
+                  onChange={(e) => setNewAppDesc(e.target.value)}
+                  placeholder="e.g. Dispatches customer lead notices and invoices"
+                  style={{ width: '100%', padding: '0.7rem 0.85rem', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '0.9rem', outline: 'none' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.4rem' }}>
+                  Environment
+                </label>
+                <div className="flex gap-3">
+                  {(['live', 'test'] as const).map((env) => (
+                    <button
+                      key={env}
+                      type="button"
+                      onClick={() => setNewAppEnv(env)}
+                      style={{
+                        padding: '0.5rem 1.25rem',
+                        borderRadius: '8px',
+                        fontSize: '0.85rem',
+                        fontWeight: 700,
+                        border: '2px solid',
+                        borderColor: newAppEnv === env ? '#2563eb' : '#e2e8f0',
+                        backgroundColor: newAppEnv === env ? '#eff6ff' : '#ffffff',
+                        color: newAppEnv === env ? '#2563eb' : '#64748b',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {env === 'live' ? '🟢 Live (Production)' : '🟡 Test (Sandbox)'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Associated WhatsApp Number Picker */}
+              <div style={{ marginBottom: '1.25rem' }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: '0.4rem' }}>
+                  <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151' }}>
+                    Associated WhatsApp Mobile Number
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setCustomPhoneInput(!customPhoneInput)}
+                    style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    {customPhoneInput ? 'Choose from connected sessions' : 'Enter custom number'}
+                  </button>
+                </div>
+
+                {!customPhoneInput ? (
+                  <select
+                    value={newAppWhatsAppSessionId}
+                    onChange={(e) => {
+                      const sessId = e.target.value;
+                      setNewAppWhatsAppSessionId(sessId);
+                      const found = whatsappSessions.find(s => s.session_identifier === sessId || s.id === sessId);
+                      if (found?.phone_number) {
+                        setNewAppWhatsAppNumber(found.phone_number);
+                      } else {
+                        setNewAppWhatsAppNumber('');
+                      }
+                    }}
+                    style={{ width: '100%', padding: '0.7rem 0.85rem', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '0.9rem', outline: 'none', backgroundColor: '#fff' }}
+                  >
+                    <option value="">Default Instance (Select device below or leave unlinked)</option>
+                    {whatsappSessions.map((s) => {
+                      const isOnline = s.status === 'CONNECTED' || s.status === 'READY';
+                      return (
+                        <option key={s.id} value={s.session_identifier || s.id}>
+                          {isOnline ? '🟢' : '⚪'} +{s.phone_number || s.id} ({s.status})
+                        </option>
+                      );
+                    })}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    placeholder="e.g. +919876543210"
+                    value={newAppWhatsAppNumber}
+                    onChange={(e) => setNewAppWhatsAppNumber(e.target.value)}
+                    style={{ width: '100%', padding: '0.7rem 0.85rem', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '0.9rem', outline: 'none' }}
+                  />
+                )}
+                <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'block', marginTop: '0.25rem' }}>
+                  Messages dispatched using this Application's credentials will be sent from this WhatsApp number.
+                </span>
+              </div>
+
+              {/* Scopes */}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151', display: 'block', marginBottom: '0.5rem' }}>
+                  Application Permissions & Scopes
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
+                  {['messages:send', 'campaigns:read', 'campaigns:write', 'instances:read', 'channels:read', 'usage:read', 'webhooks:read', 'webhooks:manage'].map((s) => (
+                    <label key={s} className="flex items-center gap-2" style={{ fontSize: '0.8rem', color: '#374151', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={newAppScopes.includes(s)}
+                        onChange={() => {
+                          setNewAppScopes((prev) =>
+                            prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
+                          );
+                        }}
+                      />
+                      <code style={{ fontSize: '0.75rem' }}>{s}</code>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {createAppError && (
+                <div
+                  style={{
+                    marginBottom: '1rem',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '8px',
+                    backgroundColor: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    color: '#b91c1c',
+                    fontSize: '0.85rem',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.5rem',
+                  }}
+                >
+                  <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: '0.15rem' }} />
+                  <div>
+                    <strong style={{ display: 'block', fontWeight: 700 }}>Creation Failed</strong>
+                    <span>{createAppError}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-3" style={{ justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateAppModal(false);
+                    setCreateAppError(null);
+                  }}
+                  style={{ padding: '0.65rem 1.25rem', borderRadius: '8px', fontWeight: 600, fontSize: '0.875rem', backgroundColor: '#f1f5f9', color: '#475569', border: 'none', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingApp}
+                  style={{
+                    padding: '0.65rem 1.25rem',
+                    borderRadius: '8px',
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    background: creatingApp
+                      ? '#93c5fd'
+                      : 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
+                    color: '#fff',
+                    border: 'none',
+                    cursor: creatingApp ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                  }}
+                >
+                  {creatingApp ? 'Generating Credentials...' : 'Create Application'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* MODAL: LIVE DIAGNOSTIC CONNECTION TEST */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {diagnosticModalData && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            backdropFilter: 'blur(4px)'
+          }}
+          onClick={() => setDiagnosticModalData(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '16px',
+              padding: '2rem',
+              width: '100%',
+              maxWidth: '560px',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)'
+            }}
+          >
+            <div className="flex items-center justify-between" style={{ marginBottom: '1.25rem' }}>
+              <div className="flex items-center gap-2">
+                <Activity size={22} color="#2563eb" />
+                <h3 style={{ fontWeight: 800, fontSize: '1.2rem', color: '#0f172a', margin: 0 }}>
+                  Diagnostic Connection Report
+                </h3>
+              </div>
+              <span
+                style={{
+                  backgroundColor: diagnosticModalData.status === 'healthy' ? '#dcfce7' : diagnosticModalData.status === 'warning' ? '#fef3c7' : '#fee2e2',
+                  color: diagnosticModalData.status === 'healthy' ? '#15803d' : diagnosticModalData.status === 'warning' ? '#92400e' : '#b91c1c',
+                  padding: '0.25rem 0.65rem',
+                  borderRadius: '999px',
+                  fontSize: '0.75rem',
+                  fontWeight: 800,
+                  textTransform: 'uppercase'
+                }}
+              >
+                {diagnosticModalData.status}
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gap: '0.75rem', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 1rem', backgroundColor: '#f8fafc', borderRadius: '8px' }}>
+                <span style={{ color: '#64748b' }}>Application Status:</span>
+                <span style={{ fontWeight: 700, color: diagnosticModalData.is_active ? '#15803d' : '#dc2626' }}>
+                  {diagnosticModalData.is_active ? 'Active' : 'Suspended'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 1rem', backgroundColor: '#f8fafc', borderRadius: '8px' }}>
+                <span style={{ color: '#64748b' }}>Credentials & Auth:</span>
+                <span style={{ fontWeight: 700, color: diagnosticModalData.auth_valid ? '#15803d' : '#dc2626' }}>
+                  {diagnosticModalData.auth_valid ? 'Valid & Ready (PASS)' : 'Invalid'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 1rem', backgroundColor: '#f8fafc', borderRadius: '8px' }}>
+                <span style={{ color: '#64748b' }}>Associated WhatsApp:</span>
+                <span style={{ fontWeight: 700, color: diagnosticModalData.whatsapp_connected ? '#15803d' : '#d97706' }}>
+                  {diagnosticModalData.whatsapp_number ? `+${diagnosticModalData.whatsapp_number.replace(/^\+/, '')}` : 'Default / Not Set'} {diagnosticModalData.whatsapp_connected ? '(Ready)' : '(Device Offline)'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 1rem', backgroundColor: '#f8fafc', borderRadius: '8px' }}>
+                <span style={{ color: '#64748b' }}>Roundtrip Latency:</span>
+                <span style={{ fontWeight: 700, color: '#0f172a', fontFamily: 'monospace' }}>
+                  {diagnosticModalData.latency_ms} ms
+                </span>
+              </div>
+            </div>
+
+            {!diagnosticModalData.whatsapp_connected && (
+              <div
+                style={{
+                  backgroundColor: '#fffbeb',
+                  border: '1px solid #fef3c7',
+                  borderRadius: '8px',
+                  padding: '0.75rem 1rem',
+                  marginBottom: '1.5rem',
+                  fontSize: '0.85rem',
+                  color: '#92400e'
+                }}
+              >
+                ⚠️ <strong>WhatsApp Device Offline:</strong> Your application credentials are authenticated, but the associated WhatsApp number is not actively connected to the gateway. Go to the WhatsApp tab to pair the device.
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => setDiagnosticModalData(null)}
+                style={{
+                  padding: '0.65rem 1.5rem',
+                  borderRadius: '8px',
+                  backgroundColor: '#0f172a',
+                  color: '#ffffff',
+                  fontWeight: 600,
+                  fontSize: '0.875rem',
+                  border: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                Close Report
+              </button>
             </div>
           </div>
         </div>
@@ -2015,7 +2824,9 @@ print("Response:", response.json())`;
                     border: '1px solid #cbd5e1',
                     color: '#64748b',
                     fontWeight: 600,
-                    fontSize: '0.875rem'
+                    fontSize: '0.875rem',
+                    cursor: 'pointer',
+                    background: '#fff'
                   }}
                 >
                   Cancel
@@ -2028,7 +2839,9 @@ print("Response:", response.json())`;
                     backgroundColor: '#2563eb',
                     color: '#ffffff',
                     fontWeight: 600,
-                    fontSize: '0.875rem'
+                    fontSize: '0.875rem',
+                    cursor: 'pointer',
+                    border: 'none'
                   }}
                 >
                   Create Key
@@ -2107,7 +2920,7 @@ print("Response:", response.json())`;
                     { id: 'campaign.completed', label: 'campaign.completed — All recipients processed' },
                     { id: 'campaign.cancelled', label: 'campaign.cancelled — Campaign halted' }
                   ].map((ev) => (
-                    <label key={ev.id} className="flex items-center gap-2" style={{ fontSize: '0.85rem', color: '#334155' }}>
+                    <label key={ev.id} className="flex items-center gap-2" style={{ fontSize: '0.85rem', color: '#334155', cursor: 'pointer' }}>
                       <input
                         type="checkbox"
                         checked={newWebhookEvents.includes(ev.id)}
@@ -2132,7 +2945,9 @@ print("Response:", response.json())`;
                     border: '1px solid #cbd5e1',
                     color: '#64748b',
                     fontWeight: 600,
-                    fontSize: '0.875rem'
+                    fontSize: '0.875rem',
+                    cursor: 'pointer',
+                    background: '#fff'
                   }}
                 >
                   Cancel
@@ -2145,7 +2960,9 @@ print("Response:", response.json())`;
                     backgroundColor: '#2563eb',
                     color: '#ffffff',
                     fontWeight: 600,
-                    fontSize: '0.875rem'
+                    fontSize: '0.875rem',
+                    cursor: 'pointer',
+                    border: 'none'
                   }}
                 >
                   Register Webhook

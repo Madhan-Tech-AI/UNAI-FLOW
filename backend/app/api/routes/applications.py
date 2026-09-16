@@ -10,6 +10,7 @@ from app.schemas.application import (
     ApplicationResponse,
     ApplicationCreatedResponse,
     ApplicationCredentials,
+    ApplicationTestConnectionResponse,
 )
 
 router = APIRouter(prefix="/v1/applications", tags=["Applications"])
@@ -27,23 +28,31 @@ async def create_application(
     Generates:
     - A unique client_id (non-secret identifier)
     - An API key (shown ONCE — must be copied immediately)
+    - A Client Secret (shown ONCE — must be copied immediately)
+    - An OAuth Client ID & Secret
     - A webhook signing secret
-
-    The raw API key is returned in this response and will NEVER be shown again.
-    Supports idempotency via the 'Idempotency-Key' HTTP header or request body.
     """
     effective_idempotency_key = idempotency_key or body.idempotency_key
 
-    application, raw_api_key = application_service.create_application(
+    created_tuple = application_service.create_application(
         organization_id=ctx.organization_id,
         name=body.name,
         description=body.description,
         environment=body.environment,
         scopes=body.scopes,
         default_instance_id=body.default_instance_id,
+        whatsapp_number=body.whatsapp_number,
+        whatsapp_session_id=body.whatsapp_session_id,
         rate_limit_override=body.rate_limit_override,
         idempotency_key=effective_idempotency_key,
     )
+
+    if len(created_tuple) == 4:
+        application, raw_api_key, raw_client_secret, raw_oauth_secret = created_tuple
+    else:
+        application, raw_api_key = created_tuple[0], created_tuple[1]
+        raw_client_secret = application.get("client_secret", "unai_sec_generated")
+        raw_oauth_secret = application.get("oauth_client_secret")
 
     return ApplicationCreatedResponse(
         id=application["id"],
@@ -54,6 +63,10 @@ async def create_application(
         environment=application["environment"],
         status=application["status"],
         default_instance_id=application.get("default_instance_id"),
+        whatsapp_number=application.get("whatsapp_number"),
+        whatsapp_session_id=application.get("whatsapp_session_id"),
+        client_secret_preview=application.get("client_secret_preview"),
+        oauth_client_id=application.get("oauth_client_id"),
         scopes=application.get("scopes", []),
         api_key_count=application.get("_api_key_count", 1),
         webhook_count=application.get("_webhook_count", 0),
@@ -61,6 +74,8 @@ async def create_application(
         updated_at=application.get("updated_at"),
         raw_api_key=raw_api_key,
         api_key_prefix=application.get("_api_key_prefix", ""),
+        client_secret=raw_client_secret,
+        oauth_client_secret=raw_oauth_secret,
         webhook_secret=application.get("webhook_secret", ""),
     )
 
@@ -99,7 +114,7 @@ async def list_applications(
         )
 
 
-@router.get("/{app_id}")
+@router.get("/{app_id}", response_model=ApplicationResponse)
 async def get_application(
     app_id: str,
     ctx: AuthContext = Depends(get_auth_context),
@@ -108,19 +123,21 @@ async def get_application(
     return application_service.get_application(ctx.organization_id, app_id)
 
 
-@router.patch("/{app_id}")
+@router.patch("/{app_id}", response_model=ApplicationResponse)
 async def update_application(
     app_id: str,
     body: ApplicationUpdate,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Update application metadata (name, description, default instance, status)."""
+    """Update application metadata (name, description, default instance, WhatsApp number, status)."""
     return application_service.update_application(
         organization_id=ctx.organization_id,
-        app_id=app_id,
+        application_id=app_id,
         name=body.name,
         description=body.description,
         default_instance_id=body.default_instance_id,
+        whatsapp_number=body.whatsapp_number,
+        whatsapp_session_id=body.whatsapp_session_id,
         status=body.status,
     )
 
@@ -157,6 +174,36 @@ async def regenerate_api_key(
         "name": key_record.get("name"),
         "message": "All previous keys have been revoked. Copy this new key — it will not be shown again.",
     }
+
+
+@router.post("/{app_id}/regenerate-secret")
+async def regenerate_client_secret(
+    app_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """
+    Rotates the Client Secret for an application.
+    Returns the new raw Client Secret once. All previous secrets become invalid.
+    """
+    raw_secret = application_service.regenerate_client_secret(ctx.organization_id, app_id)
+    return {
+        "success": True,
+        "client_secret": raw_secret,
+        "preview": f"unai_sec_••••••••••••{raw_secret[-4:]}",
+        "message": "Client Secret rotated successfully. Copy this secret now — it will NEVER be displayed again."
+    }
+
+
+@router.post("/{app_id}/test-connection", response_model=ApplicationTestConnectionResponse)
+async def test_application_connection(
+    app_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """
+    Executes live diagnostics on an application for the Developer Console UI.
+    Verifies application status, API credentials, and WhatsApp mobile connection.
+    """
+    return application_service.test_application_connection(ctx.organization_id, app_id)
 
 
 @router.get("/{app_id}/credentials")

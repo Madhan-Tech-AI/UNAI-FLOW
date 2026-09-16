@@ -338,6 +338,14 @@ try:
 except Exception as e:
     logger.warning(f"Applications router unavailable (non-fatal): {e}")
 
+# Developer & CRM platform API router (unified message send, auth verify, WhatsApp status)
+try:
+    from app.api.routes import developer_api as v1_developer_api
+    app.include_router(v1_developer_api.router)
+except Exception as e:
+    logger.warning(f"Developer API router unavailable (non-fatal): {e}")
+
+
 @app.get("/")
 def root():
     return {
@@ -346,6 +354,7 @@ def root():
         "docs_url": "/docs",
         "openapi_url": "/openapi.json"
     }
+
 
 @app.get("/health")
 def health():

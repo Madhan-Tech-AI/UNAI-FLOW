@@ -1,12 +1,32 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List, Literal
 from datetime import datetime
+
+SUPPORTED_SCOPES = [
+    "messages:send",
+    "campaigns:write",
+    "campaigns:read",
+    "instances:read",
+    "channels:read",
+    "usage:read",
+    "webhooks:read",
+    "webhooks:manage",
+]
 
 
 class ApplicationCreate(BaseModel):
-    name: str = Field(..., description="Descriptive label for this application/integration")
-    description: Optional[str] = Field(None, description="Optional notes about this integration")
-    environment: str = Field(
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Descriptive label for this application/integration"
+    )
+    description: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Optional notes about this integration"
+    )
+    environment: Literal["live", "test"] = Field(
         default="live",
         description="API environment: 'live' for production or 'test' for sandbox"
     )
@@ -18,6 +38,8 @@ class ApplicationCreate(BaseModel):
             "campaigns:read",
             "campaigns:write",
             "usage:read",
+            "webhooks:read",
+            "webhooks:manage",
         ],
         description="Permission scopes for the auto-generated API key"
     )
@@ -27,15 +49,51 @@ class ApplicationCreate(BaseModel):
     )
     rate_limit_override: Optional[int] = Field(
         None,
+        ge=1,
+        le=10000,
         description="Custom rate limit in requests per minute for this application's API key"
     )
+    idempotency_key: Optional[str] = Field(
+        None,
+        description="Client idempotency key to prevent duplicate creation"
+    )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("Application name cannot be blank or whitespace only.")
+        return trimmed
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError("At least one permission scope must be selected.")
+        invalid = [s for s in v if s not in SUPPORTED_SCOPES]
+        if invalid:
+            raise ValueError(
+                f"Unsupported scope(s): {', '.join(invalid)}. Supported scopes: {', '.join(SUPPORTED_SCOPES)}"
+            )
+        return list(set(v))
 
 
 class ApplicationUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
     default_instance_id: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[Literal["active", "suspended", "revoked"]] = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            trimmed = v.strip()
+            if not trimmed:
+                raise ValueError("Application name cannot be blank.")
+            return trimmed
+        return v
 
 
 class ApplicationResponse(BaseModel):

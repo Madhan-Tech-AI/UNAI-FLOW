@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from typing import Optional
 from app.api.dependencies import AuthContext, get_auth_context
 from app.services.application_service import application_service
@@ -17,6 +17,7 @@ router = APIRouter(prefix="/v1/applications", tags=["Applications"])
 async def create_application(
     body: ApplicationCreate,
     ctx: AuthContext = Depends(get_auth_context),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
     """
     Create a new Application / Integration.
@@ -27,7 +28,10 @@ async def create_application(
     - A webhook signing secret
 
     The raw API key is returned in this response and will NEVER be shown again.
+    Supports idempotency via the 'Idempotency-Key' HTTP header or request body.
     """
+    effective_idempotency_key = idempotency_key or body.idempotency_key
+
     application, raw_api_key = application_service.create_application(
         organization_id=ctx.organization_id,
         name=body.name,
@@ -36,6 +40,7 @@ async def create_application(
         scopes=body.scopes,
         default_instance_id=body.default_instance_id,
         rate_limit_override=body.rate_limit_override,
+        idempotency_key=effective_idempotency_key,
     )
 
     return ApplicationCreatedResponse(

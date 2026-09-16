@@ -1,34 +1,87 @@
 import time
 import asyncio
+import secrets
+import logging
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, JSONResponse
 from app.services.usage_service import usage_service
 from app.core.logging import org_id_ctx, request_id_ctx, app_id_ctx
+
+logger = logging.getLogger("unai_whatsapp_gateway")
 
 
 class ApiLoggingMiddleware(BaseHTTPMiddleware):
     """
-    Middleware that automatically logs every public /v1/ API call
-    into the api_request_log database table for usage metering,
-    latency tracking, and developer analytics.
+    Middleware that automatically assigns a unique correlation request ID (X-Request-ID),
+    tracks latency, catches unhandled route errors inside CORS boundary to prevent
+    CORS-obscured failures, and logs every public /v1/ API call into api_request_log.
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
+        req_id = request.headers.get("x-request-id") or f"req_{secrets.token_hex(8)}"
+        request_id_ctx.set(req_id)
+
         path = request.url.path
 
-        # Only track /v1/ public API endpoints (skip docs, openapi, root health)
+        # Handle non-v1 paths with basic error containment
         if not path.startswith("/v1/"):
-            return await call_next(request)
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                logger.error(f"Unhandled error on {request.method} {path} (Request ID: {req_id}): {exc}", exc_info=True)
+                return JSONResponse(
+                    status_code=500,
+                    headers={"X-Request-ID": req_id},
+                    content={"error": {"code": "INTERNAL_SERVER_ERROR", "message": "Internal Server Error", "request_id": req_id}}
+                )
+            response.headers["X-Request-ID"] = req_id
+            return response
 
         start_time = time.monotonic()
-        response = await call_next(request)
+
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            latency_ms = int((time.monotonic() - start_time) * 1000)
+            logger.error(
+                f"Unhandled 500 error on {request.method} {path} (Request ID: {req_id}): {exc}",
+                exc_info=True
+            )
+            # Construct a safe JSON response guaranteed to be wrapped by CORSMiddleware
+            origin = request.headers.get("origin")
+            err_headers = {
+                "X-Request-ID": req_id,
+                "Access-Control-Expose-Headers": "*",
+            }
+            if origin:
+                err_headers["Access-Control-Allow-Origin"] = origin
+                err_headers["Access-Control-Allow-Credentials"] = "true"
+                err_headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD"
+                err_headers["Access-Control-Allow-Headers"] = "*"
+
+            response = JSONResponse(
+                status_code=500,
+                headers=err_headers,
+                content={
+                    "error": {
+                        "code": "INTERNAL_SERVER_ERROR",
+                        "message": "An unexpected server error occurred. Please try again or contact support.",
+                        "request_id": req_id,
+                        "details": {}
+                    }
+                }
+            )
+
         latency_ms = int((time.monotonic() - start_time) * 1000)
+
+        # Attach correlation ID to every response
+        response.headers["X-Request-ID"] = req_id
+        response.headers["Access-Control-Expose-Headers"] = "*"
 
         # Contextual metadata extracted from contextvars & headers
         org_id = org_id_ctx.get(None)
         app_id = app_id_ctx.get(None)
-        req_id = request_id_ctx.get(None) or request.headers.get("x-request-id")
         idempotency_key = request.headers.get("idempotency-key")
         user_agent = request.headers.get("user-agent")
         ip = request.client.host if request.client else None

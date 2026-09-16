@@ -1,9 +1,11 @@
 -- ==============================================================================
--- UNAI FLOW: Fix-up Migration for Applications Platform
+-- UNAI FLOW: Fix-up Migration for Applications Platform & Multi-Tenancy
 -- Fixes:
 --   1. Adds missing revoked_at column to api_keys (upgrade from old schema)
 --   2. Adds missing columns to api_keys (description, rate_limit_override, environment)
---   3. Drops hard FK on applications.organization_id
+--   3. Drops rigid foreign keys referencing public.organizations(id)
+--      (because UNAI FLOW uses auth.users.id as organization_id)
+--   4. Configures RLS policies for organizations table
 -- Safe to run multiple times (all operations are idempotent).
 -- ==============================================================================
 
@@ -41,9 +43,11 @@ BEGIN
 END $fix_keys$;
 
 
--- 2. FIX APPLICATIONS: Remove hard FK on organization_id
-DO $fix_apps$
+-- 2. DROP RIGID ORGANIZATIONS FOREIGN KEYS
+-- Allows auth.users.id to be used safely as organization_id without FK failures
+DO $drop_fks$
 BEGIN
+  -- Drop FK on applications
   IF EXISTS (
     SELECT 1 FROM information_schema.table_constraints
     WHERE constraint_name = 'applications_organization_id_fkey'
@@ -52,4 +56,61 @@ BEGIN
   ) THEN
     ALTER TABLE public.applications DROP CONSTRAINT applications_organization_id_fkey;
   END IF;
-END $fix_apps$;
+
+  -- Drop FK on api_keys
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE constraint_name = 'api_keys_organization_id_fkey'
+      AND table_schema = 'public'
+      AND table_name = 'api_keys'
+  ) THEN
+    ALTER TABLE public.api_keys DROP CONSTRAINT api_keys_organization_id_fkey;
+  END IF;
+
+  -- Drop FK on webhooks
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE constraint_name = 'webhooks_organization_id_fkey'
+      AND table_schema = 'public'
+      AND table_name = 'webhooks'
+  ) THEN
+    ALTER TABLE public.webhooks DROP CONSTRAINT webhooks_organization_id_fkey;
+  END IF;
+
+  -- Drop FK on api_campaigns
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE constraint_name = 'api_campaigns_organization_id_fkey'
+      AND table_schema = 'public'
+      AND table_name = 'api_campaigns'
+  ) THEN
+    ALTER TABLE public.api_campaigns DROP CONSTRAINT api_campaigns_organization_id_fkey;
+  END IF;
+
+  -- Drop FK on whatsapp_instances
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE constraint_name = 'whatsapp_instances_organization_id_fkey'
+      AND table_schema = 'public'
+      AND table_name = 'whatsapp_instances'
+  ) THEN
+    ALTER TABLE public.whatsapp_instances DROP CONSTRAINT whatsapp_instances_organization_id_fkey;
+  END IF;
+
+  -- Drop FK on social_connections
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE constraint_name = 'social_connections_organization_id_fkey'
+      AND table_schema = 'public'
+      AND table_name = 'social_connections'
+  ) THEN
+    ALTER TABLE public.social_connections DROP CONSTRAINT social_connections_organization_id_fkey;
+  END IF;
+END $drop_fks$;
+
+
+-- 3. ENSURE ORGANIZATIONS TABLE POLICIES
+ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Enable all access for organizations" ON public.organizations;
+CREATE POLICY "Enable all access for organizations" ON public.organizations
+  FOR ALL USING (true);

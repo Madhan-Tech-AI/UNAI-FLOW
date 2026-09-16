@@ -1,10 +1,15 @@
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone
+import time
+import secrets
 from app.database.supabase import get_supabase_client
 from app.core.security import generate_client_id, generate_api_key, hash_api_key
-from app.core.exceptions import ApplicationNotFoundException, ApplicationSuspendedException
+from app.core.exceptions import (
+    GatewayException,
+    ApplicationNotFoundException,
+    ApplicationSuspendedException,
+)
 from app.core.logging import logger
-import secrets
 
 
 class ApplicationService:
@@ -16,6 +21,28 @@ class ApplicationService:
 
     def __init__(self):
         self.sb = get_supabase_client()
+        # In-memory idempotency cache: { "org_id:idempotency_key": (application_dict, raw_api_key, timestamp) }
+        self._idempotency_cache: Dict[str, Tuple[Dict[str, Any], str, float]] = {}
+
+    def ensure_organization(self, organization_id: str, name: Optional[str] = None) -> None:
+        """
+        Ensures that an organization record exists for the given organization_id.
+        In UNAI FLOW, dashboard users have organization_id = auth.users.id.
+        Auto-provisions the organization row if not already present to prevent
+        foreign key constraint violations across child tables.
+        """
+        if not organization_id:
+            return
+        try:
+            res = self.sb.table("organizations").select("id").eq("id", organization_id).limit(1).execute()
+            if not res.data:
+                self.sb.table("organizations").upsert({
+                    "id": organization_id,
+                    "name": name or "Default Organization"
+                }).execute()
+                logger.info(f"Auto-provisioned organization record for org_id: {organization_id}")
+        except Exception as e:
+            logger.warning(f"Note on ensuring organization record ({organization_id}): {e}")
 
     def create_application(
         self,
@@ -26,30 +53,44 @@ class ApplicationService:
         scopes: Optional[List[str]] = None,
         default_instance_id: Optional[str] = None,
         rate_limit_override: Optional[int] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Tuple[Dict[str, Any], str]:
         """
-        Creates a new Application with auto-generated credentials.
+        Creates a new Application with auto-generated credentials in an atomic manner.
 
         Returns:
             Tuple of (application_record, raw_api_key)
             The raw_api_key is shown ONCE and never stored.
         """
+        # 1. Check idempotency cache (120-second window)
+        now_ts = time.time()
+        if idempotency_key:
+            cache_key = f"{organization_id}:{idempotency_key}"
+            if cache_key in self._idempotency_cache:
+                cached_app, cached_key, cached_time = self._idempotency_cache[cache_key]
+                if now_ts - cached_time < 120:
+                    logger.info(f"Returning cached application response for idempotency key: {idempotency_key}")
+                    return cached_app, cached_key
+
+        # 2. Guarantee organization exists in database
+        self.ensure_organization(organization_id)
+
         if scopes is None:
             scopes = [
                 "instances:read", "channels:read", "messages:send",
                 "campaigns:read", "campaigns:write", "usage:read"
             ]
 
-        # Generate application identity
+        # Generate application identity & secrets
         client_id = generate_client_id()
         webhook_secret = f"whsec_{secrets.token_hex(16)}"
 
-        # Create the application record
+        # Prepare the application record
         app_record = {
             "organization_id": organization_id,
             "client_id": client_id,
-            "name": name,
-            "description": description,
+            "name": name.strip(),
+            "description": description.strip() if description else None,
             "environment": environment,
             "status": "active",
             "default_instance_id": default_instance_id,
@@ -59,40 +100,72 @@ class ApplicationService:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        res = self.sb.table("applications").insert(app_record).execute()
-        if not res.data:
-            raise Exception("Failed to create application in database.")
+        application = None
+        raw_key = None
 
-        application = res.data[0]
+        # 3. Transaction-safe execution with rollback on credential failure
+        try:
+            res = self.sb.table("applications").insert(app_record).execute()
+            if not res.data:
+                raise GatewayException(
+                    code="APPLICATION_CREATION_FAILED",
+                    message="Failed to insert application into database.",
+                    status_code=500
+                )
+            application = res.data[0]
 
-        # Auto-generate the first API key for this application
-        raw_key, prefix, key_hash = generate_api_key(environment)
+            # Generate first API key
+            raw_key, prefix, key_hash = generate_api_key(environment)
+            key_record = {
+                "organization_id": organization_id,
+                "application_id": application["id"],
+                "name": f"{name} — API Key",
+                "description": f"Auto-generated key for application '{name}'",
+                "prefix": prefix,
+                "key_hash": key_hash,
+                "scopes": scopes,
+                "environment": environment,
+                "rate_limit_override": rate_limit_override,
+                "expires_at": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
 
-        expires_at = None  # Application keys don't expire by default
+            key_res = self.sb.table("api_keys").insert(key_record).execute()
+            if not key_res.data:
+                raise GatewayException(
+                    code="APPLICATION_KEY_CREATION_FAILED",
+                    message="Failed to create API key for the new application.",
+                    status_code=500
+                )
 
-        key_record = {
-            "organization_id": organization_id,
-            "application_id": application["id"],
-            "name": f"{name} — API Key",
-            "description": f"Auto-generated key for application '{name}'",
-            "prefix": prefix,
-            "key_hash": key_hash,
-            "scopes": scopes,
-            "environment": environment,
-            "rate_limit_override": rate_limit_override,
-            "expires_at": expires_at,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+            application["_api_key_prefix"] = prefix
+            application["_api_key_count"] = 1
+            application["_webhook_count"] = 0
 
-        key_res = self.sb.table("api_keys").insert(key_record).execute()
-        if not key_res.data:
-            logger.error(f"Failed to create API key for application {application['id']}")
+            # Store in idempotency cache
+            if idempotency_key:
+                self._idempotency_cache[f"{organization_id}:{idempotency_key}"] = (application, raw_key, now_ts)
 
-        application["_api_key_prefix"] = prefix
-        application["_api_key_count"] = 1
-        application["_webhook_count"] = 0
+            logger.info(f"Successfully created application {application['id']} for org {organization_id}")
+            return application, raw_key
 
-        return application, raw_key
+        except Exception as e:
+            # ROLLBACK: Do not leave an orphan application if credential creation fails
+            if application and "id" in application:
+                try:
+                    self.sb.table("applications").delete().eq("id", application["id"]).execute()
+                    logger.warning(f"Rolled back orphan application {application['id']} due to error: {e}")
+                except Exception as rollback_err:
+                    logger.error(f"Failed to rollback application {application['id']}: {rollback_err}")
+
+            if isinstance(e, GatewayException):
+                raise e
+            logger.error(f"Unhandled error creating application: {e}", exc_info=True)
+            raise GatewayException(
+                code="APPLICATION_CREATION_FAILED",
+                message=f"Unable to create application. Internal error: {str(e)}",
+                status_code=500
+            )
 
     def list_applications(self, organization_id: str) -> List[Dict[str, Any]]:
         """Lists all applications for an organization with key/webhook counts."""
@@ -281,7 +354,11 @@ class ApplicationService:
 
         key_res = self.sb.table("api_keys").insert(key_record).execute()
         if not key_res.data:
-            raise Exception("Failed to create replacement API key.")
+            raise GatewayException(
+                code="KEY_REGENERATION_FAILED",
+                message="Failed to create replacement API key.",
+                status_code=500
+            )
 
         return key_res.data[0], raw_key
 

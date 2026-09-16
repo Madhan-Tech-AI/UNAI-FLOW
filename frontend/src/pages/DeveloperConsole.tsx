@@ -105,13 +105,15 @@ export default function DeveloperConsole() {
   const [apps, setApps] = useState<ApplicationItem[]>([]);
   const [appsLoading, setAppsLoading] = useState(false);
   const [creatingApp, setCreatingApp] = useState(false);
+  const [createAppError, setCreateAppError] = useState<string | null>(null);
   const [showCreateAppModal, setShowCreateAppModal] = useState(false);
   const [newAppName, setNewAppName] = useState('');
   const [newAppDesc, setNewAppDesc] = useState('');
   const [newAppEnv, setNewAppEnv] = useState<'live' | 'test'>('live');
   const [newAppScopes, setNewAppScopes] = useState<string[]>([
     'instances:read', 'channels:read', 'messages:send',
-    'campaigns:read', 'campaigns:write', 'usage:read'
+    'campaigns:read', 'campaigns:write', 'usage:read',
+    'webhooks:read', 'webhooks:manage'
   ]);
   const [newlyCreatedApp, setNewlyCreatedApp] = useState<{
     client_id: string;
@@ -263,14 +265,20 @@ export default function DeveloperConsole() {
     e.preventDefault();
     if (!newAppName.trim()) return;
     setCreatingApp(true);
+    setCreateAppError(null);
     try {
+      const idempotencyKey = `app_create_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       const res = await fetchApi('/v1/applications', {
         method: 'POST',
+        headers: {
+          'Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify({
-          name: newAppName,
-          description: newAppDesc || undefined,
+          name: newAppName.trim(),
+          description: newAppDesc.trim() || undefined,
           environment: newAppEnv,
           scopes: newAppScopes,
+          idempotency_key: idempotencyKey,
         })
       });
       setNewlyCreatedApp({
@@ -282,9 +290,10 @@ export default function DeveloperConsole() {
       setShowCreateAppModal(false);
       setNewAppName('');
       setNewAppDesc('');
+      setCreateAppError(null);
       loadApps();
     } catch (err: any) {
-      alert(err?.message || 'Failed to create application');
+      setCreateAppError(err?.message || 'Failed to create application');
     } finally {
       setCreatingApp(false);
     }
@@ -1025,10 +1034,36 @@ print("Response:", response.json())`;
                   ))}
                 </div>
               </div>
+              {createAppError && (
+                <div
+                  style={{
+                    marginBottom: '1rem',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '10px',
+                    backgroundColor: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    color: '#b91c1c',
+                    fontSize: '0.85rem',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.5rem',
+                  }}
+                >
+                  <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: '0.15rem' }} />
+                  <div>
+                    <strong style={{ display: 'block', fontWeight: 700 }}>Application Creation Failed</strong>
+                    <span>{createAppError}</span>
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3" style={{ justifyContent: 'flex-end' }}>
                 <button
                   type="button"
-                  onClick={() => setShowCreateAppModal(false)}
+                  onClick={() => {
+                    setShowCreateAppModal(false);
+                    setCreateAppError(null);
+                  }}
                   style={{ padding: '0.65rem 1.25rem', borderRadius: '10px', fontWeight: 600, fontSize: '0.875rem', backgroundColor: '#f1f5f9', color: '#475569' }}
                 >
                   Cancel

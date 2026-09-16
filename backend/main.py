@@ -1,11 +1,15 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from routers import auth, automations, connections, youtube, email_campaigns
 from app.workers.email_worker import email_worker
 import os
+import re
 import asyncio
 import logging
+from typing import Any, Optional
 from contextlib import asynccontextmanager
 
 # Try importing optional gateway components — these may fail if
@@ -17,11 +21,12 @@ except ImportError:
     HAS_GATEWAY_EXCEPTIONS = False
 
 try:
-    from app.core.logging import setup_structured_logging, logger
+    from app.core.logging import setup_structured_logging, logger, request_id_ctx
     setup_structured_logging()
 except ImportError:
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
+    request_id_ctx = None
 
 # PublishingWorker is optional — it polls whatsapp_publish_jobs and
 # requires WhatsAppWebSessionProvider which may not be installable.
@@ -101,24 +106,169 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Global Exception Handler for Gateway domain exceptions
+# ------------------------------------------------------------------------------
+# Production CORS Configuration
+# ------------------------------------------------------------------------------
+# Build canonical allowed origins list from environment and hard-coded defaults
+default_origins = [
+    "https://unai-flow-rc39.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+env_origins = os.getenv("CORS_ORIGINS", "")
+allowed_origins = list(default_origins)
+if env_origins:
+    for item in env_origins.split(","):
+        cleaned = item.strip()
+        if cleaned and cleaned not in allowed_origins:
+            allowed_origins.append(cleaned)
+
+VERCEL_PREVIEW_REGEX = re.compile(r"^https://.*\.vercel\.app$")
+
+
+def _is_origin_allowed(origin: Optional[str]) -> bool:
+    if not origin:
+        return False
+    if origin in allowed_origins:
+        return True
+    if VERCEL_PREVIEW_REGEX.match(origin):
+        return True
+    return False
+
+
+def _build_cors_error_response(
+    request: Request,
+    status_code: int,
+    code: str,
+    message: str,
+    details: Any = None
+) -> JSONResponse:
+    """
+    Builds a standard JSON error response and guarantees CORS headers are present,
+    preventing the browser from obscuring API errors behind 'CORS Policy' blocks.
+    """
+    req_id = ""
+    if request_id_ctx:
+        try:
+            req_id = request_id_ctx.get("")
+        except Exception:
+            pass
+    if not req_id:
+        req_id = request.headers.get("x-request-id", "")
+
+    headers = {
+        "X-Request-ID": req_id,
+        "Access-Control-Expose-Headers": "*",
+    }
+
+    origin = request.headers.get("origin")
+    if origin and _is_origin_allowed(origin):
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD"
+        headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, Idempotency-Key, X-API-Key, X-Request-ID, Accept"
+        )
+
+    return JSONResponse(
+        status_code=status_code,
+        headers=headers,
+        content={
+            "error": {
+                "code": code,
+                "message": message,
+                "request_id": req_id,
+                "details": details or {}
+            }
+        }
+    )
+
+
+# ------------------------------------------------------------------------------
+# Global Exception Handlers (Always attach CORS headers)
+# ------------------------------------------------------------------------------
 if HAS_GATEWAY_EXCEPTIONS:
     @app.exception_handler(GatewayException)
     async def gateway_exception_handler(request: Request, exc: GatewayException):
-        return JSONResponse(
+        logger.warning(f"GatewayException [{exc.code}] {exc.message} on {request.method} {request.url.path}")
+        return _build_cors_error_response(
+            request,
             status_code=exc.status_code,
-            content={
-                "error": {
-                    "code": exc.code,
-                    "message": exc.message,
-                    "details": exc.details
-                }
-            }
+            code=exc.code,
+            message=exc.message,
+            details=exc.details
         )
 
-# API Logging Middleware for developer usage analytics & metering
-# NOTE: This must be added BEFORE CORSMiddleware because FastAPI's
-# middleware stack is LIFO — last added = runs first (outermost).
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    code_map = {
+        400: "BAD_REQUEST",
+        401: "UNAUTHORIZED",
+        403: "FORBIDDEN",
+        404: "NOT_FOUND",
+        405: "METHOD_NOT_ALLOWED",
+        409: "CONFLICT",
+        429: "RATE_LIMITED",
+        500: "INTERNAL_SERVER_ERROR",
+        502: "BAD_GATEWAY",
+        503: "SERVICE_UNAVAILABLE",
+    }
+    code = code_map.get(exc.status_code, f"HTTP_{exc.status_code}")
+    message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    return _build_cors_error_response(
+        request,
+        status_code=exc.status_code,
+        code=code,
+        message=message
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    clean_errors = []
+    for err in exc.errors():
+        clean_errors.append({
+            "loc": err.get("loc"),
+            "msg": err.get("msg"),
+            "type": err.get("type"),
+        })
+    return _build_cors_error_response(
+        request,
+        status_code=422,
+        code="VALIDATION_ERROR",
+        message="The request body or parameters are invalid.",
+        details=clean_errors
+    )
+
+
+@app.exception_handler(Exception)
+async def global_unhandled_exception_handler(request: Request, exc: Exception):
+    req_id = ""
+    if request_id_ctx:
+        try:
+            req_id = request_id_ctx.get("")
+        except Exception:
+            pass
+    logger.error(
+        f"Unhandled 500 error on {request.method} {request.url.path} (Request ID: {req_id}): {exc}",
+        exc_info=True
+    )
+    return _build_cors_error_response(
+        request,
+        status_code=500,
+        code="INTERNAL_SERVER_ERROR",
+        message="An unexpected server error occurred. Please try again or contact support.",
+        details={}
+    )
+
+
+# ------------------------------------------------------------------------------
+# Middleware Stack (LIFO: ApiLoggingMiddleware first, CORSMiddleware outermost)
+# ------------------------------------------------------------------------------
 try:
     from app.middleware.api_logging_middleware import ApiLoggingMiddleware
     app.add_middleware(ApiLoggingMiddleware)
@@ -128,14 +278,7 @@ except Exception as e:
 # Configure CORS — added LAST so it wraps everything (runs first in LIFO)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://unai-flow-rc39.vercel.app",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=allowed_origins,
     allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],

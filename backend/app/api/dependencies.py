@@ -6,6 +6,7 @@ from app.core.exceptions import InvalidApiKeyException, InsufficientScopeExcepti
 from app.services.api_key_service import api_key_service
 from app.core.rate_limiter import rate_limiter
 from app.core.logging import request_id_ctx, org_id_ctx, app_id_ctx
+# pyrefly: ignore [missing-import]
 from middleware.auth import verify_jwt
 
 
@@ -101,6 +102,13 @@ async def get_auth_context(
 
         # Rate limit by User ID
         rate_limiter.check_rate_limit(f"user:{user_id}")
+
+        # Ensure organization record exists for this user in public.organizations
+        try:
+            from app.services.application_service import application_service
+            application_service.ensure_organization(org_id)
+        except Exception:
+            pass
 
         return AuthContext(
             auth_type="jwt",

@@ -59,7 +59,32 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail?.message || errorData.detail || errorData.error || `Request failed with status ${response.status}`);
+      let errorMessage = `Request failed with status ${response.status}`;
+
+      if (errorData?.error && typeof errorData.error === 'object' && errorData.error.message) {
+        errorMessage = errorData.error.message;
+      } else if (typeof errorData?.error === 'string') {
+        errorMessage = errorData.error;
+      } else if (errorData?.detail && typeof errorData.detail === 'object' && errorData.detail.message) {
+        errorMessage = errorData.detail.message;
+      } else if (typeof errorData?.detail === 'string') {
+        errorMessage = errorData.detail;
+      } else if (Array.isArray(errorData?.detail)) {
+        errorMessage = errorData.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
+      } else if (errorData?.message) {
+        errorMessage = errorData.message;
+      }
+
+      const reqId = errorData?.error?.request_id || response.headers.get('x-request-id');
+      if (reqId && !errorMessage.includes(reqId)) {
+        errorMessage += ` [Request ID: ${reqId}]`;
+      }
+
+      const customError = new Error(errorMessage) as any;
+      customError.status = response.status;
+      customError.requestId = reqId;
+      customError.data = errorData;
+      throw customError;
     }
 
     return response.json();
@@ -67,11 +92,17 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
     clearTimeout(timeoutId);
     const durationMs = Date.now() - startTime;
     const isTimeout = err.name === 'AbortError';
-    const message = isTimeout ? `Request timed out after 25s (${cleanEndpoint})` : err.message;
-    if (endpoint.includes('whatsapp') || endpoint.includes('channels')) {
-      console.error(`[UNAI-WA] HTTP_FAIL ${method} ${cleanEndpoint} (${durationMs}ms):`, message);
+    let message = isTimeout ? `Request timed out after 60s (${cleanEndpoint})` : err.message;
+    if (err.message === 'Failed to fetch') {
+      message = `Network or CORS error connecting to backend (${cleanEndpoint}). Please verify the backend service is reachable.`;
     }
-    throw new Error(message);
+    if (endpoint.includes('whatsapp') || endpoint.includes('channels') || endpoint.includes('applications')) {
+      console.error(`[UNAI-FLOW] HTTP_FAIL ${method} ${cleanEndpoint} (${durationMs}ms):`, message);
+    }
+    const enhancedError = new Error(message) as any;
+    enhancedError.status = err.status;
+    enhancedError.requestId = err.requestId;
+    throw enhancedError;
   }
 }
 

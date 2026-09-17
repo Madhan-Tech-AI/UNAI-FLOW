@@ -792,7 +792,7 @@ if __name__ == "__main__":
               if (activeTab === 'apps') setShowCreateAppModal(true);
               else if (activeTab === 'keys') setShowCreateKeyModal(true);
               else if (activeTab === 'webhooks') setShowCreateWebhookModal(true);
-              else if (activeTab === 'whatsapp') navigate('/whatsapp');
+              else if (activeTab === 'whatsapp') navigate('/whatsapp-channels');
               else setActiveTab('apps');
             }}
             style={{
@@ -1524,7 +1524,7 @@ if __name__ == "__main__":
                 <RefreshCw size={14} className={whatsappLoading ? 'animate-spin' : ''} /> Refresh Devices
               </button>
               <button
-                onClick={() => navigate('/whatsapp')}
+                onClick={() => navigate('/whatsapp-channels')}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -1563,7 +1563,7 @@ if __name__ == "__main__":
                 Pair a WhatsApp mobile phone with UNAI FLOW to allow your CRM and external systems to broadcast messages.
               </p>
               <button
-                onClick={() => navigate('/whatsapp')}
+                onClick={() => navigate('/whatsapp-channels')}
                 style={{
                   background: 'linear-gradient(135deg, #16a34a 0%, #22c55e 100%)',
                   color: '#fff',
@@ -1657,7 +1657,7 @@ if __name__ == "__main__":
 
                     <div className="flex gap-2">
                       <button
-                        onClick={() => navigate('/whatsapp')}
+                        onClick={() => navigate('/whatsapp-channels')}
                         style={{
                           flex: 1,
                           padding: '0.5rem',

@@ -457,9 +457,11 @@ export default function WhatsAppChannels() {
     }
 
     try {
+      // Starting pairing flow: clear stale ref so a fresh session is allocated
+      sessionRef.current = null;
       const res = await fetchApi('/api/whatsapp/connect', {
         method: 'POST',
-        body: JSON.stringify(sessionRef.current ? { session_identifier: sessionRef.current } : {}),
+        body: JSON.stringify({}),
       });
 
       const data = res.data;
@@ -488,16 +490,32 @@ export default function WhatsAppChannels() {
   };
 
   const handleRefreshQR = async () => {
-    setQrCode(null);
+    stopPolling();
     stopQrTimer();
+    pollCountRef.current = 0;
+    setQrCode(null);
+    setWaState('INITIALIZING');
+    setWaError('');
+
     try {
-      await fetchApi('/api/whatsapp/connect', {
+      sessionRef.current = null;
+      const res = await fetchApi('/api/whatsapp/connect', {
         method: 'POST',
-        body: JSON.stringify({ session_identifier: sessionRef.current }),
+        body: JSON.stringify({}),
       });
-      pollStatus();
+
+      const data = res.data;
+      if (!data) { setWaState('ERROR'); setWaError('No response received from server.'); return; }
+
+      if (data.session_identifier) {
+        sessionRef.current = data.session_identifier;
+        subscribeRealtime(data.session_identifier);
+      }
+      setWaState(data.status || 'INITIALIZING');
+      startPolling();
     } catch (e: any) {
-      setWaError(e.message);
+      setWaState('ERROR');
+      setWaError(e.message || 'Failed to regenerate QR code.');
     }
   };
 

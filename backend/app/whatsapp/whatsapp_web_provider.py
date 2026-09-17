@@ -17,9 +17,9 @@ class WhatsAppWebProvider(WhatsAppProvider):
     """
 
     def __init__(self, endpoint: str = None):
-        self.endpoint = endpoint or settings.wca_api_url
-        self.api_key = getattr(settings, "wca_api_key", "")
-        self._resolved_url: Optional[str] = None  # Cache the resolved gateway URL
+        self.endpoint = (endpoint or settings.wca_api_url).rstrip("/")
+        self.api_key = getattr(settings, "wca_api_key", "105eadef-beae-4e08-bcc0-85a06ff80727")
+        self._resolved_url: Optional[str] = self.endpoint  # Default directly to configured gateway URL
 
     def _headers(self) -> Dict[str, str]:
         """Return auth headers for protected endpoints."""
@@ -33,14 +33,14 @@ class WhatsAppWebProvider(WhatsAppProvider):
     async def resolve_gateway(self) -> Optional[str]:
         """
         Try each candidate WCA URL in order. Return the first healthy one.
-        Logs the resolution process at every step.
+        Uses 4.0s timeout per candidate to prevent stalling on cold or dead services.
         """
         candidate_urls = settings.get_wca_candidate_urls()
         logger.info(f"[WA] GATEWAY_RESOLVE candidates={candidate_urls}")
 
         for url in candidate_urls:
             try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
+                async with httpx.AsyncClient(timeout=4.0) as client:
                     r = await client.get(f"{url}/health")
                     if r.status_code == 200:
                         data = r.json()
@@ -67,11 +67,12 @@ class WhatsAppWebProvider(WhatsAppProvider):
     async def health_check(self) -> Dict[str, Any]:
         """
         Perform a health check against the gateway. Returns structured result.
+        Checks cached resolved_url first with quick timeout; falls back to resolve_gateway if down.
         """
-        url = await self.resolve_gateway()
+        url = self._resolved_url or await self.resolve_gateway()
         if url:
             try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
+                async with httpx.AsyncClient(timeout=4.0) as client:
                     r = await client.get(f"{url}/health")
                     if r.status_code == 200:
                         data = r.json()
@@ -88,8 +89,11 @@ class WhatsAppWebProvider(WhatsAppProvider):
                             "timestamp": data.get("timestamp") or datetime.now(timezone.utc).isoformat(),
                             "active_sessions": data.get("active_sessions", 0),
                         }
-            except Exception as e:
-                return {"ok": False, "gateway_url": url, "error": str(e)}
+            except Exception:
+                # Retry by re-resolving candidates
+                url = await self.resolve_gateway()
+                if url:
+                    return await self.health_check()
         return {
             "ok": False,
             "gateway_url": None,

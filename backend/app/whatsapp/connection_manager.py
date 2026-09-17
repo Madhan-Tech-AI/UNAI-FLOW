@@ -52,14 +52,7 @@ class ConnectionManager:
             f"user_id={user_id[:8]}... session_id={session_identifier or 'new'}"
         )
 
-        # 1. Check for existing active/connected sessions
-        active_states = [
-            SessionStatus.INITIALIZING.value,
-            SessionStatus.WAITING_FOR_SCAN.value,
-            SessionStatus.PAIRING.value,
-            SessionStatus.AUTHENTICATED.value,
-            SessionStatus.SYNCING.value,
-        ]
+        # 1. Check for existing genuinely connected sessions
         existing_sessions = self.session_manager.get_sessions_for_user(user_id)
 
         target_session = None
@@ -69,104 +62,51 @@ class ConnectionManager:
                 None,
             )
 
-        # Check existing sessions — but VERIFY with gateway first
-        if not target_session:
-            for s in existing_sessions:
-                if s["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value] + active_states:
-                    # Verify this session still exists on the gateway
-                    try:
-                        gw_status = await self.provider.get_full_status(s["session_identifier"])
-                        gw_state = gw_status.get("status", "DISCONNECTED")
-                        if gw_state == "QR_READY":
-                            gw_state = SessionStatus.WAITING_FOR_SCAN.value
+        # If a specific session was requested and is already connected, verify it quickly
+        if target_session and target_session.get("phone_number") and target_session.get("status") in [SessionStatus.CONNECTED.value, SessionStatus.READY.value]:
+            try:
+                gw_status = await self.provider.get_full_status(target_session["session_identifier"])
+                if gw_status.get("status") in ["CONNECTED", "READY"] or gw_status.get("isReady"):
+                    return {
+                        "success": True,
+                        "status": SessionStatus.CONNECTED.value,
+                        "session_identifier": target_session["session_identifier"],
+                    }
+            except Exception:
+                pass
 
-                        if gw_state in ["DISCONNECTED", "ERROR"]:
-                            # If the session is already CONNECTED in DB, try gateway restore
-                            # but report the actual state so UI doesn't falsely show Connected
-                            if s["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value]:
-                                logger.info(
-                                    f"[WA] SESSION_RESTORE_TRIGGER request_id={request_id} "
-                                    f"session_id={s['session_identifier']} db_status={s['status']} "
-                                    f"— waking up gateway session from vault"
-                                )
-                                try:
-                                    await self.provider.connect(s["session_identifier"])
-                                except Exception as conn_err:
-                                    logger.warning(f"[WA] Gateway wake up note: {conn_err}")
-
-                                # Re-check gateway status after triggering restore
-                                try:
-                                    import asyncio
-                                    await asyncio.sleep(2)
-                                    recheck = await self.provider.get_full_status(s["session_identifier"])
-                                    actual_state = recheck.get("status", gw_state)
-                                    if actual_state == "QR_READY":
-                                        actual_state = SessionStatus.WAITING_FOR_SCAN.value
-                                    if actual_state == SessionStatus.CONNECTED.value:
-                                        return {
-                                            "success": True,
-                                            "status": SessionStatus.CONNECTED.value,
-                                            "session_identifier": s["session_identifier"],
-                                        }
-                                    else:
-                                        # Gateway didn't reconnect instantly — update DB to reflect reality
-                                        self.session_manager.update_session_status(
-                                            s["id"], actual_state
-                                        )
-                                        return {
-                                            "success": True,
-                                            "status": actual_state,
-                                            "session_identifier": s["session_identifier"],
-                                        }
-                                except Exception:
-                                    return {
-                                        "success": True,
-                                        "status": "INITIALIZING",
-                                        "session_identifier": s["session_identifier"],
-                                    }
-
-                            logger.warning(
-                                f"[WA] SESSION_STALE request_id={request_id} "
-                                f"session_id={s['session_identifier']} "
-                                f"db_status={s['status']} gateway_status={gw_state} "
-                                f"— gateway lost this session, will create fresh"
-                            )
-                            self.session_manager.update_session_status(
-                                s["id"], SessionStatus.DISCONNECTED.value
-                            )
-                            continue
-
-                        # Gateway confirms session is alive
-                        logger.info(
-                            f"[WA] SESSION_EXISTING_VERIFIED request_id={request_id} "
-                            f"session_id={s['session_identifier']} gateway_status={gw_state}"
-                        )
+        # If no specific session was requested, check if the user already has a connected account
+        if not session_identifier:
+            connected_session = next(
+                (s for s in existing_sessions if s.get("status") in [SessionStatus.CONNECTED.value, SessionStatus.READY.value] and s.get("phone_number")),
+                None
+            )
+            if connected_session:
+                try:
+                    gw_status = await self.provider.get_full_status(connected_session["session_identifier"])
+                    if gw_status.get("status") in ["CONNECTED", "READY"] or gw_status.get("isReady"):
+                        logger.info(f"[WA] EXISTING_CONNECTED_REUSED user_id={user_id[:8]} session_id={connected_session['session_identifier']}")
                         return {
                             "success": True,
-                            "status": gw_state,
-                            "session_identifier": s["session_identifier"],
+                            "status": SessionStatus.CONNECTED.value,
+                            "session_identifier": connected_session["session_identifier"],
                         }
-                    except Exception as e:
-                        logger.warning(
-                            f"[WA] SESSION_VERIFY_FAILED request_id={request_id} "
-                            f"session_id={s['session_identifier']} error={e}"
-                        )
-                        if s["status"] in [SessionStatus.CONNECTED.value, SessionStatus.READY.value]:
-                            return {
-                                "success": True,
-                                "status": SessionStatus.CONNECTED.value,
-                                "session_identifier": s["session_identifier"],
-                            }
-                        self.session_manager.update_session_status(
-                            s["id"], SessionStatus.DISCONNECTED.value
-                        )
-                        continue
+                except Exception as verify_err:
+                    logger.warning(f"[WA] Connected session verification note: {verify_err}")
 
-        # 2. Generate session identifier if needed
+            # Mark any incomplete/abandoned pairing sessions as DISCONNECTED so they don't linger
+            for s in existing_sessions:
+                if s.get("status") != SessionStatus.DISCONNECTED.value and not s.get("phone_number"):
+                    try:
+                        self.session_manager.update_session_status(s["id"], SessionStatus.DISCONNECTED.value)
+                    except Exception:
+                        pass
+
+        # 2. Always generate a fresh session identifier for new pairing
         if not session_identifier:
             session_identifier = f"sess_{uuid.uuid4().hex}"
 
-        # 3. GATEWAY HEALTH CHECK — verify gateway is reachable BEFORE creating DB session
+        # 3. GATEWAY HEALTH CHECK — verify gateway is reachable
         logger.info(f"[WA] GATEWAY_HEALTH_CHECK request_id={request_id} session_id={session_identifier}")
 
         gateway_health = await self.provider.health_check()
@@ -188,26 +128,22 @@ class ConnectionManager:
         gateway_url = gateway_health.get("gateway_url")
         logger.info(
             f"[WA] GATEWAY_RESOLVED request_id={request_id} "
-            f"session_id={session_identifier} gateway_url={gateway_url} "
-            f"gateway_type={'LOCAL' if '127.0.0.1' in gateway_url or 'localhost' in gateway_url else 'PRODUCTION'}"
+            f"session_id={session_identifier} gateway_url={gateway_url}"
         )
 
-        # 4. Create session in DB as INITIALIZING (only after gateway is confirmed healthy)
+        # 4. Create session in DB as INITIALIZING
         logger.info(f"[WA] SESSION_CREATE request_id={request_id} session_id={session_identifier}")
         session = self.session_manager.create_or_update_session(
             user_id, session_identifier, "whatsapp_web", SessionStatus.INITIALIZING.value
         )
 
         try:
-            # 5. Ask provider to create session on gateway with exponential backoff
-            delays = [2, 4, 8, 15, 30, 45]  # Up to ~104s total for Render cold starts
-            max_attempts = len(delays) + 1
-
-            for attempt in range(max_attempts):
+            # 5. Connect session on gateway (1 retry on transient error)
+            for attempt in range(2):
                 try:
                     logger.info(
                         f"[WA] GATEWAY_SESSION_CREATE request_id={request_id} "
-                        f"session_id={session_identifier} attempt={attempt+1}/{max_attempts}"
+                        f"session_id={session_identifier} attempt={attempt+1}/2"
                     )
                     result = await self.provider.connect(session_identifier)
                     logger.info(
@@ -215,31 +151,10 @@ class ConnectionManager:
                         f"session_id={session_identifier} status={result.get('status')}"
                     )
                     break
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code in [429, 502, 503, 504] and attempt < max_attempts - 1:
-                        retry_after = e.response.headers.get("Retry-After")
-                        sleep_time = (
-                            int(retry_after)
-                            if retry_after and retry_after.isdigit()
-                            else delays[min(attempt, len(delays) - 1)]
-                        )
-                        logger.warning(
-                            f"[WA] GATEWAY_SESSION_CREATE_RETRY request_id={request_id} "
-                            f"session_id={session_identifier} http={e.response.status_code} "
-                            f"retry_in={sleep_time}s attempt={attempt+1}/{max_attempts}"
-                        )
-                        await asyncio.sleep(sleep_time)
-                        continue
-                    raise
-                except (httpx.ConnectError, httpx.ReadTimeout) as e:
-                    if attempt < max_attempts - 1:
-                        sleep_time = delays[min(attempt, len(delays) - 1)]
-                        logger.warning(
-                            f"[WA] GATEWAY_SESSION_CREATE_RETRY request_id={request_id} "
-                            f"session_id={session_identifier} error={type(e).__name__} "
-                            f"retry_in={sleep_time}s attempt={attempt+1}/{max_attempts}"
-                        )
-                        await asyncio.sleep(sleep_time)
+                except Exception as conn_err:
+                    if attempt == 0:
+                        logger.warning(f"[WA] GATEWAY_CONNECT_RETRY error={conn_err}, retrying in 1s...")
+                        await asyncio.sleep(1)
                         continue
                     raise
 
@@ -404,15 +319,21 @@ class ConnectionManager:
         if gateway_error:
             result["gateway_error"] = gateway_error
 
-        # If QR is ready or we are waiting for scan, fetch the pairing data
-        if full_status.get("hasQR") or session["status"] in [SessionStatus.WAITING_FOR_SCAN.value, "QR_READY"]:
+        # Fetch QR pairing data ONLY when the gateway explicitly signals QR is ready
+        has_qr = bool(
+            full_status.get("hasQR")
+            or full_status.get("status") == "QR_READY"
+            or full_status.get("whatsapp", {}).get("state") == "qr_ready"
+        )
+        if has_qr:
             try:
                 pairing_data = await self.provider.get_pairing_data(session_identifier)
                 if pairing_data.get("type") == "qr":
                     result["pairing"] = pairing_data.get("data")
                     result["status"] = SessionStatus.WAITING_FOR_SCAN.value
-                    session["status"] = SessionStatus.WAITING_FOR_SCAN.value
-                    self.session_manager.update_session_status(session["id"], SessionStatus.WAITING_FOR_SCAN.value)
+                    if session.get("status") != SessionStatus.WAITING_FOR_SCAN.value:
+                        session["status"] = SessionStatus.WAITING_FOR_SCAN.value
+                        self.session_manager.update_session_status(session["id"], SessionStatus.WAITING_FOR_SCAN.value)
                     logger.info(
                         f"[WA] QR_DELIVERED session_id={session_identifier} "
                         f"has_data={bool(pairing_data.get('data'))}"

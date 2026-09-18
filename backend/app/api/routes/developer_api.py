@@ -201,7 +201,7 @@ async def get_messages_send_info():
             "X-API-Key": "wa_live_your_key_here"
         },
         "sample_payload": {
-            "to": ["+919876543210"],
+            "to": ["+1234567890"],
             "message": "Hello from external CRM / SaaS platform!",
             "message_type": "text"
         },

@@ -26,6 +26,7 @@ export default function App() {
           <Route path="/whatsapp" element={<WhatsAppChannels />} />
           <Route path="/bulk-messaging" element={<BulkMessaging />} />
           <Route path="/developer" element={<DeveloperConsole />} />
+          <Route path="/developer-console" element={<DeveloperConsole />} />
           <Route path="/email-automation" element={<EmailAutomation />} />
           <Route path="/automations/new" element={<NewAutomation />} />
           <Route path="/automations/preview" element={<PreviewVariants />} />

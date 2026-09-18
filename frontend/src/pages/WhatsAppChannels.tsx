@@ -123,7 +123,7 @@ function formatRelativeTime(dateStr?: string | null): string {
 }
 
 function formatConnectedDate(dateStr?: string | null): string {
-  if (!dateStr) return 'Connected on Aug 27, 2026 at 3:38 PM';
+  if (!dateStr) return '';
   try {
     const d = new Date(dateStr);
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -137,25 +137,25 @@ function formatConnectedDate(dateStr?: string | null): string {
     hours = hours ? hours : 12;
     return `Connected on ${month} ${day}, ${year} at ${hours}:${minutes} ${ampm}`;
   } catch {
-    return 'Connected on Aug 27, 2026 at 3:38 PM';
+    return '';
   }
 }
 
 function formatCreatedDate(dateStr?: string | null): string {
-  if (!dateStr) return 'Aug 10, 2026';
+  if (!dateStr) return '';
   try {
     const d = new Date(dateStr);
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
   } catch {
-    return 'Aug 10, 2026';
+    return '';
   }
 }
 
 function formatPhoneDisplay(phone?: string | null): string {
-  if (!phone) return '+91 93427 45299';
+  if (!phone) return '';
   const clean = phone.replace(/[^0-9+]/g, '');
-  if (!clean) return '+91 93427 45299';
+  if (!clean) return '';
   if (clean.startsWith('+')) {
     if (clean.length === 13 && clean.startsWith('+91')) {
       return `+91 ${clean.slice(3, 8)} ${clean.slice(8)}`;

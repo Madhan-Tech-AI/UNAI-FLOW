@@ -116,8 +116,29 @@ class WhatsAppAdapter:
 
         # 4. Ensure gateway has the socket ready before publishing
         try:
+            # Check live gateway status first
+            status_info = await _provider.get_full_status(session_identifier)
+            is_ready = status_info.get("isReady", False)
+            gw_status = status_info.get("status", "DISCONNECTED")
+
+            if not is_ready and gw_status not in ["CONNECTED", "READY"]:
+                logger.warning(f"[WA] Pre-publish check failed: session {session_identifier} is not ready on gateway (status={gw_status}, isReady={is_ready}). Marking session DISCONNECTED.")
+                try:
+                    supabase.table("whatsapp_sessions").update({"status": "DISCONNECTED"}).eq("id", session_id).execute()
+                    supabase.table("platform_connections").update({"status": "disconnected"}).eq("user_id", user_id).eq("platform", "whatsapp").execute()
+                except Exception as dberr:
+                    logger.debug(f"[WA] Could not update session status: {dberr}")
+
+                raise Exception(
+                    "Your WhatsApp session has expired or is waiting for QR re-pairing. "
+                    "Please visit the WhatsApp Channels page, scan the QR code with WhatsApp on your phone, and try publishing again."
+                )
+
             await _provider.connect(session_identifier)
         except Exception as conn_warn:
+            # If it's already our friendly message, bubble it up
+            if "WhatsApp Channels page" in str(conn_warn):
+                raise
             logger.warning(f"[WA] Pre-publish gateway connect note: {conn_warn}")
 
         # 5. Publish via WhatsAppWebProvider → WCA service
@@ -147,5 +168,8 @@ class WhatsAppAdapter:
             }
 
         except Exception as e:
-            logger.error(f"❌ WhatsApp publish failed: {e}")
-            raise Exception(f"WhatsApp Channel publish failed: {str(e)}")
+            err_str = str(e)
+            logger.error(f"❌ WhatsApp publish failed: {err_str}")
+            if "429" in err_str or "Too Many Requests" in err_str or "rate limit" in err_str.lower():
+                raise Exception("WhatsApp gateway rate limit reached. Please wait 30 seconds before retrying.")
+            raise Exception(f"WhatsApp Channel publish failed: {err_str}")

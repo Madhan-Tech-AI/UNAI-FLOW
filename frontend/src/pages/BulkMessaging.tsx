@@ -61,7 +61,7 @@ export default function BulkMessaging() {
   const [mediaUrl, setMediaUrl] = useState('');
   const [mediaCaption, setMediaCaption] = useState('');
   const [pollQuestion, setPollQuestion] = useState('');
-  const [pollOptions, setPollOptions] = useState<string[]>(['Option 1', 'Option 2']);
+  const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
   const [recipientsRaw, setRecipientsRaw] = useState('');
   const [defaultCountryCode, setDefaultCountryCode] = useState('+91');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -308,7 +308,7 @@ export default function BulkMessaging() {
     setMediaUrl('');
     setMediaCaption('');
     setPollQuestion('');
-    setPollOptions(['Option 1', 'Option 2']);
+    setPollOptions(['', '']);
     setRecipientsRaw('');
     setRatePerSec(1.0);
     setLaunchImmediate(true);
@@ -678,7 +678,7 @@ export default function BulkMessaging() {
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. October Product Updates Broadcast"
+                  placeholder="Enter campaign name (e.g. Product Updates Broadcast)"
                   value={campName}
                   onChange={(e) => setCampName(e.target.value)}
                   required
@@ -739,7 +739,7 @@ export default function BulkMessaging() {
                   </label>
                   <textarea
                     rows={4}
-                    placeholder="Hello {{name}}! We are delighted to share our latest product update with you."
+                    placeholder="Enter broadcast message body... Supports {{name}} template variables."
                     value={textBody}
                     onChange={(e) => setTextBody(e.target.value)}
                     required
@@ -762,7 +762,7 @@ export default function BulkMessaging() {
                   </label>
                   <input
                     type="url"
-                    placeholder="https://example.com/assets/banner.png"
+                    placeholder="https://your-domain.com/path/to/media.png"
                     value={mediaUrl}
                     onChange={(e) => setMediaUrl(e.target.value)}
                     required
@@ -781,7 +781,7 @@ export default function BulkMessaging() {
                   </label>
                   <textarea
                     rows={2}
-                    placeholder="Check out our latest release..."
+                    placeholder="Enter optional media caption..."
                     value={mediaCaption}
                     onChange={(e) => setMediaCaption(e.target.value)}
                     style={{
@@ -875,7 +875,7 @@ export default function BulkMessaging() {
 
                 <textarea
                   rows={5}
-                  placeholder={`+919342745299, Rahul Sharma\n+919876543210, Priya Patel\n9342745299\n120363171744447809@newsletter, Channel Announcement`}
+                  placeholder={`Enter recipient phone numbers or channel JIDs, one per line:\n+1234567890\n+1234567890, Contact Name\n120363...@newsletter, Channel Broadcast`}
                   value={recipientsRaw}
                   onChange={(e) => setRecipientsRaw(e.target.value)}
                   required

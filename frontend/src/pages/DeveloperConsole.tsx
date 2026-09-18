@@ -550,10 +550,10 @@ export default function DeveloperConsole() {
     }
   };
 
-  // Sample credentials for Quickstart
-  const sampleClientId = apps.length > 0 ? apps[0].client_id : 'app_live_8f3d4a1b0c9e2f5';
-  const sampleKey = keys.length > 0 ? `${keys[0].prefix}****************` : 'wa_live_xxxxxxxxxxxxxxxxxxxxxx';
-  const sampleWhatsApp = apps.find(a => a.whatsapp_number)?.whatsapp_number || '919876543210';
+  // Active credentials for Quickstart
+  const sampleClientId = apps.length > 0 ? apps[0].client_id : 'app_live_your_client_id';
+  const sampleKey = keys.length > 0 ? `${keys[0].prefix}****************` : 'wa_live_your_api_key';
+  const sampleWhatsApp = apps.find(a => a.whatsapp_number)?.whatsapp_number || (gatewayStatus?.phone_number || '');
 
   // Auto-populate test recipient with connected phone number
   useEffect(() => {
@@ -638,7 +638,7 @@ export default function DeveloperConsole() {
      Content-Type: application/json
    Body:
    {
-     "to": "+${sampleWhatsApp}",
+     "to": "${sampleWhatsApp ? (sampleWhatsApp.startsWith('+') ? sampleWhatsApp : `+${sampleWhatsApp}`) : '+1234567890'}",
      "message": "Dear Customer, your request has been confirmed!",
      "message_type": "text"
    }
@@ -653,9 +653,9 @@ export default function DeveloperConsole() {
    {
      "campaign_name": "CRM Lead Broadcast",
      "to": [
-       "+919876543210",
-       "+919876543211",
-       "+919876543212"
+       "+1234567890",
+       "+1234567891",
+       "+1234567892"
      ],
      "message": "Hello! Check out our exclusive new offer available today.",
      "message_type": "text"
@@ -665,7 +665,7 @@ export default function DeveloperConsole() {
    ----------------------------------------------------------
    UNAI_FLOW_API_URL=https://unai-flow-backend-w4al.onrender.com/v1
    UNAI_FLOW_API_KEY=${activeKeyDisplay}
-   UNAI_FLOW_WHATSAPP_SENDER=+${sampleWhatsApp}`;
+   UNAI_FLOW_WHATSAPP_SENDER=${sampleWhatsApp ? (sampleWhatsApp.startsWith('+') ? sampleWhatsApp : `+${sampleWhatsApp}`) : '+1234567890'}`;
     }
     if (codeLang === 'curl') {
       return `# ================================================================
@@ -687,8 +687,8 @@ curl -X POST "https://unai-flow-backend-w4al.onrender.com/v1/messages/send" \\
   -H "X-Client-Secret: YOUR_CLIENT_SECRET" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "to": "+${sampleWhatsApp}",
-    "text": "Hello from your CRM! Your payment receipt #1042 is confirmed."
+    "to": "${sampleWhatsApp ? (sampleWhatsApp.startsWith('+') ? sampleWhatsApp : `+${sampleWhatsApp}`) : '+1234567890'}",
+    "text": "Hello from your CRM! Your payment receipt is confirmed."
   }'
 
 # ================================================================
@@ -698,11 +698,11 @@ curl -X POST "https://unai-flow-backend-w4al.onrender.com/v1/messages/send" \\
   -H "Authorization: Bearer ${sampleKey}" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "campaign_name": "VIP Customer Broadcast",
-    "text": "Hello {{name}}, your monthly report is available at {{link}}",
+    "campaign_name": "Customer Broadcast",
+    "text": "Hello {{name}}, your report is ready at {{link}}",
     "recipients": [
-      { "recipient_jid": "919876543210@s.whatsapp.net", "variables": { "name": "Raj", "link": "https://crm.example.com/r/1" } },
-      { "recipient_jid": "919876543211@s.whatsapp.net", "variables": { "name": "Ananya", "link": "https://crm.example.com/r/2" } }
+      { "recipient_jid": "1234567890@s.whatsapp.net", "variables": { "name": "Customer 1", "link": "https://crm.example.com/r/1" } },
+      { "recipient_jid": "1234567891@s.whatsapp.net", "variables": { "name": "Customer 2", "link": "https://crm.example.com/r/2" } }
     ],
     "messages_per_second": 2.0
   }'`;
@@ -736,7 +736,7 @@ async function checkConnection() {
 // 2. Dispatch a Realtime Notification (Single Message)
 async function sendNotification(recipientPhone, messageText) {
   const response = await client.post('/messages/send', {
-    to: recipientPhone, // e.g. "+919876543210"
+    to: recipientPhone,
     text: messageText
   });
   console.log('Message Dispatched:', response.data);
@@ -793,11 +793,11 @@ def send_whatsapp_message(to_number: str, message: str):
 # 3. Dispatch Bulk Personalized Campaign
 def launch_bulk_campaign():
     payload = {
-        "campaign_name": "Monthly Statements",
+        "campaign_name": "Statements",
         "text": "Hi {{name}}, your receipt for invoice #{{invoice}} is ready.",
         "recipients": [
-            {"recipient_jid": "919876543210@s.whatsapp.net", "variables": {"name": "Suresh", "invoice": "INV-102"}},
-            {"recipient_jid": "919876543211@s.whatsapp.net", "variables": {"name": "Meera", "invoice": "INV-103"}}
+            {"recipient_jid": "1234567890@s.whatsapp.net", "variables": {"name": "Customer A", "invoice": "INV-102"}},
+            {"recipient_jid": "1234567891@s.whatsapp.net", "variables": {"name": "Customer B", "invoice": "INV-103"}}
         ],
         "messages_per_second": 2.0
     }
@@ -2412,21 +2412,23 @@ if __name__ == "__main__":
                     <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155' }}>
                       Recipient Mobile Number(s)
                     </label>
-                    <button
-                      onClick={() => {
-                        const num = gatewayStatus?.phone_number || sampleWhatsApp;
-                        if (num) setTestRecipient(num.startsWith('+') ? num : `+${num}`);
-                      }}
-                      style={{ fontSize: '0.75rem', color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}
-                    >
-                      Use Connected WhatsApp (+{(gatewayStatus?.phone_number || sampleWhatsApp).replace(/^\+/, '')})
-                    </button>
+                    {(gatewayStatus?.phone_number || sampleWhatsApp) && (
+                      <button
+                        onClick={() => {
+                          const num = gatewayStatus?.phone_number || sampleWhatsApp;
+                          if (num) setTestRecipient(num.startsWith('+') ? num : `+${num}`);
+                        }}
+                        style={{ fontSize: '0.75rem', color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                      >
+                        Use Connected WhatsApp (+{(gatewayStatus?.phone_number || sampleWhatsApp).replace(/^\+/, '')})
+                      </button>
+                    )}
                   </div>
                   <input
                     type="text"
                     value={testRecipient}
                     onChange={(e) => setTestRecipient(e.target.value)}
-                    placeholder="+919342745299 (or separate multiple with commas for bulk broadcast)"
+                    placeholder="+1234567890 (or separate multiple with commas for bulk broadcast)"
                     style={{
                       width: '100%',
                       padding: '0.65rem 0.85rem',
@@ -2559,7 +2561,7 @@ Host: unai-flow-backend-w4al.onrender.com
 X-API-Key: ${testApiKey ? testApiKey.slice(0, 14) + '...' : 'wa_live_...'}
 Content-Type: application/json
 
-${JSON.stringify({ to: testRecipient ? (testRecipient.includes(',') ? testRecipient.split(',').map(r => r.trim()) : testRecipient) : '+919876543210', message: testMessage, message_type: 'text' }, null, 2)}`}
+${JSON.stringify({ to: testRecipient ? (testRecipient.includes(',') ? testRecipient.split(',').map(r => r.trim()) : testRecipient) : '+1234567890', message: testMessage, message_type: 'text' }, null, 2)}`}
                   </pre>
                 </div>
               </div>
@@ -2821,7 +2823,7 @@ ${JSON.stringify({ to: testRecipient ? (testRecipient.includes(',') ? testRecipi
                 ) : (
                   <input
                     type="text"
-                    placeholder="e.g. +919876543210"
+                    placeholder="e.g. +1234567890"
                     value={newAppWhatsAppNumber}
                     onChange={(e) => setNewAppWhatsAppNumber(e.target.value)}
                     style={{ width: '100%', padding: '0.7rem 0.85rem', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '0.9rem', outline: 'none' }}

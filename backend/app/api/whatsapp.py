@@ -81,8 +81,22 @@ async def get_whatsapp_status(
 
 @router.get("/sessions")
 async def get_user_sessions(user_id: str = Depends(get_current_user_id)):
-    """Get all WhatsApp sessions belonging strictly to the authenticated user."""
+    """Get all WhatsApp sessions belonging strictly to the authenticated user with live gateway reconciliation."""
     sessions = connection_manager.session_manager.get_sessions_for_user(user_id)
+    # Reconcile any supposedly CONNECTED session against live gateway state
+    for s in sessions:
+        if s.get("status") in ["CONNECTED", "READY"] and s.get("session_identifier"):
+            try:
+                gw = await provider.get_full_status(s["session_identifier"])
+                if not gw.get("isReady") and gw.get("status") not in ["CONNECTED", "READY"]:
+                    logger.warning(
+                        f"[WA] Reconciling stale session {s['session_identifier']}: "
+                        f"DB has {s['status']}, gateway returned status={gw.get('status')}, isReady={gw.get('isReady')}. Marking DISCONNECTED."
+                    )
+                    connection_manager.session_manager.update_session_status(s["id"], "DISCONNECTED")
+                    s["status"] = "DISCONNECTED"
+            except Exception as e:
+                logger.debug(f"[WA] Session reconciliation check note: {e}")
     return {"success": True, "data": sessions}
 
 

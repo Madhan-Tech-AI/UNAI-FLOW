@@ -207,8 +207,16 @@ export default function DeveloperConsole() {
   const [usageLoading, setUsageLoading] = useState(false);
 
   // Quickstart state
-  const [codeLang, setCodeLang] = useState<'curl' | 'node' | 'python'>('curl');
+  const [codeLang, setCodeLang] = useState<'curl' | 'node' | 'python' | 'crm'>('crm');
   const [copiedCode, setCopiedCode] = useState(false);
+
+  // Live Test Bench State
+  const [testApiKey, setTestApiKey] = useState<string>('');
+  const [testRecipient, setTestRecipient] = useState<string>('');
+  const [testMessage, setTestMessage] = useState<string>('Hello! This is a live test message from UNAI FLOW Developer API.');
+  const [testSending, setTestSending] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
+  const [testError, setTestError] = useState<string | null>(null);
 
   // Initial Load
   useEffect(() => {
@@ -547,7 +555,118 @@ export default function DeveloperConsole() {
   const sampleKey = keys.length > 0 ? `${keys[0].prefix}****************` : 'wa_live_xxxxxxxxxxxxxxxxxxxxxx';
   const sampleWhatsApp = apps.find(a => a.whatsapp_number)?.whatsapp_number || '919876543210';
 
+  // Auto-populate test recipient with connected phone number
+  useEffect(() => {
+    if (!testRecipient) {
+      const activeNumber = gatewayStatus?.phone_number || apps.find(a => a.whatsapp_number)?.whatsapp_number || whatsappSessions.find(s => s.phone_number)?.phone_number;
+      if (activeNumber) {
+        setTestRecipient(activeNumber.startsWith('+') ? activeNumber : `+${activeNumber}`);
+      }
+    }
+    const activeCreatedRawKey = newlyCreatedApp?.raw_api_key || newlyCreatedKey?.raw_key;
+    if (!testApiKey && activeCreatedRawKey) {
+      setTestApiKey(activeCreatedRawKey);
+    }
+  }, [gatewayStatus, apps, whatsappSessions, newlyCreatedApp, newlyCreatedKey]);
+
+  const handleSendLiveTest = async () => {
+    setTestSending(true);
+    setTestResult(null);
+    setTestError(null);
+
+    const activeCreatedRawKey = newlyCreatedApp?.raw_api_key || newlyCreatedKey?.raw_key;
+    const apiKey = testApiKey.trim() || activeCreatedRawKey || '';
+    if (!apiKey) {
+      setTestError('Please enter your Primary API Key (starts with wa_live_).');
+      setTestSending(false);
+      return;
+    }
+
+    if (!testRecipient.trim()) {
+      setTestError('Please enter at least one recipient mobile phone number.');
+      setTestSending(false);
+      return;
+    }
+
+    const recipients = testRecipient.split(/[,;\n]+/).map(r => r.trim()).filter(Boolean);
+
+    try {
+      const payload: any = {
+        to: recipients.length === 1 ? recipients[0] : recipients,
+        message: testMessage.trim(),
+        message_type: 'text',
+      };
+
+      const res = await fetchApi('/v1/messages/send', {
+        method: 'POST',
+        headers: {
+          'X-API-Key': apiKey,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      setTestResult(res);
+    } catch (err: any) {
+      setTestError(err.message || 'Failed to dispatch live WhatsApp message.');
+    } finally {
+      setTestSending(false);
+    }
+  };
+
   const getQuickstartCode = () => {
+    if (codeLang === 'crm') {
+      const activeCreatedRawKey = newlyCreatedApp?.raw_api_key || newlyCreatedKey?.raw_key;
+      const activeKeyDisplay = testApiKey || (activeCreatedRawKey ? activeCreatedRawKey : sampleKey);
+      return `/* ================================================================
+   EXTERNAL CRM & SAAS PLATFORM INTEGRATION GUIDE
+   Works with Vekkalam CRM, Zoho, HubSpot, Zapier, Make, and Custom Backends
+================================================================ */
+
+1. API ENDPOINT SPECIFICATION
+   --------------------------
+   Method: POST
+   URL:    https://unai-flow-backend-w4al.onrender.com/v1/messages/send
+   Headers:
+     Content-Type: application/json
+     X-API-Key:    ${activeKeyDisplay}
+
+2. SINGLE DIRECT NOTIFICATION (Order Confirmation / Alert)
+   --------------------------------------------------------
+   HTTP POST https://unai-flow-backend-w4al.onrender.com/v1/messages/send
+   Headers:
+     X-API-Key: ${activeKeyDisplay}
+     Content-Type: application/json
+   Body:
+   {
+     "to": "+${sampleWhatsApp}",
+     "message": "Dear Customer, your request has been confirmed!",
+     "message_type": "text"
+   }
+
+3. BULK BROADCAST CAMPAIGN (Multiple Leads / Customers)
+   ----------------------------------------------------
+   HTTP POST https://unai-flow-backend-w4al.onrender.com/v1/messages/send
+   Headers:
+     X-API-Key: ${activeKeyDisplay}
+     Content-Type: application/json
+   Body:
+   {
+     "campaign_name": "CRM Lead Broadcast",
+     "to": [
+       "+919876543210",
+       "+919876543211",
+       "+919876543212"
+     ],
+     "message": "Hello! Check out our exclusive new offer available today.",
+     "message_type": "text"
+   }
+
+4. CRM ENVIRONMENT VARIABLES (Recommended for SaaS Backends)
+   ----------------------------------------------------------
+   UNAI_FLOW_API_URL=https://unai-flow-backend-w4al.onrender.com/v1
+   UNAI_FLOW_API_KEY=${activeKeyDisplay}
+   UNAI_FLOW_WHATSAPP_SENDER=+${sampleWhatsApp}`;
+    }
     if (codeLang === 'curl') {
       return `# ================================================================
 # 1. VERIFY APPLICATION & WHATSAPP CONNECTION HEALTH
@@ -2215,6 +2334,238 @@ if __name__ == "__main__":
       {/* ───────────────────────────────────────────────────────────── */}
       {activeTab === 'quickstart' && (
         <div>
+          {/* ───────────────────────────────────────────────────────────── */}
+          {/* LIVE TEST BENCH & CRM SIMULATOR */}
+          {/* ───────────────────────────────────────────────────────────── */}
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '14px',
+              border: '1px solid #e2e8f0',
+              padding: '1.75rem',
+              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)',
+              marginBottom: '2rem'
+            }}
+          >
+            <div className="flex items-center justify-between" style={{ marginBottom: '1.25rem', borderBottom: '1px solid #f1f5f9', paddingBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 style={{ margin: 0, fontWeight: 800, fontSize: '1.2rem', color: '#0f172a' }}>
+                    Live WhatsApp API Test Bench
+                  </h3>
+                  <span style={{ backgroundColor: '#ecfdf5', color: '#059669', fontSize: '0.75rem', fontWeight: 700, padding: '0.2rem 0.6rem', borderRadius: '6px' }}>
+                    Real-time CRM Simulator
+                  </span>
+                </div>
+                <p style={{ margin: '0.35rem 0 0 0', color: '#64748b', fontSize: '0.875rem' }}>
+                  Test sending realtime WhatsApp single or bulk messages using your production API Key directly to your phone—zero terminal required!
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Connected Sender:</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a', backgroundColor: '#f8fafc', padding: '0.3rem 0.65rem', borderRadius: '6px', border: '1px solid #e2e8f0', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Smartphone size={14} style={{ color: '#16a34a' }} />
+                  {gatewayStatus?.phone_number || sampleWhatsApp ? `+${(gatewayStatus?.phone_number || sampleWhatsApp).replace(/^\+/, '')}` : 'Not connected'}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+              {/* Left Column: Form */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div>
+                  <div className="flex items-center justify-between" style={{ marginBottom: '0.35rem' }}>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155' }}>
+                      Primary API Key (X-API-Key)
+                    </label>
+                    {(newlyCreatedApp?.raw_api_key || newlyCreatedKey?.raw_key) && !testApiKey && (
+                      <button
+                        onClick={() => setTestApiKey(newlyCreatedApp?.raw_api_key || newlyCreatedKey?.raw_key || '')}
+                        style={{ fontSize: '0.75rem', color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                      >
+                        Use generated key
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={testApiKey}
+                    onChange={(e) => setTestApiKey(e.target.value)}
+                    placeholder="wa_live_..."
+                    style={{
+                      width: '100%',
+                      padding: '0.65rem 0.85rem',
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
+                      fontFamily: 'monospace',
+                      fontSize: '0.85rem',
+                      backgroundColor: '#f8fafc'
+                    }}
+                  />
+                  <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.725rem', color: '#94a3b8' }}>
+                    Paste your Primary API Key copied from your Application modal (starts with <code>wa_live_</code>).
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between" style={{ marginBottom: '0.35rem' }}>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155' }}>
+                      Recipient Mobile Number(s)
+                    </label>
+                    <button
+                      onClick={() => {
+                        const num = gatewayStatus?.phone_number || sampleWhatsApp;
+                        if (num) setTestRecipient(num.startsWith('+') ? num : `+${num}`);
+                      }}
+                      style={{ fontSize: '0.75rem', color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      Use Connected WhatsApp (+{(gatewayStatus?.phone_number || sampleWhatsApp).replace(/^\+/, '')})
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={testRecipient}
+                    onChange={(e) => setTestRecipient(e.target.value)}
+                    placeholder="+919342745299 (or separate multiple with commas for bulk broadcast)"
+                    style={{
+                      width: '100%',
+                      padding: '0.65rem 0.85rem',
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.875rem'
+                    }}
+                  />
+                  <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.725rem', color: '#94a3b8' }}>
+                    Single recipient sends directly; multiple comma-separated numbers automatically launch a bulk broadcast campaign.
+                  </p>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: '#334155', marginBottom: '0.35rem' }}>
+                    Message Content
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={testMessage}
+                    onChange={(e) => setTestMessage(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.65rem 0.85rem',
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.875rem',
+                      fontFamily: 'inherit',
+                      resize: 'vertical'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <button
+                    onClick={handleSendLiveTest}
+                    disabled={testSending}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.75rem 1.5rem',
+                      backgroundColor: testSending ? '#94a3b8' : '#2563eb',
+                      color: '#ffffff',
+                      borderRadius: '8px',
+                      fontWeight: 700,
+                      fontSize: '0.9rem',
+                      border: 'none',
+                      cursor: testSending ? 'not-allowed' : 'pointer',
+                      transition: 'background-color 0.2s',
+                      boxShadow: '0 2px 4px rgba(37, 99, 235, 0.2)'
+                    }}
+                  >
+                    {testSending ? (
+                      <>
+                        <RefreshCw size={16} className="animate-spin" />
+                        Dispatching to WhatsApp...
+                      </>
+                    ) : (
+                      <>
+                        <Send size={16} />
+                        Send Live WhatsApp Message
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Right Column: Live Result & API Call Preview */}
+              <div style={{ backgroundColor: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ borderBottom: '1px solid #e2e8f0', paddingBottom: '0.75rem' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: '#64748b' }}>Live Dispatch Result</span>
+                </div>
+
+                {testError && (
+                  <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '0.85rem' }}>
+                    <div className="flex items-center gap-2" style={{ color: '#ef4444', fontWeight: 700, fontSize: '0.85rem' }}>
+                      <AlertTriangle size={16} /> Error Sending Message
+                    </div>
+                    <p style={{ margin: '0.35rem 0 0 0', color: '#b91c1c', fontSize: '0.8rem' }}>{testError}</p>
+                  </div>
+                )}
+
+                {testResult && (
+                  <div style={{ backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', padding: '0.85rem' }}>
+                    <div className="flex items-center gap-2" style={{ color: '#059669', fontWeight: 700, fontSize: '0.85rem' }}>
+                      <CheckCircle2 size={16} /> Message Dispatched to WhatsApp!
+                    </div>
+                    <div style={{ marginTop: '0.5rem', display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '0.35rem 0.75rem', fontSize: '0.8rem', color: '#065f46' }}>
+                      <span style={{ fontWeight: 600 }}>Mode:</span>
+                      <span style={{ textTransform: 'uppercase', fontWeight: 700 }}>{testResult.mode || 'single'}</span>
+                      <span style={{ fontWeight: 600 }}>Status:</span>
+                      <span style={{ fontWeight: 700 }}>{testResult.status || 'queued'}</span>
+                      {testResult.job_id && (
+                        <>
+                          <span style={{ fontWeight: 600 }}>Job ID:</span>
+                          <span style={{ fontFamily: 'monospace' }}>{testResult.job_id}</span>
+                        </>
+                      )}
+                      {testResult.campaign_id && (
+                        <>
+                          <span style={{ fontWeight: 600 }}>Campaign ID:</span>
+                          <span style={{ fontFamily: 'monospace' }}>{testResult.campaign_id}</span>
+                        </>
+                      )}
+                      <span style={{ fontWeight: 600 }}>Recipients:</span>
+                      <span>{testResult.total_recipients || 1}</span>
+                    </div>
+                    <p style={{ margin: '0.5rem 0 0 0', color: '#047857', fontSize: '0.75rem', fontWeight: 600 }}>
+                      Check WhatsApp on your phone! The message has been processed by your connected account.
+                    </p>
+                  </div>
+                )}
+
+                {!testResult && !testError && (
+                  <div style={{ color: '#94a3b8', fontSize: '0.825rem', textAlign: 'center', padding: '1rem 0' }}>
+                    Click "Send Live WhatsApp Message" above to dispatch a real message and view the response payload here.
+                  </div>
+                )}
+
+                {/* HTTP Request Preview */}
+                <div style={{ marginTop: 'auto', borderTop: '1px solid #e2e8f0', paddingTop: '0.75rem' }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: '0.35rem' }}>
+                    <span style={{ fontSize: '0.725rem', fontWeight: 700, color: '#64748b' }}>CRM HTTP Request Preview</span>
+                    <span style={{ fontSize: '0.7rem', color: '#16a34a', fontWeight: 700, backgroundColor: '#dcfce7', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>POST</span>
+                  </div>
+                  <pre style={{ margin: 0, padding: '0.65rem', borderRadius: '6px', backgroundColor: '#0f172a', color: '#94a3b8', fontSize: '0.725rem', overflowX: 'auto', fontFamily: 'monospace' }}>
+{`POST /v1/messages/send
+Host: unai-flow-backend-w4al.onrender.com
+X-API-Key: ${testApiKey ? testApiKey.slice(0, 14) + '...' : 'wa_live_...'}
+Content-Type: application/json
+
+${JSON.stringify({ to: testRecipient ? (testRecipient.includes(',') ? testRecipient.split(',').map(r => r.trim()) : testRecipient) : '+919876543210', message: testMessage, message_type: 'text' }, null, 2)}`}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div
             style={{
               backgroundColor: '#ffffff',
@@ -2224,7 +2575,7 @@ if __name__ == "__main__":
               boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)'
             }}
           >
-            <div className="flex items-center justify-between" style={{ marginBottom: '1.25rem' }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
               <div>
                 <h3 style={{ margin: 0, fontWeight: 800, fontSize: '1.2rem', color: '#0f172a' }}>CRM & Developer Integration Guide</h3>
                 <p style={{ margin: '0.25rem 0 0 0', color: '#64748b', fontSize: '0.9rem' }}>
@@ -2238,10 +2589,12 @@ if __name__ == "__main__":
                   display: 'flex',
                   backgroundColor: '#f1f5f9',
                   borderRadius: '8px',
-                  padding: '0.2rem'
+                  padding: '0.2rem',
+                  flexWrap: 'wrap',
+                  gap: '0.25rem'
                 }}
               >
-                {(['curl', 'node', 'python'] as const).map((lang) => (
+                {(['crm', 'curl', 'node', 'python'] as const).map((lang) => (
                   <button
                     key={lang}
                     onClick={() => setCodeLang(lang)}
@@ -2257,7 +2610,7 @@ if __name__ == "__main__":
                       cursor: 'pointer'
                     }}
                   >
-                    {lang === 'node' ? 'Node.js' : lang}
+                    {lang === 'crm' ? 'CRM & Webhooks' : lang === 'node' ? 'Node.js' : lang}
                   </button>
                 ))}
               </div>

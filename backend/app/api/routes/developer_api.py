@@ -26,6 +26,7 @@ class SendMessageRequest(BaseModel):
     )
     message: Optional[str] = Field(None, description="Message text content")
     body: Optional[str] = Field(None, description="Alias for message")
+    text: Optional[str] = Field(None, description="Alias for message")
     media_url: Optional[str] = Field(None, description="Public media URL for image, video, audio, or document")
     caption: Optional[str] = Field(None, description="Caption for media messages")
     message_type: Optional[str] = Field("text", description="Message type: 'text', 'image', 'video', 'audio', 'poll'")
@@ -183,6 +184,31 @@ async def get_whatsapp_status(
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Unified CRM Message Dispatch (Single or Bulk)
 # ─────────────────────────────────────────────────────────────────────────────
+@router.get("/messages/send")
+async def get_messages_send_info():
+    """
+    Informational endpoint returned when visiting /v1/messages/send in a browser via GET.
+    Provides clear instructions on how external CRMs and SaaS platforms dispatch messages using POST.
+    """
+    return {
+        "status": "online",
+        "endpoint": "POST https://unai-flow-backend-w4al.onrender.com/v1/messages/send",
+        "service": "UNAI FLOW WhatsApp Bulk & Single Message Dispatcher",
+        "method_required": "POST",
+        "note": "Web browsers perform GET requests by default when visiting a URL in the address bar. To dispatch messages from your CRM or SaaS, use HTTP POST with your X-API-Key and JSON body.",
+        "required_headers": {
+            "Content-Type": "application/json",
+            "X-API-Key": "wa_live_your_key_here"
+        },
+        "sample_payload": {
+            "to": ["+919876543210"],
+            "message": "Hello from external CRM / SaaS platform!",
+            "message_type": "text"
+        },
+        "interactive_console": "https://unai-flow-rc39.vercel.app/developer-console"
+    }
+
+
 @router.post("/messages/send", response_model=MessageSendResponse)
 async def send_message_unified(
     req: SendMessageRequest,
@@ -197,7 +223,7 @@ async def send_message_unified(
     - Supports text, image, video, audio, and documents.
     """
     effective_idempotency = header_idempotency or req.idempotency_key
-    text_content = (req.message or req.body or "").strip()
+    text_content = (req.message or req.body or req.text or "").strip()
 
     # 1. Parse and sanitize recipients
     raw_recipients = req.to if isinstance(req.to, list) else [req.to]

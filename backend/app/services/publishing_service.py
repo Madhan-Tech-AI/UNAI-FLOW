@@ -20,22 +20,43 @@ class PublishingService:
 
     def _resolve_instance(self, organization_id: str, instance_id: Optional[str], newsletter_jid: str) -> Dict[str, Any]:
         if instance_id:
-            return instance_service.get_instance(organization_id, instance_id)
+            try:
+                return instance_service.get_instance(organization_id, instance_id)
+            except Exception as e:
+                logger.warning(f"[PUBLISHING] Explicit instance {instance_id} not found: {e}")
             
         # Find which instance owns this newsletter
         ch_res = self.sb.table("whatsapp_channels").select("instance_id").eq("newsletter_jid", newsletter_jid).execute()
-        if ch_res.data:
+        if ch_res.data and ch_res.data[0].get("instance_id"):
             inst_id = ch_res.data[0]["instance_id"]
             return instance_service.get_instance(organization_id, inst_id)
             
         # Fallback to any authenticated instance
         instances = instance_service.list_instances(organization_id)
-        auth_inst = next((i for i in instances if i["status"] in ["AUTHENTICATED", "CONNECTED"]), None)
+        auth_inst = next((i for i in instances if i["status"] in ["AUTHENTICATED", "CONNECTED", "READY"]), None)
         if auth_inst:
             return auth_inst
             
         if instances:
             return instances[0]
+
+        # Direct fallback to active whatsapp_sessions
+        try:
+            s_res = self.sb.table("whatsapp_sessions").select("*").eq("user_id", organization_id).execute()
+            if s_res.data:
+                active_s = next((s for s in s_res.data if s.get("status") in ["CONNECTED", "READY", "AUTHENTICATED"]), s_res.data[0])
+                if active_s:
+                    session_ident = active_s.get("session_identifier") or f"sess_{active_s['id']}"
+                    return {
+                        "id": active_s.get("instance_id") or active_s["id"],
+                        "organization_id": organization_id,
+                        "instance_uuid": session_ident,
+                        "phone_number": active_s.get("phone_number"),
+                        "status": active_s.get("status", "CONNECTED"),
+                        "connection_state": "CONNECTED"
+                    }
+        except Exception as e:
+            logger.warning(f"[PUBLISHING] Direct session fallback failed: {e}")
             
         raise InstanceNotFoundException("No WhatsApp instance available for this organization.")
 

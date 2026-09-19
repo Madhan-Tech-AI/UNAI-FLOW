@@ -6,6 +6,7 @@ from app.core.exceptions import InstanceNotFoundException, InstanceNotAuthentica
 from app.providers.whatsapp.base import WhatsAppProvider
 from app.providers.whatsapp.fake_provider import FakeWhatsAppProvider
 from app.core.config import settings
+from app.core.logging import logger
 
 class InstanceService:
     def __init__(self, provider: Optional[WhatsAppProvider] = None):
@@ -41,13 +42,96 @@ class InstanceService:
 
     def list_instances(self, organization_id: str) -> List[Dict[str, Any]]:
         res = self.sb.table("whatsapp_instances").select("*").eq("organization_id", organization_id).execute()
-        return res.data or []
+        if res.data:
+            return res.data
+
+        # Fallback: Auto-sync from active whatsapp_sessions
+        try:
+            s_res = self.sb.table("whatsapp_sessions").select("*").eq("user_id", organization_id).execute()
+            if s_res.data:
+                # Find connected session first, or first session
+                active_s = next(
+                    (s for s in s_res.data if s.get("status") in ["CONNECTED", "READY", "AUTHENTICATED"]),
+                    s_res.data[0]
+                )
+                phone = active_s.get("phone_number")
+                session_ident = active_s.get("session_identifier") or f"sess_{active_s['id']}"
+                status = active_s.get("status") or "CONNECTED"
+
+                # Check if instance already exists with this instance_uuid
+                existing_inst = self.sb.table("whatsapp_instances").select("*").eq("instance_uuid", session_ident).execute()
+                if existing_inst.data:
+                    return existing_inst.data
+
+                new_inst = {
+                    "organization_id": organization_id,
+                    "instance_uuid": session_ident,
+                    "display_name": f"WhatsApp Gateway (+{phone})" if phone else "WhatsApp Gateway",
+                    "phone_number": phone,
+                    "status": status,
+                    "connection_state": "CONNECTED" if status in ["CONNECTED", "READY", "AUTHENTICATED"] else "DISCONNECTED",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }
+                ins_res = self.sb.table("whatsapp_instances").insert(new_inst).execute()
+                if ins_res.data:
+                    inst_id = ins_res.data[0]["id"]
+                    try:
+                        self.sb.table("whatsapp_sessions").update({"instance_id": inst_id}).eq("id", active_s["id"]).execute()
+                    except Exception:
+                        pass
+                    return ins_res.data
+        except Exception as e:
+            logger.warning(f"[INSTANCE] Auto-sync session fallback failed: {e}")
+
+        return []
 
     def get_instance(self, organization_id: str, instance_id: str) -> Dict[str, Any]:
+        # 1. Look up by primary key ID
         res = self.sb.table("whatsapp_instances").select("*").eq("organization_id", organization_id).eq("id", instance_id).execute()
-        if not res.data:
-            raise InstanceNotFoundException(instance_id)
-        return res.data[0]
+        if res.data:
+            return res.data[0]
+
+        # 2. Look up by instance_uuid
+        res_uuid = self.sb.table("whatsapp_instances").select("*").eq("organization_id", organization_id).eq("instance_uuid", instance_id).execute()
+        if res_uuid.data:
+            return res_uuid.data[0]
+
+        # 3. Check if instance_id is actually a whatsapp_sessions ID
+        try:
+            s_res = self.sb.table("whatsapp_sessions").select("*").eq("id", instance_id).execute()
+            if s_res.data:
+                sess = s_res.data[0]
+                session_ident = sess.get("session_identifier") or f"sess_{sess['id']}"
+                # If session has an instance_id linked, return that instance
+                if sess.get("instance_id"):
+                    linked_inst = self.sb.table("whatsapp_instances").select("*").eq("id", sess["instance_id"]).execute()
+                    if linked_inst.data:
+                        return linked_inst.data[0]
+
+                # Otherwise create or return virtual instance representation
+                status = sess.get("status", "CONNECTED")
+                return {
+                    "id": sess["id"],
+                    "organization_id": organization_id,
+                    "instance_uuid": session_ident,
+                    "display_name": f"WhatsApp Gateway (+{sess.get('phone_number')})",
+                    "phone_number": sess.get("phone_number"),
+                    "status": status,
+                    "connection_state": "CONNECTED" if status in ["CONNECTED", "READY", "AUTHENTICATED"] else "DISCONNECTED"
+                }
+        except Exception as e:
+            logger.warning(f"[INSTANCE] Session resolution failed for instance_id={instance_id}: {e}")
+
+        # 4. Fallback: return any active instance for this organization
+        active_instances = self.list_instances(organization_id)
+        auth_inst = next((i for i in active_instances if i.get("status") in ["CONNECTED", "READY", "AUTHENTICATED"]), None)
+        if auth_inst:
+            return auth_inst
+        if active_instances:
+            return active_instances[0]
+
+        raise InstanceNotFoundException(instance_id)
 
     async def connect_instance(self, organization_id: str, instance_id: str) -> Dict[str, Any]:
         """Initiates connection and starts QR code generation."""

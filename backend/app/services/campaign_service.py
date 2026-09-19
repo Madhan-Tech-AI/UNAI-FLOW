@@ -18,9 +18,12 @@ class CampaignService:
 
     def _resolve_instance(self, organization_id: str, instance_id: Optional[str], application_id: Optional[str] = None) -> Dict[str, Any]:
         """Resolves the instance or picks an active/connected instance.
-        Priority: explicit instance_id > application default > org auto-select."""
+        Priority: explicit instance_id > application default > org auto-select > active session fallback."""
         if instance_id:
-            return instance_service.get_instance(organization_id, instance_id)
+            try:
+                return instance_service.get_instance(organization_id, instance_id)
+            except Exception as e:
+                logger.warning(f"[CAMPAIGN] Explicit instance {instance_id} not found, trying fallback: {e}")
 
         # If an application has a default instance, use it
         if application_id:
@@ -37,6 +40,26 @@ class CampaignService:
             return auth_inst
         if instances:
             return instances[0]
+
+        # Direct fallback to active whatsapp_sessions
+        try:
+            s_res = self.sb.table("whatsapp_sessions").select("*").eq("user_id", organization_id).execute()
+            if s_res.data:
+                active_s = next((s for s in s_res.data if s.get("status") in ["CONNECTED", "READY", "AUTHENTICATED"]), s_res.data[0])
+                if active_s:
+                    session_ident = active_s.get("session_identifier") or f"sess_{active_s['id']}"
+                    return {
+                        "id": active_s.get("instance_id") or active_s["id"],
+                        "organization_id": organization_id,
+                        "instance_uuid": session_ident,
+                        "display_name": f"WhatsApp Gateway (+{active_s.get('phone_number')})",
+                        "phone_number": active_s.get("phone_number"),
+                        "status": active_s.get("status", "CONNECTED"),
+                        "connection_state": "CONNECTED"
+                    }
+        except Exception as e:
+            logger.warning(f"[CAMPAIGN] Direct session fallback failed: {e}")
+
         raise InstanceNotFoundException("No WhatsApp instance configured for this organization.")
 
     def create_campaign(

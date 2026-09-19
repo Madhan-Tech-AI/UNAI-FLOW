@@ -345,6 +345,13 @@ try:
 except Exception as e:
     logger.warning(f"Developer API router unavailable (non-fatal): {e}")
 
+# Integration & Platform API router (capabilities discovery, WhatsApp numbers, health check)
+try:
+    from app.api.routes import integration as v1_integration
+    app.include_router(v1_integration.router)
+except Exception as e:
+    logger.warning(f"Integration API router unavailable (non-fatal): {e}")
+
 
 @app.get("/")
 def root():

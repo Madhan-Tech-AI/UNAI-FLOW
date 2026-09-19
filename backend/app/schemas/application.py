@@ -11,6 +11,7 @@ SUPPORTED_SCOPES = [
     "usage:read",
     "webhooks:read",
     "webhooks:manage",
+    "integration:read",
 ]
 
 
@@ -40,6 +41,7 @@ class ApplicationCreate(BaseModel):
             "usage:read",
             "webhooks:read",
             "webhooks:manage",
+            "integration:read",
         ],
         description="Permission scopes for the auto-generated API key"
     )

@@ -13,10 +13,23 @@ from app.services.campaign_service import campaign_service
 router = APIRouter(prefix="/v1/campaigns", tags=["Bulk Messaging Campaigns"])
 
 
+def require_dashboard_user(ctx: AuthContext = Depends(get_auth_context)) -> AuthContext:
+    """
+    Guards bulk messaging campaign endpoints: only internal UNAI FLOW dashboard sessions
+    (JWT authenticated) are permitted. External developer API access is strictly disabled.
+    """
+    if ctx.auth_type != "jwt":
+        raise HTTPException(
+            status_code=403,
+            detail="Bulk messaging campaigns can only be created and managed directly from the UNAI FLOW Web Dashboard. Developer API access for bulk messaging is disabled."
+        )
+    return ctx
+
+
 @router.post("", response_model=CampaignResponse)
 async def create_campaign(
     body: CampaignCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_dashboard_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")
 ):
     """
@@ -40,13 +53,12 @@ async def create_campaign(
 @router.post("/{campaign_id}/launch", response_model=CampaignLaunchResponse)
 async def launch_campaign(
     campaign_id: str,
-    ctx: AuthContext = Depends(get_auth_context)
+    ctx: AuthContext = Depends(require_dashboard_user)
 ):
     """
     Launch a draft or cancelled campaign. Queues all pending recipients
     and wakes the background dispatch worker.
     """
-    ctx.require_scope("campaigns:write")
     try:
         camp = campaign_service.launch_campaign(ctx.organization_id, campaign_id)
         return CampaignLaunchResponse(
@@ -67,10 +79,9 @@ async def list_campaigns(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: Optional[str] = Query(None, description="Filter by status: draft, queued, sending, completed, failed, cancelled"),
-    ctx: AuthContext = Depends(get_auth_context)
+    ctx: AuthContext = Depends(require_dashboard_user)
 ):
     """List all campaigns for the authenticated organization with pagination."""
-    ctx.require_scope("campaigns:read")
     return campaign_service.list_campaigns(
         organization_id=ctx.organization_id,
         page=page,
@@ -82,10 +93,9 @@ async def list_campaigns(
 @router.get("/{campaign_id}", response_model=CampaignResponse)
 async def get_campaign(
     campaign_id: str,
-    ctx: AuthContext = Depends(get_auth_context)
+    ctx: AuthContext = Depends(require_dashboard_user)
 ):
     """Get full details and real-time delivery statistics for a specific campaign."""
-    ctx.require_scope("campaigns:read")
     try:
         return campaign_service.get_campaign(ctx.organization_id, campaign_id)
     except ValueError as e:
@@ -98,10 +108,9 @@ async def get_campaign_recipients(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     status: Optional[str] = Query(None, description="Filter by recipient status: pending, queued, sending, sent, delivered, failed"),
-    ctx: AuthContext = Depends(get_auth_context)
+    ctx: AuthContext = Depends(require_dashboard_user)
 ):
     """Get per-recipient delivery statuses and errors for a specific campaign."""
-    ctx.require_scope("campaigns:read")
     try:
         return campaign_service.get_campaign_recipients(
             organization_id=ctx.organization_id,
@@ -117,10 +126,9 @@ async def get_campaign_recipients(
 @router.post("/{campaign_id}/cancel", response_model=CampaignResponse)
 async def cancel_campaign(
     campaign_id: str,
-    ctx: AuthContext = Depends(get_auth_context)
+    ctx: AuthContext = Depends(require_dashboard_user)
 ):
     """Cancel a queued or actively sending campaign. Halts remaining dispatches."""
-    ctx.require_scope("campaigns:write")
     try:
         return campaign_service.cancel_campaign(ctx.organization_id, campaign_id)
     except ValueError as e:

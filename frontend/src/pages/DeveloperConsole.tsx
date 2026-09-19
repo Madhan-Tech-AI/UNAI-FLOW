@@ -133,8 +133,7 @@ export default function DeveloperConsole() {
   const [customPhoneInput, setCustomPhoneInput] = useState(false);
   const [newAppScopes, setNewAppScopes] = useState<string[]>([
     'instances:read', 'channels:read', 'messages:send',
-    'campaigns:read', 'campaigns:write', 'usage:read',
-    'webhooks:read', 'webhooks:manage'
+    'usage:read', 'webhooks:read', 'webhooks:manage'
   ]);
   const [newlyCreatedApp, setNewlyCreatedApp] = useState<{
     id?: string;
@@ -179,8 +178,6 @@ export default function DeveloperConsole() {
     'instances:read',
     'channels:read',
     'messages:send',
-    'campaigns:read',
-    'campaigns:write',
     'usage:read'
   ]);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<{ raw_key: string; name: string } | null>(null);
@@ -193,9 +190,7 @@ export default function DeveloperConsole() {
   const [newWebhookUrl, setNewWebhookUrl] = useState('');
   const [newWebhookEvents, setNewWebhookEvents] = useState<string[]>([
     'message.sent',
-    'message.failed',
-    'campaign.launched',
-    'campaign.completed'
+    'message.failed'
   ]);
   const [createdWebhookSecret, setCreatedWebhookSecret] = useState<string | null>(null);
 
@@ -618,8 +613,8 @@ export default function DeveloperConsole() {
       const activeCreatedRawKey = newlyCreatedApp?.raw_api_key || newlyCreatedKey?.raw_key;
       const activeKeyDisplay = testApiKey || (activeCreatedRawKey ? activeCreatedRawKey : sampleKey);
       return `/* ================================================================
-   EXTERNAL CRM & SAAS PLATFORM INTEGRATION GUIDE
-   Works with Vekkalam CRM, Zoho, HubSpot, Zapier, Make, and Custom Backends
+   EXTERNAL INTEGRATION GUIDE — DIRECT MESSAGING API
+   Works with CRM, Node.js, Python, and Custom Backends
 ================================================================ */
 
 1. API ENDPOINT SPECIFICATION
@@ -643,26 +638,13 @@ export default function DeveloperConsole() {
      "message_type": "text"
    }
 
-3. BULK BROADCAST CAMPAIGN (Multiple Leads / Customers)
-   ----------------------------------------------------
-   HTTP POST https://unai-flow-backend-w4al.onrender.com/v1/messages/send
-   Headers:
-     X-API-Key: ${activeKeyDisplay}
-     Content-Type: application/json
-   Body:
-   {
-     "campaign_name": "CRM Lead Broadcast",
-     "to": [
-       "+1234567890",
-       "+1234567891",
-       "+1234567892"
-     ],
-     "message": "Hello! Check out our exclusive new offer available today.",
-     "message_type": "text"
-   }
+3. BULK MESSAGING CAMPAIGNS
+   ------------------------
+   Note: Bulk messaging campaigns are managed directly inside the UNAI FLOW Web Dashboard.
+   Navigate to "Bulk Messaging" in the sidebar to create, schedule, and launch bulk broadcasts.
 
-4. CRM ENVIRONMENT VARIABLES (Recommended for SaaS Backends)
-   ----------------------------------------------------------
+4. ENVIRONMENT VARIABLES
+   ---------------------
    UNAI_FLOW_API_URL=https://unai-flow-backend-w4al.onrender.com/v1
    UNAI_FLOW_API_KEY=${activeKeyDisplay}
    UNAI_FLOW_WHATSAPP_SENDER=${sampleWhatsApp ? (sampleWhatsApp.startsWith('+') ? sampleWhatsApp : `+${sampleWhatsApp}`) : '+1234567890'}`;
@@ -688,23 +670,7 @@ curl -X POST "https://unai-flow-backend-w4al.onrender.com/v1/messages/send" \\
   -H "Content-Type: application/json" \\
   -d '{
     "to": "${sampleWhatsApp ? (sampleWhatsApp.startsWith('+') ? sampleWhatsApp : `+${sampleWhatsApp}`) : '+1234567890'}",
-    "text": "Hello from your CRM! Your payment receipt is confirmed."
-  }'
-
-# ================================================================
-# 3. DISPATCH PERSONALIZED BULK CAMPAIGN TO RECIPIENTS
-# ================================================================
-curl -X POST "https://unai-flow-backend-w4al.onrender.com/v1/messages/send" \\
-  -H "Authorization: Bearer ${sampleKey}" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "campaign_name": "Customer Broadcast",
-    "text": "Hello {{name}}, your report is ready at {{link}}",
-    "recipients": [
-      { "recipient_jid": "1234567890@s.whatsapp.net", "variables": { "name": "Customer 1", "link": "https://crm.example.com/r/1" } },
-      { "recipient_jid": "1234567891@s.whatsapp.net", "variables": { "name": "Customer 2", "link": "https://crm.example.com/r/2" } }
-    ],
-    "messages_per_second": 2.0
+    "text": "Hello! Your notification has been delivered."
   }'`;
     }
 
@@ -730,28 +696,15 @@ const client = axios.create({
 async function checkConnection() {
   const res = await client.get('/auth/verify');
   console.log('UNAI Platform Status:', res.data);
-  // res.data -> { status: "active", whatsapp_number: "+${sampleWhatsApp}", scopes: [...] }
 }
 
-// 2. Dispatch a Realtime Notification (Single Message)
+// 2. Dispatch a Direct WhatsApp Notification (Single Message)
 async function sendNotification(recipientPhone, messageText) {
   const response = await client.post('/messages/send', {
     to: recipientPhone,
     text: messageText
   });
   console.log('Message Dispatched:', response.data);
-  return response.data;
-}
-
-// 3. Dispatch Bulk WhatsApp Campaign
-async function sendBulkBroadcast(campaignName, recipients) {
-  const response = await client.post('/messages/send', {
-    campaign_name: campaignName,
-    text: 'Hello {{name}}, your balance is {{balance}}.',
-    recipients: recipients,
-    messages_per_second: 2.0
-  });
-  console.log('Campaign Launched:', response.data.campaign_id);
   return response.data;
 }
 
@@ -789,20 +742,6 @@ def send_whatsapp_message(to_number: str, message: str):
     res.raise_for_status()
     print("Sent:", res.json())
     return res.json()
-
-# 3. Dispatch Bulk Personalized Campaign
-def launch_bulk_campaign():
-    payload = {
-        "campaign_name": "Statements",
-        "text": "Hi {{name}}, your receipt for invoice #{{invoice}} is ready.",
-        "recipients": [
-            {"recipient_jid": "1234567890@s.whatsapp.net", "variables": {"name": "Customer A", "invoice": "INV-102"}},
-            {"recipient_jid": "1234567891@s.whatsapp.net", "variables": {"name": "Customer B", "invoice": "INV-103"}}
-        ],
-        "messages_per_second": 2.0
-    }
-    res = requests.post(f"{BASE_URL}/messages/send", json=payload, headers=headers)
-    print("Campaign Launched:", res.json())
 
 if __name__ == "__main__":
     verify_connection()`;
@@ -2103,7 +2042,7 @@ if __name__ == "__main__":
               <div>
                 <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: '#0f172a' }}>Configured Webhook Endpoints</h3>
                 <p style={{ fontSize: '0.85rem', color: '#64748b', margin: '0.2rem 0 0 0' }}>
-                  Receive real-time notifications when WhatsApp messages are delivered, fail, or when campaigns finish.
+                  Receive real-time notifications when WhatsApp direct messages are delivered or fail.
                 </p>
               </div>
               <button
@@ -2301,7 +2240,7 @@ if __name__ == "__main__":
               { label: 'Total API Requests', value: usageSummary?.total_requests ?? 0, icon: Activity, color: '#2563eb' },
               { label: 'Messages Dispatched', value: usageSummary?.total_messages_sent ?? 0, icon: Send, color: '#16a34a' },
               { label: 'Delivery Failures', value: usageSummary?.total_messages_failed ?? 0, icon: AlertTriangle, color: '#dc2626' },
-              { label: 'Bulk Campaigns Executed', value: usageSummary?.total_campaigns ?? 0, icon: Zap, color: '#9333ea' }
+              { label: 'Active Webhooks', value: usageSummary?.active_webhooks ?? 0, icon: Webhook, color: '#9333ea' }
             ].map((m, idx) => {
               const Icon = m.icon;
               return (
@@ -2428,7 +2367,7 @@ if __name__ == "__main__":
                     type="text"
                     value={testRecipient}
                     onChange={(e) => setTestRecipient(e.target.value)}
-                    placeholder="+1234567890 (or separate multiple with commas for bulk broadcast)"
+                    placeholder="+1234567890"
                     style={{
                       width: '100%',
                       padding: '0.65rem 0.85rem',
@@ -2438,7 +2377,7 @@ if __name__ == "__main__":
                     }}
                   />
                   <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.725rem', color: '#94a3b8' }}>
-                    Single recipient sends directly; multiple comma-separated numbers automatically launch a bulk broadcast campaign.
+                    Direct recipient mobile phone number. Bulk messaging campaigns are managed in the Bulk Messaging dashboard.
                   </p>
                 </div>
 
@@ -2526,12 +2465,6 @@ if __name__ == "__main__":
                         <>
                           <span style={{ fontWeight: 600 }}>Job ID:</span>
                           <span style={{ fontFamily: 'monospace' }}>{testResult.job_id}</span>
-                        </>
-                      )}
-                      {testResult.campaign_id && (
-                        <>
-                          <span style={{ fontWeight: 600 }}>Campaign ID:</span>
-                          <span style={{ fontFamily: 'monospace' }}>{testResult.campaign_id}</span>
                         </>
                       )}
                       <span style={{ fontWeight: 600 }}>Recipients:</span>
@@ -2840,7 +2773,7 @@ ${JSON.stringify({ to: testRecipient ? (testRecipient.includes(',') ? testRecipi
                   Application Permissions & Scopes
                 </label>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
-                  {['messages:send', 'campaigns:read', 'campaigns:write', 'instances:read', 'channels:read', 'usage:read', 'webhooks:read', 'webhooks:manage'].map((s) => (
+                  {['messages:send', 'instances:read', 'channels:read', 'usage:read', 'webhooks:read', 'webhooks:manage'].map((s) => (
                     <label key={s} className="flex items-center gap-2" style={{ fontSize: '0.8rem', color: '#374151', cursor: 'pointer' }}>
                       <input
                         type="checkbox"
@@ -3148,8 +3081,6 @@ ${JSON.stringify({ to: testRecipient ? (testRecipient.includes(',') ? testRecipi
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                   {[
                     { id: 'messages:send', label: 'Send Messages' },
-                    { id: 'campaigns:write', label: 'Create Campaigns' },
-                    { id: 'campaigns:read', label: 'Read Campaigns' },
                     { id: 'channels:read', label: 'Read Channels' },
                     { id: 'instances:read', label: 'Read Instances' },
                     { id: 'usage:read', label: 'Read Analytics' }
@@ -3270,10 +3201,7 @@ ${JSON.stringify({ to: testRecipient ? (testRecipient.includes(',') ? testRecipi
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.6rem' }}>
                   {[
                     { id: 'message.sent', label: 'message.sent — Delivery successful' },
-                    { id: 'message.failed', label: 'message.failed — Delivery error' },
-                    { id: 'campaign.launched', label: 'campaign.launched — Campaign queued' },
-                    { id: 'campaign.completed', label: 'campaign.completed — All recipients processed' },
-                    { id: 'campaign.cancelled', label: 'campaign.cancelled — Campaign halted' }
+                    { id: 'message.failed', label: 'message.failed — Delivery error' }
                   ].map((ev) => (
                     <label key={ev.id} className="flex items-center gap-2" style={{ fontSize: '0.85rem', color: '#334155', cursor: 'pointer' }}>
                       <input

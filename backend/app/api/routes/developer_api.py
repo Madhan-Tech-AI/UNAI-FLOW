@@ -1,4 +1,3 @@
-from app.schemas.campaign import CampaignCreate, CampaignRecipient
 import re
 from typing import Dict, Any, List, Optional, Union
 from pydantic import BaseModel, Field
@@ -6,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from app.api.dependencies import get_auth_context, AuthContext, require_scope
 from app.services.application_service import application_service
 from app.services.publishing_service import publishing_service
-from app.services.campaign_service import campaign_service
 from app.services.instance_service import instance_service
 
 from app.schemas.application import ApplicationTestConnectionResponse
@@ -22,7 +20,7 @@ router = APIRouter(prefix="/v1", tags=["Developer & CRM API"])
 class SendMessageRequest(BaseModel):
     to: Union[str, List[str]] = Field(
         ...,
-        description="Recipient mobile phone number (e.g. '+919876543210') or an array of phone numbers for bulk broadcast"
+        description="Recipient mobile phone number (e.g. '+919876543210')"
     )
     message: Optional[str] = Field(None, description="Message text content")
     body: Optional[str] = Field(None, description="Alias for message")
@@ -30,19 +28,17 @@ class SendMessageRequest(BaseModel):
     media_url: Optional[str] = Field(None, description="Public media URL for image, video, audio, or document")
     caption: Optional[str] = Field(None, description="Caption for media messages")
     message_type: Optional[str] = Field("text", description="Message type: 'text', 'image', 'video', 'audio', 'poll'")
-    campaign_name: Optional[str] = Field(None, description="Optional name if triggered as a bulk broadcast")
     idempotency_key: Optional[str] = Field(None, description="Idempotency key to avoid duplicate messages")
 
 
 class MessageSendResponse(BaseModel):
     success: bool
-    mode: str = Field(..., description="'single' or 'bulk'")
+    mode: str = Field("single", description="'single'")
     status: str
     message: str
     job_id: Optional[str] = None
-    campaign_id: Optional[str] = None
     recipient: Optional[str] = None
-    total_recipients: Optional[int] = None
+    total_recipients: Optional[int] = 1
     idempotency_key: Optional[str] = None
 
 
@@ -182,27 +178,27 @@ async def get_whatsapp_status(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Unified CRM Message Dispatch (Single or Bulk)
+# 3. Developer Direct Message Dispatch
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get("/messages/send")
 async def get_messages_send_info():
     """
     Informational endpoint returned when visiting /v1/messages/send in a browser via GET.
-    Provides clear instructions on how external CRMs and SaaS platforms dispatch messages using POST.
+    Provides clear instructions on how external integrations dispatch direct messages using POST.
     """
     return {
         "status": "online",
         "endpoint": "POST https://unai-flow-backend-w4al.onrender.com/v1/messages/send",
-        "service": "UNAI FLOW WhatsApp Bulk & Single Message Dispatcher",
+        "service": "UNAI FLOW WhatsApp Direct Message Dispatcher",
         "method_required": "POST",
-        "note": "Web browsers perform GET requests by default when visiting a URL in the address bar. To dispatch messages from your CRM or SaaS, use HTTP POST with your X-API-Key and JSON body.",
+        "note": "Web browsers perform GET requests by default when visiting a URL in the address bar. To dispatch direct messages from your platform, use HTTP POST with your X-API-Key and JSON body. Bulk messaging is managed exclusively within the UNAI FLOW Web Dashboard.",
         "required_headers": {
             "Content-Type": "application/json",
             "X-API-Key": "wa_live_your_key_here"
         },
         "sample_payload": {
-            "to": ["+1234567890"],
-            "message": "Hello from external CRM / SaaS platform!",
+            "to": "+1234567890",
+            "message": "Hello from external platform!",
             "message_type": "text"
         },
         "interactive_console": "https://unai-flow-rc39.vercel.app/developer-console"
@@ -216,11 +212,9 @@ async def send_message_unified(
     header_idempotency: Optional[str] = Header(None, alias="Idempotency-Key")
 ):
     """
-    Unified WhatsApp message dispatcher for external CRMs and integrations.
-
-    - If 'to' is a single phone number: sends immediately via the publishing pipeline.
-    - If 'to' is a list of numbers: automatically stages and launches a bulk broadcast campaign.
-    - Supports text, image, video, audio, and documents.
+    Direct WhatsApp message dispatcher for external integrations.
+    Supports single recipient direct messaging (text, image, video, audio).
+    Bulk messaging campaigns via Developer API are disabled (manage campaigns directly in UNAI FLOW Web Dashboard).
     """
     effective_idempotency = header_idempotency or req.idempotency_key
     text_content = (req.message or req.body or req.text or "").strip()
@@ -232,13 +226,11 @@ async def send_message_unified(
     for r in raw_recipients:
         if not r:
             continue
-        # Split commas or newlines if passed in a single string
         parts = re.split(r"[\r\n,;]+", str(r).strip())
         for p in parts:
             trimmed = p.strip()
             if not trimmed:
                 continue
-            # If it's a phone number without JID suffix, standardize digits
             if "@" not in trimmed:
                 digits = re.sub(r"\D", "", trimmed)
                 if digits:
@@ -247,7 +239,14 @@ async def send_message_unified(
                 clean_recipients.append(trimmed)
 
     if not clean_recipients:
-        raise HTTPException(status_code=422, detail="At least one valid recipient phone number is required in 'to'.")
+        raise HTTPException(status_code=422, detail="A valid recipient phone number is required in 'to'.")
+
+    # Guard: Reject bulk messaging requests via Developer API
+    if len(clean_recipients) > 1:
+        raise HTTPException(
+            status_code=403,
+            detail="Bulk messaging campaigns via Developer API are disabled. Bulk messaging campaigns can only be created and launched directly from the UNAI FLOW Web Dashboard (/bulk-messaging)."
+        )
 
     # 2. Check message content
     m_type = req.message_type or "text"
@@ -265,70 +264,28 @@ async def send_message_unified(
         if req.caption or text_content:
             payload["caption"] = req.caption or text_content
 
-    # ─────────────────────────────────────────────────────────────
-    # CASE A: Exactly 1 recipient → Deliver via single publish queue
-    # ─────────────────────────────────────────────────────────────
-    if len(clean_recipients) == 1:
-        target_to = clean_recipients[0]
-        try:
-            result = await publishing_service.enqueue_post(
-                organization_id=ctx.organization_id,
-                to=target_to,
-                message_type=m_type,
-                payload=payload,
-                idempotency_key=effective_idempotency
-            )
-            return MessageSendResponse(
-                success=True,
-                mode="single",
-                status=result.get("status", "queued"),
-                message="Message queued for delivery to WhatsApp recipient",
-                job_id=result.get("job_id"),
-                recipient=target_to,
-                total_recipients=1,
-                idempotency_key=effective_idempotency
-            )
-        except Exception as err:
-            logger.error(f"Failed to enqueue single message: {err}", exc_info=True)
-            raise HTTPException(status_code=400, detail=str(err))
-
-    # ─────────────────────────────────────────────────────────────
-    # CASE B: Multiple recipients → Create & launch bulk campaign
-    # ─────────────────────────────────────────────────────────────
+    # Deliver via single publish queue
+    target_to = clean_recipients[0]
     try:
-        ctx.require_scope("campaigns:write")
-        rec_inputs = [CampaignRecipient(recipient_jid=r) for r in clean_recipients]
-        camp_data = CampaignCreate(
-            name=req.campaign_name or f"CRM Bulk Dispatch ({len(clean_recipients)} contacts)",
-            description="Triggered automatically via CRM API POST /v1/messages/send",
-            message_type=m_type,
-            message_payload=payload,
-            recipients=rec_inputs,
-            messages_per_second=2.0
-        )
-
-        camp = campaign_service.create_campaign(
+        result = await publishing_service.enqueue_post(
             organization_id=ctx.organization_id,
-            data=camp_data,
-            api_key_id=ctx.api_key_id,
-            application_id=ctx.application_id,
+            to=target_to,
+            message_type=m_type,
+            payload=payload,
             idempotency_key=effective_idempotency
         )
-
-        # Launch immediately
-        launched = campaign_service.launch_campaign(ctx.organization_id, camp["id"])
-
         return MessageSendResponse(
             success=True,
-            mode="bulk",
-            status=launched.get("status", "queued"),
-            message=f"Bulk campaign created and queued for {len(clean_recipients)} recipients",
-            campaign_id=camp["id"],
-            total_recipients=len(clean_recipients),
+            mode="single",
+            status=result.get("status", "queued"),
+            message="Direct message queued for delivery to WhatsApp recipient",
+            job_id=result.get("job_id"),
+            recipient=target_to,
+            total_recipients=1,
             idempotency_key=effective_idempotency
         )
     except Exception as err:
-        logger.error(f"Failed to create bulk campaign from CRM request: {err}", exc_info=True)
+        logger.error(f"Failed to enqueue direct message: {err}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(err))
 
 

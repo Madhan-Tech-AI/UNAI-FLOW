@@ -4,14 +4,11 @@ from datetime import datetime
 
 SUPPORTED_SCOPES = [
     "messages:send",
-    "campaigns:write",
-    "campaigns:read",
     "instances:read",
     "channels:read",
     "usage:read",
     "webhooks:read",
     "webhooks:manage",
-    "integration:read",
 ]
 
 
@@ -36,12 +33,9 @@ class ApplicationCreate(BaseModel):
             "instances:read",
             "channels:read",
             "messages:send",
-            "campaigns:read",
-            "campaigns:write",
             "usage:read",
             "webhooks:read",
             "webhooks:manage",
-            "integration:read",
         ],
         description="Permission scopes for the auto-generated API key"
     )

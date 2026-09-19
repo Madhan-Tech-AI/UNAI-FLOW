@@ -6,7 +6,7 @@ from datetime import datetime
 class ApiKeyCreate(BaseModel):
     name: str = Field(..., description="Descriptive label for this API key")
     scopes: List[str] = Field(
-        default=["instances:read", "channels:read", "messages:send", "campaigns:read", "campaigns:write", "usage:read"],
+        default=["instances:read", "channels:read", "messages:send", "usage:read"],
         description="Assigned permission scopes"
     )
     environment: str = Field(

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Send,
   Plus,
@@ -13,7 +13,6 @@ import {
   Phone,
   Users,
   Wifi,
-  WifiOff,
   Link2,
   CheckCircle2,
   Loader2,
@@ -22,7 +21,8 @@ import {
   LogOut,
   Smartphone
 } from 'lucide-react';
-import { fetchApi, API_BASE_URL } from '../lib/apiClient';
+import { fetchApi } from '../lib/apiClient';
+
 
 interface CampaignItem {
   id: string;

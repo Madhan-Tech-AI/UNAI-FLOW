@@ -207,10 +207,13 @@ app.post('/v1/bulk/:connectionId/pair', async (req: Request, res: Response) => {
 // ──────────────────────────────────────────────
 
 /**
- * Helper: ensure session is connected before sending
+ * Helper: ensure session is connected before sending.
+ * Falls back to ANY connected session if the requested connectionId isn't found,
+ * because campaign workers may use a different ID than the one used during pairing.
  */
 async function getConnectedSession(connectionId: string, res: Response) {
   let session = sessionManager.getSession(connectionId);
+  logger.info({ connectionId, found: !!session, status: session?.status }, '[BULK] getConnectedSession: initial lookup');
 
   // Try to restore if not in memory
   if (!session || session.status !== 'CONNECTED' || !session.socket) {
@@ -225,21 +228,38 @@ async function getConnectedSession(connectionId: string, res: Response) {
         waited += pollIntervalMs;
         session = sessionManager.getSession(connectionId) || session;
       }
-    } catch {}
+      logger.info({ connectionId, status: session?.status, waited }, '[BULK] getConnectedSession: after restore attempt');
+    } catch (err: any) {
+      logger.warn({ connectionId, err: err.message }, '[BULK] getConnectedSession: restore failed');
+    }
+  }
+
+  // Fallback: if requested connectionId doesn't have a connected session,
+  // try finding ANY connected session (handles instance_uuid vs 'default' mismatch)
+  if (!session || session.status !== 'CONNECTED' || !session.socket) {
+    logger.info({ connectionId }, '[BULK] getConnectedSession: requested ID not connected, trying fallback to any connected session');
+    const fallback = sessionManager.getAnyConnectedSession();
+    if (fallback && fallback.status === 'CONNECTED' && fallback.socket) {
+      logger.info({ requestedId: connectionId, actualId: fallback.connectionId }, '[BULK] getConnectedSession: using fallback session');
+      session = fallback;
+    }
   }
 
   if (!session || session.status !== 'CONNECTED' || !session.socket) {
     const currentStatus = session?.status || 'NO_SESSION';
+    logger.error({ connectionId, currentStatus }, '[BULK] getConnectedSession: NO connected session found');
     res.status(400).json({
       success: false,
-      error: 'WhatsApp session is not connected. Please scan the QR code to link your WhatsApp account first.',
+      error: `WhatsApp session is not connected (status: ${currentStatus}). Please scan the QR code to link your WhatsApp account first.`,
       sessionStatus: currentStatus,
+      requestedConnectionId: connectionId,
     });
     return null;
   }
 
   return session;
 }
+
 
 /**
  * 5. Send Text Message

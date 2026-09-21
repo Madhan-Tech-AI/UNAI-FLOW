@@ -78,35 +78,56 @@ class WhatsAppWebSessionProvider(WhatsAppProvider):
         if "headers" in kwargs:
             headers.update(kwargs.pop("headers"))
 
+        logger.info(f"[BULK_API] {method} {url} (timeout={timeout}s)")
+
         delays = [2, 4, 8]
         last_exc = None
+        last_response_body = None
 
         for attempt in range(3):
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     resp = await client.request(method, url, headers=headers, **kwargs)
+                    logger.info(f"[BULK_API] {method} {url} → HTTP {resp.status_code} (attempt {attempt+1})")
+
                     if resp.status_code == 429:
                         retry_after = resp.headers.get("Retry-After")
                         sleep_s = int(retry_after) if retry_after and retry_after.isdigit() else delays[attempt]
-                        logger.warning(f"Bulk API 429 rate limit hit, backoff {sleep_s}s (attempt {attempt+1})")
+                        logger.warning(f"[BULK_API] 429 rate limit hit, backoff {sleep_s}s (attempt {attempt+1})")
                         await asyncio.sleep(sleep_s)
                         continue
+
+                    if resp.status_code >= 400:
+                        try:
+                            last_response_body = resp.text
+                        except Exception:
+                            last_response_body = f"HTTP {resp.status_code}"
+                        logger.error(f"[BULK_API] {method} {url} failed with HTTP {resp.status_code}: {last_response_body[:500]}")
+
                     resp.raise_for_status()
                     return resp
             except httpx.HTTPStatusError as e:
                 last_exc = e
+                try:
+                    last_response_body = e.response.text
+                except Exception:
+                    last_response_body = str(e)
+                logger.error(f"[BULK_API] HTTPStatusError on {method} {url} (attempt {attempt+1}): HTTP {e.response.status_code} — {last_response_body[:500]}")
                 if e.response.status_code in [502, 503, 504] and attempt < 2:
                     await asyncio.sleep(delays[attempt])
                     continue
                 break
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
                 last_exc = e
+                logger.error(f"[BULK_API] ConnectionError on {method} {url} (attempt {attempt+1}): {type(e).__name__}: {e}")
                 if attempt < 2:
                     await asyncio.sleep(delays[attempt])
                     continue
                 break
 
-        raise MessageSendFailedException(f"Bulk API communication failed: {str(last_exc)}")
+        error_detail = last_response_body or str(last_exc) or "Unknown error"
+        raise MessageSendFailedException(f"Bulk API communication failed: {error_detail[:500]}")
+
 
     async def create_instance(self, instance_id: str) -> Dict[str, Any]:
         return {"instance_id": instance_id, "status": "INITIALIZING"}
@@ -196,6 +217,7 @@ class WhatsAppWebSessionProvider(WhatsAppProvider):
         return None
 
     async def send_text(self, instance_id: str, to: str, text: str) -> ProviderMessageResult:
+        logger.info(f"[SEND_TEXT] instance_id={instance_id}, to={to}, text_len={len(text)}")
         # Route through bulk API for direct phone messages
         if not to.endswith("@newsletter"):
             try:
@@ -207,11 +229,15 @@ class WhatsAppWebSessionProvider(WhatsAppProvider):
                 )
                 data = resp.json()
                 msg_id = data.get("message_id") or data.get("id") or f"msg_{datetime.now().timestamp()}"
+                logger.info(f"[SEND_TEXT] SUCCESS via bulk API: msg_id={msg_id}, to={to}")
                 return ProviderMessageResult(success=True, message_id=msg_id, timestamp=datetime.now(timezone.utc), provider_raw=data)
             except Exception as bulk_err:
-                logger.warning(f"Bulk API send_text failed, trying WCA fallback: {bulk_err}")
+                logger.error(f"[SEND_TEXT] Bulk API send_text FAILED for to={to}: {bulk_err}")
+                # For phone messages, bulk API is the only path — don't fallback to WCA
+                raise MessageSendFailedException(f"Bulk message send failed: {bulk_err}")
 
-        # Fallback to WCA (for channels or if bulk API is down)
+        # WCA path (for channel/newsletter JIDs only)
+        logger.info(f"[SEND_TEXT] Using WCA for newsletter JID: {to}")
         try:
             resp = await self._request(
                 "POST",
@@ -230,8 +256,10 @@ class WhatsAppWebSessionProvider(WhatsAppProvider):
         msg_id = data.get("message_id") or data.get("id") or data.get("messageId") or f"msg_{datetime.now().timestamp()}"
         return ProviderMessageResult(success=True, message_id=msg_id, timestamp=datetime.now(timezone.utc), provider_raw=data)
 
+
     async def send_image(self, instance_id: str, to: str, image_url_or_bytes: Any, caption: Optional[str] = None) -> ProviderMessageResult:
         media_url = image_url_or_bytes if isinstance(image_url_or_bytes, str) else None
+        logger.info(f"[SEND_IMAGE] instance_id={instance_id}, to={to}, media_url={media_url is not None}")
 
         # Route through bulk API for direct phone messages
         if not to.endswith("@newsletter") and media_url:
@@ -244,11 +272,14 @@ class WhatsAppWebSessionProvider(WhatsAppProvider):
                 )
                 data = resp.json()
                 msg_id = data.get("message_id") or data.get("id") or f"msg_{datetime.now().timestamp()}"
+                logger.info(f"[SEND_IMAGE] SUCCESS via bulk API: msg_id={msg_id}, to={to}")
                 return ProviderMessageResult(success=True, message_id=msg_id, timestamp=datetime.now(timezone.utc), provider_raw=data)
             except Exception as bulk_err:
-                logger.warning(f"Bulk API send_image failed, trying WCA fallback: {bulk_err}")
+                logger.error(f"[SEND_IMAGE] Bulk API send_image FAILED for to={to}: {bulk_err}")
+                raise MessageSendFailedException(f"Bulk image send failed: {bulk_err}")
 
-        # Fallback to WCA
+        # WCA path (for channel/newsletter JIDs only)
+        logger.info(f"[SEND_IMAGE] Using WCA for newsletter JID: {to}")
         payload = {"to": to, "caption": caption}
         if media_url:
             payload["media_url"] = media_url
@@ -268,6 +299,7 @@ class WhatsAppWebSessionProvider(WhatsAppProvider):
 
     async def send_video(self, instance_id: str, to: str, video_url_or_bytes: Any, caption: Optional[str] = None) -> ProviderMessageResult:
         media_url = video_url_or_bytes if isinstance(video_url_or_bytes, str) else None
+        logger.info(f"[SEND_VIDEO] instance_id={instance_id}, to={to}, media_url={media_url is not None}")
 
         # Route through bulk API for direct phone messages
         if not to.endswith("@newsletter") and media_url:
@@ -280,11 +312,14 @@ class WhatsAppWebSessionProvider(WhatsAppProvider):
                 )
                 data = resp.json()
                 msg_id = data.get("message_id") or data.get("id") or f"msg_{datetime.now().timestamp()}"
+                logger.info(f"[SEND_VIDEO] SUCCESS via bulk API: msg_id={msg_id}, to={to}")
                 return ProviderMessageResult(success=True, message_id=msg_id, timestamp=datetime.now(timezone.utc), provider_raw=data)
             except Exception as bulk_err:
-                logger.warning(f"Bulk API send_video failed, trying WCA fallback: {bulk_err}")
+                logger.error(f"[SEND_VIDEO] Bulk API send_video FAILED for to={to}: {bulk_err}")
+                raise MessageSendFailedException(f"Bulk video send failed: {bulk_err}")
 
-        # Fallback to WCA
+        # WCA path (for channel/newsletter JIDs only)
+        logger.info(f"[SEND_VIDEO] Using WCA for newsletter JID: {to}")
         payload = {"to": to, "caption": caption}
         if media_url:
             payload["media_url"] = media_url

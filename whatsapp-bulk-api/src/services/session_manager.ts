@@ -272,6 +272,22 @@ export class BulkSessionManager {
   }
 
   /**
+   * Finds ANY connected session regardless of connectionId.
+   * This is used as a fallback when the requested connectionId doesn't match
+   * (e.g., campaign worker uses instance_uuid but user connected as 'default').
+   */
+  public getAnyConnectedSession(): BulkSession | undefined {
+    for (const [id, session] of this.sessions.entries()) {
+      if (session.status === 'CONNECTED' && session.socket) {
+        logger.info({ foundConnectionId: id }, '[BULK] Fallback: found connected session');
+        return session;
+      }
+    }
+    return undefined;
+  }
+
+
+  /**
    * Initializes a Baileys session for the given connection.
    */
   public async initSession(connectionId: string): Promise<BulkSession> {

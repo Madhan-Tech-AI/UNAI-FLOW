@@ -55,18 +55,16 @@ interface RecipientItem {
   failed_at?: string;
 }
 
-// Bulk API base URL — uses the same backend proxy or direct bulk API
+// Bulk API base URL — points to deployed Render WhatsApp Bulk service
 function getBulkApiUrl(): string {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
-    if (!isLocalhost) {
-      // Production: use deployed bulk API on Render
-      return 'https://unai-whatsapp-bulkapi.onrender.com';
-    }
+  if (typeof window !== 'undefined' && (window as any).__BULK_API_URL__) {
+    return (window as any).__BULK_API_URL__;
   }
-  return 'http://localhost:3002';
+  const envUrl = (import.meta as any).env?.VITE_WHATSAPP_BULK_API_URL;
+  if (envUrl) return envUrl;
+  return 'https://unai-whatsapp-bulk-api.onrender.com';
 }
+
 
 type BulkConnectionStep = 'choose' | 'connecting' | 'connected';
 

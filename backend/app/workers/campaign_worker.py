@@ -213,6 +213,9 @@ class CampaignWorker:
                 elif message_type == "video":
                     caption = self._interpolate_text(payload.get("caption", ""), variables, recipient_name)
                     result = await provider.send_video(inst_uuid, recipient_jid, payload.get("media_url"), caption)
+                elif message_type == "document":
+                    caption = self._interpolate_text(payload.get("caption", ""), variables, recipient_name)
+                    result = await provider.send_document(inst_uuid, recipient_jid, payload.get("media_url"), payload.get("filename"), caption)
                 elif message_type == "audio":
                     result = await provider.send_audio(inst_uuid, recipient_jid, payload.get("media_url"))
                 elif message_type == "poll":

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Send,
   Plus,
@@ -11,9 +11,18 @@ import {
   Eye,
   Upload,
   Phone,
-  Users
+  Users,
+  Wifi,
+  WifiOff,
+  Link2,
+  CheckCircle2,
+  Loader2,
+  QrCode,
+  Paperclip,
+  LogOut,
+  Smartphone
 } from 'lucide-react';
-import { fetchApi } from '../lib/apiClient';
+import { fetchApi, API_BASE_URL } from '../lib/apiClient';
 
 interface CampaignItem {
   id: string;
@@ -46,20 +55,55 @@ interface RecipientItem {
   failed_at?: string;
 }
 
+// Bulk API base URL — uses the same backend proxy or direct bulk API
+function getBulkApiUrl(): string {
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+    if (!isLocalhost) {
+      // Production: use deployed bulk API on Render
+      return 'https://unai-whatsapp-bulkapi.onrender.com';
+    }
+  }
+  return 'http://localhost:3002';
+}
+
+type BulkConnectionStep = 'choose' | 'connecting' | 'connected';
+
+interface BulkAccountInfo {
+  phone?: string;
+  name?: string;
+  jid?: string;
+  profilePictureUrl?: string;
+  connectionId?: string;
+}
+
 export default function BulkMessaging() {
   const [campaigns, setCampaigns] = useState<CampaignItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  // ── WhatsApp Connection Gate State ──
+  const [connectionStep, setConnectionStep] = useState<BulkConnectionStep>('choose');
+  const [connectionLoading, setConnectionLoading] = useState(true);
+  const [bulkConnectionId, setBulkConnectionId] = useState<string | null>(null);
+  const [bulkAccount, setBulkAccount] = useState<BulkAccountInfo | null>(null);
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
+  const [waStatus, setWaStatus] = useState<string>('DISCONNECTED');
+  const [connectionError, setConnectionError] = useState('');
+  const qrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
 
   // Create Campaign Modal
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
   const [campName, setCampName] = useState('');
   const [campDesc, setCampDesc] = useState('');
-  const [msgType, setMsgType] = useState<'text' | 'image' | 'video' | 'poll'>('text');
+  const [msgType, setMsgType] = useState<'text' | 'image' | 'video' | 'document' | 'poll'>('text');
   const [textBody, setTextBody] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');
   const [mediaCaption, setMediaCaption] = useState('');
+  const [docFilename, setDocFilename] = useState('');
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
   const [recipientsRaw, setRecipientsRaw] = useState('');
@@ -73,6 +117,176 @@ export default function BulkMessaging() {
   const [recipients, setRecipients] = useState<RecipientItem[]>([]);
   const [recipientsLoading, setRecipientsLoading] = useState(false);
   const [recipientStatusFilter, setRecipientStatusFilter] = useState<string>('all');
+
+  // ── WhatsApp Connection Logic ──
+  useEffect(() => {
+    mountedRef.current = true;
+    checkExistingConnection();
+    return () => {
+      mountedRef.current = false;
+      if (qrPollRef.current) clearInterval(qrPollRef.current);
+    };
+  }, []);
+
+  const checkExistingConnection = async () => {
+    setConnectionLoading(true);
+    try {
+      // Check if there's already a connected WhatsApp session via the backend
+      const res = await fetchApi('/api/channels/whatsapp/status');
+      if (res?.whatsapp?.isReady && res?.whatsapp?.userInfo?.phone) {
+        const sessionId = res.connectionId || res.whatsapp?.userInfo?.channel_id || 'default_primary_session';
+        setBulkConnectionId(sessionId);
+        setBulkAccount({
+          phone: res.whatsapp.userInfo.phone,
+          name: res.whatsapp.userInfo.name,
+          profilePictureUrl: res.whatsapp.userInfo.profilePictureUrl,
+          connectionId: sessionId,
+        });
+        setWaStatus('CONNECTED');
+        setConnectionStep('connected');
+        setConnectionLoading(false);
+        return;
+      }
+    } catch {}
+
+    // Also try bulk API directly
+    try {
+      const bulkUrl = getBulkApiUrl();
+      const healthRes = await fetch(`${bulkUrl}/health`);
+      if (healthRes.ok) {
+        const health = await healthRes.json();
+        if (health.active_sessions > 0) {
+          // There may be a session — try to check status
+        }
+      }
+    } catch {}
+
+    setConnectionLoading(false);
+  };
+
+  const startNewConnection = async () => {
+    setConnectionStep('connecting');
+    setConnectionError('');
+    try {
+      const bulkUrl = getBulkApiUrl();
+      const connId = `bulk_${Date.now()}`;
+      const res = await fetch(`${bulkUrl}/v1/bulk/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: connId }),
+      });
+      const data = await res.json();
+      setBulkConnectionId(data.connectionId || connId);
+
+      if (data.isReady) {
+        setWaStatus('CONNECTED');
+        setConnectionStep('connected');
+        return;
+      }
+
+      // Start QR polling
+      startQrPolling(data.connectionId || connId);
+    } catch (err: any) {
+      setConnectionError(err.message || 'Failed to connect to bulk messaging service');
+      setConnectionStep('choose');
+    }
+  };
+
+  const useExistingConnection = async () => {
+    setConnectionStep('connecting');
+    setConnectionError('');
+    try {
+      // Use the same session identifier from the channel API
+      const res = await fetchApi('/api/channels/whatsapp/status');
+      if (res?.whatsapp?.isReady) {
+        const sessionId = res.connectionId || 'default_primary_session';
+        // Connect it to the bulk API too
+        const bulkUrl = getBulkApiUrl();
+        try {
+          await fetch(`${bulkUrl}/v1/bulk/connect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ connectionId: sessionId }),
+          });
+        } catch {}
+
+        setBulkConnectionId(sessionId);
+        setBulkAccount({
+          phone: res.whatsapp.userInfo?.phone,
+          name: res.whatsapp.userInfo?.name,
+          profilePictureUrl: res.whatsapp.userInfo?.profilePictureUrl,
+          connectionId: sessionId,
+        });
+        setWaStatus('CONNECTED');
+        setConnectionStep('connected');
+        return;
+      }
+      // If not connected, fall through to new connection
+      setConnectionError('No existing WhatsApp connection found. Please link a new account.');
+      setConnectionStep('choose');
+    } catch (err: any) {
+      setConnectionError('Could not find existing connection. Please link a new account.');
+      setConnectionStep('choose');
+    }
+  };
+
+  const startQrPolling = (connId: string) => {
+    if (qrPollRef.current) clearInterval(qrPollRef.current);
+    const bulkUrl = getBulkApiUrl();
+    let pollCount = 0;
+
+    const poll = async () => {
+      if (!mountedRef.current || pollCount > 150) {
+        if (qrPollRef.current) clearInterval(qrPollRef.current);
+        return;
+      }
+      pollCount++;
+
+      try {
+        // Check status
+        const statusRes = await fetch(`${bulkUrl}/v1/bulk/${connId}/status`);
+        const statusData = await statusRes.json();
+
+        if (statusData.isReady && statusData.status === 'CONNECTED') {
+          if (qrPollRef.current) clearInterval(qrPollRef.current);
+          setBulkAccount({
+            phone: statusData.userInfo?.phone,
+            name: statusData.userInfo?.name,
+            profilePictureUrl: statusData.userInfo?.profilePictureUrl,
+            jid: statusData.userInfo?.jid,
+            connectionId: connId,
+          });
+          setWaStatus('CONNECTED');
+          setConnectionStep('connected');
+          setQrCodeUrl(null);
+          return;
+        }
+
+        setWaStatus(statusData.status || 'WAITING');
+
+        // Get QR code
+        if (statusData.hasQR || statusData.status === 'QR_READY') {
+          setQrCodeUrl(`${bulkUrl}/v1/bulk/${connId}/qr?t=${Date.now()}`);
+        }
+      } catch {}
+    };
+
+    poll();
+    qrPollRef.current = setInterval(poll, 2000);
+  };
+
+  const handleDisconnect = async () => {
+    if (!bulkConnectionId) return;
+    try {
+      const bulkUrl = getBulkApiUrl();
+      await fetch(`${bulkUrl}/v1/bulk/${bulkConnectionId}/disconnect`, { method: 'POST' });
+    } catch {}
+    setBulkConnectionId(null);
+    setBulkAccount(null);
+    setWaStatus('DISCONNECTED');
+    setConnectionStep('choose');
+    setQrCodeUrl(null);
+  };
 
   // File Upload Handler (CSV / TXT)
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -266,6 +480,8 @@ export default function BulkMessaging() {
       payloadContent = { media_url: mediaUrl, caption: mediaCaption };
     } else if (msgType === 'video') {
       payloadContent = { media_url: mediaUrl, caption: mediaCaption };
+    } else if (msgType === 'document') {
+      payloadContent = { media_url: mediaUrl, caption: mediaCaption, filename: docFilename || undefined };
     } else if (msgType === 'poll') {
       payloadContent = { question: pollQuestion, options: pollOptions.filter((o) => o.trim()) };
     }
@@ -307,6 +523,7 @@ export default function BulkMessaging() {
     setTextBody('');
     setMediaUrl('');
     setMediaCaption('');
+    setDocFilename('');
     setPollQuestion('');
     setPollOptions(['', '']);
     setRecipientsRaw('');
@@ -335,8 +552,228 @@ export default function BulkMessaging() {
     }
   };
 
+  // ── Connection Gate: Show before campaign management ──
+  if (connectionLoading) {
+    return (
+      <div style={{ padding: '2rem 2.5rem', maxWidth: '1400px', margin: '0 auto' }}>
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          minHeight: '60vh', gap: '1.5rem'
+        }}>
+          <Loader2 size={48} style={{ color: '#2563eb', animation: 'spin 1s linear infinite' }} />
+          <p style={{ color: '#64748b', fontSize: '1rem' }}>Checking WhatsApp connection...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (connectionStep === 'choose') {
+    return (
+      <div style={{ padding: '2rem 2.5rem', maxWidth: '900px', margin: '0 auto' }}>
+        {/* Header */}
+        <div style={{
+          background: 'linear-gradient(135deg, #09101d 0%, #1e293b 100%)',
+          borderRadius: '16px', padding: '2.5rem', color: '#fff', marginBottom: '2rem',
+          boxShadow: '0 10px 25px -5px rgba(15, 23, 42, 0.3)', border: '1px solid rgba(255,255,255,0.08)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+            <span style={{
+              backgroundColor: 'rgba(37, 99, 235, 0.25)', color: '#60a5fa',
+              padding: '0.2rem 0.6rem', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.05em'
+            }}>WHATSAPP BULK DISPATCH</span>
+          </div>
+          <h1 style={{ fontSize: '1.875rem', fontWeight: 800, letterSpacing: '-0.03em', margin: 0 }}>
+            Connect WhatsApp Account
+          </h1>
+          <p style={{ color: '#94a3b8', fontSize: '0.95rem', marginTop: '0.5rem', maxWidth: '600px' }}>
+            Link your WhatsApp account to start sending bulk messages. Choose an existing connection or link a new account.
+          </p>
+        </div>
+
+        {connectionError && (
+          <div style={{
+            backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px',
+            padding: '1rem 1.25rem', marginBottom: '1.5rem', color: '#b91c1c', fontSize: '0.9rem'
+          }}>
+            {connectionError}
+          </div>
+        )}
+
+        {/* Connection Options */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+          {/* Option 1: Existing Connection */}
+          <button
+            onClick={useExistingConnection}
+            style={{
+              background: '#ffffff', border: '2px solid #e2e8f0', borderRadius: '16px',
+              padding: '2.5rem 2rem', textAlign: 'center', cursor: 'pointer',
+              transition: 'all 0.2s ease', display: 'flex', flexDirection: 'column',
+              alignItems: 'center', gap: '1rem'
+            }}
+            onMouseOver={(e) => { e.currentTarget.style.borderColor = '#22c55e'; e.currentTarget.style.boxShadow = '0 8px 25px rgba(34, 197, 94, 0.15)'; }}
+            onMouseOut={(e) => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.boxShadow = 'none'; }}
+          >
+            <div style={{
+              width: '64px', height: '64px', borderRadius: '16px',
+              background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 6px 16px rgba(34, 197, 94, 0.35)'
+            }}>
+              <Wifi size={28} color="#fff" />
+            </div>
+            <div>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#0f172a', margin: '0 0 0.4rem 0' }}>
+                Use Existing Connection
+              </h3>
+              <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0, lineHeight: 1.5 }}>
+                Use your already linked WhatsApp account from WhatsApp Channels
+              </p>
+            </div>
+          </button>
+
+          {/* Option 2: Link New Account */}
+          <button
+            onClick={startNewConnection}
+            style={{
+              background: '#ffffff', border: '2px solid #e2e8f0', borderRadius: '16px',
+              padding: '2.5rem 2rem', textAlign: 'center', cursor: 'pointer',
+              transition: 'all 0.2s ease', display: 'flex', flexDirection: 'column',
+              alignItems: 'center', gap: '1rem'
+            }}
+            onMouseOver={(e) => { e.currentTarget.style.borderColor = '#2563eb'; e.currentTarget.style.boxShadow = '0 8px 25px rgba(37, 99, 235, 0.15)'; }}
+            onMouseOut={(e) => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.boxShadow = 'none'; }}
+          >
+            <div style={{
+              width: '64px', height: '64px', borderRadius: '16px',
+              background: 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 6px 16px rgba(37, 99, 235, 0.35)'
+            }}>
+              <Link2 size={28} color="#fff" />
+            </div>
+            <div>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#0f172a', margin: '0 0 0.4rem 0' }}>
+                Link New WhatsApp Account
+              </h3>
+              <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0, lineHeight: 1.5 }}>
+                Scan QR code to connect a new WhatsApp account for bulk messaging
+              </p>
+            </div>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (connectionStep === 'connecting') {
+    return (
+      <div style={{ padding: '2rem 2.5rem', maxWidth: '700px', margin: '0 auto' }}>
+        <div style={{
+          background: '#ffffff', borderRadius: '16px', border: '1px solid #e2e8f0',
+          padding: '3rem', textAlign: 'center', boxShadow: '0 4px 16px rgba(15, 23, 42, 0.06)'
+        }}>
+          <div style={{
+            width: '80px', height: '80px', borderRadius: '20px',
+            background: 'linear-gradient(135deg, #2563eb 0%, #8b5cf6 100%)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 1.5rem', boxShadow: '0 8px 20px rgba(37, 99, 235, 0.3)'
+          }}>
+            <Smartphone size={36} color="#fff" />
+          </div>
+
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a', margin: '0 0 0.5rem 0' }}>
+            Scan QR Code with WhatsApp
+          </h2>
+          <p style={{ color: '#64748b', fontSize: '0.95rem', marginBottom: '2rem', maxWidth: '400px', margin: '0 auto 2rem' }}>
+            Open WhatsApp on your phone → Linked Devices → Link a Device → Point camera at QR code
+          </p>
+
+          {/* QR Code Display */}
+          <div style={{
+            width: '300px', height: '300px', margin: '0 auto 2rem',
+            backgroundColor: '#f8fafc', borderRadius: '16px', border: '2px dashed #cbd5e1',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden'
+          }}>
+            {qrCodeUrl ? (
+              <img
+                src={qrCodeUrl}
+                alt="WhatsApp QR Code"
+                style={{ width: '280px', height: '280px', objectFit: 'contain' }}
+                onError={() => {}}
+              />
+            ) : (
+              <div style={{ textAlign: 'center', color: '#94a3b8' }}>
+                <Loader2 size={40} style={{ animation: 'spin 1s linear infinite', marginBottom: '0.75rem' }} />
+                <p style={{ fontSize: '0.9rem' }}>Generating QR Code...</p>
+              </div>
+            )}
+          </div>
+
+          {/* Status indicator */}
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+            backgroundColor: waStatus === 'QR_READY' ? '#eff6ff' : '#f8fafc',
+            padding: '0.5rem 1rem', borderRadius: '8px', fontSize: '0.85rem',
+            color: waStatus === 'QR_READY' ? '#2563eb' : '#64748b', fontWeight: 600
+          }}>
+            {waStatus === 'QR_READY' ? <QrCode size={16} /> : <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />}
+            {waStatus === 'QR_READY' ? 'Waiting for scan...' : waStatus === 'CONNECTED' ? 'Connected!' : `Status: ${waStatus}`}
+          </div>
+
+          <div style={{ marginTop: '2rem' }}>
+            <button
+              onClick={() => {
+                if (qrPollRef.current) clearInterval(qrPollRef.current);
+                setConnectionStep('choose');
+                setQrCodeUrl(null);
+              }}
+              style={{
+                backgroundColor: 'transparent', color: '#64748b', border: '1px solid #e2e8f0',
+                padding: '0.6rem 1.5rem', borderRadius: '8px', fontSize: '0.875rem', fontWeight: 600, cursor: 'pointer'
+              }}
+            >
+              ← Go Back
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: '2rem 2.5rem', maxWidth: '1400px', margin: '0 auto' }}>
+      {/* Connected Account Status Bar */}
+      {bulkAccount && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px',
+          padding: '0.75rem 1.25rem', marginBottom: '1.25rem'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <CheckCircle2 size={20} style={{ color: '#16a34a' }} />
+            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#15803d' }}>WhatsApp Connected</span>
+            {bulkAccount.phone && (
+              <span style={{ fontSize: '0.85rem', color: '#166534', backgroundColor: '#dcfce7', padding: '0.15rem 0.6rem', borderRadius: '6px', fontWeight: 500 }}>
+                +{bulkAccount.phone}
+              </span>
+            )}
+            {bulkAccount.name && (
+              <span style={{ fontSize: '0.85rem', color: '#475569' }}>({bulkAccount.name})</span>
+            )}
+          </div>
+          <button
+            onClick={handleDisconnect}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+              backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px',
+              padding: '0.4rem 0.85rem', fontSize: '0.8rem', fontWeight: 600, color: '#64748b', cursor: 'pointer'
+            }}
+          >
+            <LogOut size={14} /> Disconnect
+          </button>
+        </div>
+      )}
+
       {/* Header Banner */}
       <div
         style={{
@@ -697,11 +1134,12 @@ export default function BulkMessaging() {
                 <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#334155', marginBottom: '0.4rem' }}>
                   Message Type
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
                   {[
-                    { id: 'text', label: 'Text Message', icon: FileText },
-                    { id: 'image', label: 'Image + Caption', icon: ImageIcon },
-                    { id: 'video', label: 'Video Broadcast', icon: Video }
+                    { id: 'text', label: 'Text', icon: FileText },
+                    { id: 'image', label: 'Image', icon: ImageIcon },
+                    { id: 'video', label: 'Video', icon: Video },
+                    { id: 'document', label: 'Document', icon: Paperclip }
                   ].map((t) => {
                     const Icon = t.icon;
                     const isSel = msgType === t.id;
@@ -755,14 +1193,14 @@ export default function BulkMessaging() {
                 </div>
               )}
 
-              {(msgType === 'image' || msgType === 'video') && (
+              {(msgType === 'image' || msgType === 'video' || msgType === 'document') && (
                 <div style={{ marginBottom: '1.25rem' }}>
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#334155', marginBottom: '0.4rem' }}>
-                    Media URL * (Direct public URL)
+                    {msgType === 'document' ? 'Document URL * (Direct public URL to PDF, DOCX, etc.)' : 'Media URL * (Direct public URL)'}
                   </label>
                   <input
                     type="url"
-                    placeholder="https://your-domain.com/path/to/media.png"
+                    placeholder={msgType === 'document' ? 'https://your-domain.com/path/to/report.pdf' : 'https://your-domain.com/path/to/media.png'}
                     value={mediaUrl}
                     onChange={(e) => setMediaUrl(e.target.value)}
                     required
@@ -776,12 +1214,34 @@ export default function BulkMessaging() {
                     }}
                   />
 
+                  {msgType === 'document' && (
+                    <>
+                      <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#334155', marginBottom: '0.4rem' }}>
+                        Filename (Optional — e.g. "report.pdf")
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="report.pdf"
+                        value={docFilename}
+                        onChange={(e) => setDocFilename(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.85rem',
+                          borderRadius: '8px',
+                          border: '1px solid #cbd5e1',
+                          fontSize: '0.9rem',
+                          marginBottom: '0.75rem'
+                        }}
+                      />
+                    </>
+                  )}
+
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#334155', marginBottom: '0.4rem' }}>
                     Caption (Optional)
                   </label>
                   <textarea
                     rows={2}
-                    placeholder="Enter optional media caption..."
+                    placeholder="Enter optional caption..."
                     value={mediaCaption}
                     onChange={(e) => setMediaCaption(e.target.value)}
                     style={{

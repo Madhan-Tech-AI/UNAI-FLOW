@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     wca_api_url_cloud: str = "https://unai-whatsapp-channelapi-2za0.onrender.com"
     wca_api_key: str = "105eadef-beae-4e08-bcc0-85a06ff80727"
     
+    # WhatsApp Bulk Messaging API (separate Render service)
+    bulk_api_url: str = "http://localhost:3002"
+    bulk_api_key: str = "bulk-7f3a9c2e-d841-4b6f-a5e3-91c8d0f2e7b4"
+    
     # Rate Limiting
     rate_limit_per_minute: int = 100
     

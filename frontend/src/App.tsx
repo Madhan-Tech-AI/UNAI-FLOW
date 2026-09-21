@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
@@ -10,7 +10,6 @@ import AutomationHistory from './pages/AutomationHistory';
 import Settings from './pages/Settings';
 import WhatsAppChannels from './pages/WhatsAppChannels';
 import EmailAutomation from './pages/EmailAutomation';
-import DeveloperConsole from './pages/DeveloperConsole';
 import BulkMessaging from './pages/BulkMessaging';
 
 export default function App() {
@@ -25,8 +24,8 @@ export default function App() {
           <Route path="/whatsapp-channels" element={<WhatsAppChannels />} />
           <Route path="/whatsapp" element={<WhatsAppChannels />} />
           <Route path="/bulk-messaging" element={<BulkMessaging />} />
-          <Route path="/developer" element={<DeveloperConsole />} />
-          <Route path="/developer-console" element={<DeveloperConsole />} />
+          <Route path="/developer" element={<Navigate to="/bulk-messaging" replace />} />
+          <Route path="/developer-console" element={<Navigate to="/bulk-messaging" replace />} />
           <Route path="/email-automation" element={<EmailAutomation />} />
           <Route path="/automations/new" element={<NewAutomation />} />
           <Route path="/automations/preview" element={<PreviewVariants />} />

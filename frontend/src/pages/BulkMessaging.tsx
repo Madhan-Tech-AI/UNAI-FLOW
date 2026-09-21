@@ -128,39 +128,43 @@ export default function BulkMessaging() {
 
   const checkExistingConnection = async () => {
     setConnectionLoading(true);
-    try {
-      // Check if there's already a connected WhatsApp session via the backend
-      const res = await fetchApi('/api/channels/whatsapp/status');
-      if (res?.whatsapp?.isReady && res?.whatsapp?.userInfo?.phone) {
-        const sessionId = res.connectionId || res.whatsapp?.userInfo?.channel_id || 'default_primary_session';
-        setBulkConnectionId(sessionId);
-        setBulkAccount({
-          phone: res.whatsapp.userInfo.phone,
-          name: res.whatsapp.userInfo.name,
-          profilePictureUrl: res.whatsapp.userInfo.profilePictureUrl,
-          connectionId: sessionId,
-        });
-        setWaStatus('CONNECTED');
-        setConnectionStep('connected');
-        setConnectionLoading(false);
-        return;
-      }
-    } catch {}
+    const bulkUrl = getBulkApiUrl();
 
-    // Also try bulk API directly
+    // Try to find an active session on the bulk API
     try {
-      const bulkUrl = getBulkApiUrl();
       const healthRes = await fetch(`${bulkUrl}/health`);
       if (healthRes.ok) {
         const health = await healthRes.json();
         if (health.active_sessions > 0) {
-          // There may be a session — try to check status
+          // Try common connection IDs to find an active one
+          const candidateIds = ['default', 'default_primary_session'];
+          for (const connId of candidateIds) {
+            try {
+              const statusRes = await fetch(`${bulkUrl}/v1/bulk/${connId}/status`);
+              const statusData = await statusRes.json();
+              if (statusData.isReady && statusData.status === 'CONNECTED') {
+                setBulkConnectionId(connId);
+                setBulkAccount({
+                  phone: statusData.userInfo?.phone,
+                  name: statusData.userInfo?.name,
+                  profilePictureUrl: statusData.userInfo?.profilePictureUrl,
+                  jid: statusData.userInfo?.jid,
+                  connectionId: connId,
+                });
+                setWaStatus('CONNECTED');
+                setConnectionStep('connected');
+                setConnectionLoading(false);
+                return;
+              }
+            } catch {}
+          }
         }
       }
     } catch {}
 
     setConnectionLoading(false);
   };
+
 
   const startNewConnection = async () => {
     setConnectionStep('connecting');
@@ -194,39 +198,43 @@ export default function BulkMessaging() {
     setConnectionStep('connecting');
     setConnectionError('');
     try {
-      // Use the same session identifier from the channel API
-      const res = await fetchApi('/api/channels/whatsapp/status');
-      if (res?.whatsapp?.isReady) {
-        const sessionId = res.connectionId || 'default_primary_session';
-        // Connect it to the bulk API too
-        const bulkUrl = getBulkApiUrl();
-        try {
-          await fetch(`${bulkUrl}/v1/bulk/connect`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ connectionId: sessionId }),
-          });
-        } catch {}
+      const bulkUrl = getBulkApiUrl();
+      const connId = 'default';
 
-        setBulkConnectionId(sessionId);
+      // Initialize / restore session on the bulk API
+      const connectRes = await fetch(`${bulkUrl}/v1/bulk/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: connId }),
+      });
+      const connectData = await connectRes.json();
+
+      if (connectData.isReady) {
+        // Session was restored from Supabase and is already connected
+        const statusRes = await fetch(`${bulkUrl}/v1/bulk/${connId}/status`);
+        const statusData = await statusRes.json();
+        setBulkConnectionId(connId);
         setBulkAccount({
-          phone: res.whatsapp.userInfo?.phone,
-          name: res.whatsapp.userInfo?.name,
-          profilePictureUrl: res.whatsapp.userInfo?.profilePictureUrl,
-          connectionId: sessionId,
+          phone: statusData.userInfo?.phone,
+          name: statusData.userInfo?.name,
+          profilePictureUrl: statusData.userInfo?.profilePictureUrl,
+          jid: statusData.userInfo?.jid,
+          connectionId: connId,
         });
         setWaStatus('CONNECTED');
         setConnectionStep('connected');
         return;
       }
-      // If not connected, fall through to new connection
-      setConnectionError('No existing WhatsApp connection found. Please link a new account.');
-      setConnectionStep('choose');
+
+      // Session is initializing — needs QR scan
+      setBulkConnectionId(connId);
+      startQrPolling(connId);
     } catch (err: any) {
-      setConnectionError('Could not find existing connection. Please link a new account.');
+      setConnectionError('Could not connect to bulk messaging service. Please try linking a new account.');
       setConnectionStep('choose');
     }
   };
+
 
   const startQrPolling = (connId: string) => {
     if (qrPollRef.current) clearInterval(qrPollRef.current);

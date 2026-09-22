@@ -13,10 +13,7 @@ async def verify_jwt(credentials: HTTPAuthorizationCredentials = Security(securi
     try:
         from lib.supabase_client import supabase
     except ImportError:
-        try:
-            from app.lib.supabase_client import supabase
-        except ImportError:
-            from backend.lib.supabase_client import supabase
+        from backend.lib.supabase_client import supabase
 
     response = supabase.auth.get_user(token)
     if not response or not response.user:
